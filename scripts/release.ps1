@@ -1,4 +1,4 @@
-<#
+﻿<#
   本地构建并发布到 GitHub Releases
 
   用法：
