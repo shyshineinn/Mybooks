@@ -1,6 +1,8 @@
 package com.huangder.lumibooks.ui.bookshelf
 import com.huangder.lumibooks.ui.icons.directionalIcon
 import com.huangder.lumibooks.ui.icons.AppIcons
+import com.helloac.mybooks.remote.MyBooksBookInfoCard
+import com.helloac.mybooks.remote.MyBooksConfig
 
 import android.content.Context
 import android.content.Intent
@@ -300,6 +302,15 @@ fun BookDetailsScreen(
             }
             item {
                 InfoCard(book, folderName, tags.joinToString { it.name }, onEdit = { editing = true }, onTags = { tagsOpen = true }, onMove = { moveOpen = true })
+            }
+            if (MyBooksConfig.isMyBooks(book)) {
+                item(key = "mybooks_info") {
+                    MyBooksBookInfoCard(
+                        book = book,
+                        downloadState = library.downloadStates[book.id],
+                        onDownload = { homeViewModel.downloadCloudBook(book) }
+                    )
+                }
             }
         }
         FloatingDetailTag(

@@ -23,11 +23,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.huangder.lumibooks"
+        applicationId = "top.helloac.mybooks"
         minSdk = 26
         targetSdk = 37
-        versionCode = 16
-        versionName = "Dream"
+        versionCode = 1601
+        versionName = "16.1-mybooks"
 
         buildConfigField("boolean", "DIAGNOSTIC_BUILD", "false")
         buildConfigField("boolean", "STARTUP_TRACE_ENABLED", "false")

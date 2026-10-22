@@ -193,6 +193,17 @@ fun SettingsScreen(
 
                 Spacer(Modifier.height(AppSpace.lg))
 
+                CategoryItem(
+                    icon = AppIcons.Cloud,
+                    label = stringResource(R.string.category_sync_mybooks),
+                    supportingText = stringResource(R.string.category_sync_mybooks_support)
+                ) {
+                    scope.launch {
+                        Toast.makeText(context, viewModel.syncMyBooksNow(), Toast.LENGTH_LONG).show()
+                    }
+                }
+                Spacer(Modifier.height(AppSpace.sm))
+
                 CategoryItem(AppIcons.FolderOpen, stringResource(R.string.authorized_folders_title)) {
                     context.startActivity(Intent(context, AuthorizedFoldersActivity::class.java))
                 }

@@ -41,7 +41,7 @@
     <string name="app_accent_color_reset">恢复 Lumi 粉</string>
     <string name="liquid_glass_transparency">玻璃通透度</string>
     <string name="liquid_glass_hdr_highlight">HDR 按压高光</string>
-    <string name="app_name">LUMI</string>
+    <string name="app_name">Mybooks</string>
 
     <!-- 首页 -->
     <string name="home_title">首页</string>
@@ -134,6 +134,8 @@
     <!-- 设置主页 -->
     <string name="settings_title">设置</string>
     <string name="tap_to_change_nickname">点击修改昵称</string>
+    <string name="category_sync_mybooks">同步服务器书库</string>
+    <string name="category_sync_mybooks_support">将服务器上的书同步到本地书架</string>
     <string name="category_display">显示与外观</string>
     <string name="category_language">语言</string>
     <string name="category_storage">存储管理</string>

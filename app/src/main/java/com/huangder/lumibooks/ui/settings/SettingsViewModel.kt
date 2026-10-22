@@ -76,12 +76,19 @@ class SettingsViewModel @Inject constructor(
     private val floatingSubtitleOverlayController: FloatingSubtitleOverlayController,
     private val backupArchiveManager: BackupArchiveManager,
     private val dictionaryRepository: com.huangder.lumibooks.dictionary.DictionaryRepository,
+    private val myBooksSyncManager: com.helloac.mybooks.remote.MyBooksSyncManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     val txtTocCustomRules: kotlinx.coroutines.flow.Flow<List<TxtTocRule>> = dataStoreManager.txtTocCustomRules()
     val txtTocThirdPartyRules: kotlinx.coroutines.flow.Flow<List<TxtTocRule>> =
         dataStoreManager.txtTocThirdPartyRules()
+
+    /** 同步服务器书库（my-books）到本地书架，返回结果提示文本。 */
+    suspend fun syncMyBooksNow(): String {
+        val result = myBooksSyncManager.syncNow()
+        return result.message
+    }
 
     fun saveSelectionMenuItems(items: com.huangder.lumibooks.domain.model.SelectionMenuSettings) {
         _uiState.update { it.copy(selectionMenuItems = items) }

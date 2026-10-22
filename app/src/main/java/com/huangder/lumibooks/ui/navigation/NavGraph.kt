@@ -61,6 +61,7 @@ import androidx.navigation.navArgument
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.huangder.lumibooks.R
+import com.helloac.mybooks.remote.MyBooksConfig
 import com.huangder.lumibooks.ui.bookshelf.BookshelfScreen
 import com.huangder.lumibooks.ui.components.BookTransitionOverlay
 import com.huangder.lumibooks.ui.components.FloatingTabBar
@@ -538,6 +539,11 @@ fun MainNavGraph(
 
     fun requestOpenBook(book: Book, sourceBounds: Rect? = null,
         sourcePresentation: com.huangder.lumibooks.ui.animation.BookReaderPresentation? = null) {
+        if (MyBooksConfig.isMyBooks(book)) {
+            // 服务器书：直接进详情页，先看简介/标签再决定下载
+            com.huangder.lumibooks.ui.bookshelf.BookDetailsActivity.start(context, book.id)
+            return
+        }
         if (book.isCloudOnly) {
             cloudOpenSource = Triple(book.id, sourceBounds, sourcePresentation)
             if (homeUiState.downloadStates[book.id] is com.huangder.lumibooks.data.sync.BookDownloadState.Downloading) {
@@ -1403,7 +1409,7 @@ fun MainNavGraph(
                 onDownload = {
                     autoOpenDownloadedBookId = book.id
                     pendingCloudBook = null
-                    homeViewModel.downloadCloudBook(book.id)
+                    homeViewModel.downloadCloudBook(book)
                 }
             )
         }

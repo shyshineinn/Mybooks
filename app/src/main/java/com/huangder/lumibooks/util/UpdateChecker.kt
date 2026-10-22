@@ -11,19 +11,19 @@ import java.net.URL
 /**
  * Remote notice and update checker.
  *
- * The app reads docs/app-config.json from the GitHub repository Raw URL at startup
+ * The app reads app-config.json from the user's own server at startup
  * or when the user manually checks for updates. This static file drives notice,
  * normal update, and forced update dialogs without a separate server.
  *
  * Config URL:
- * https://raw.githubusercontent.com/huangder/Lumi_Books/main/docs/app-config.json
+ * https://helloac.top/app-config.json
  */
 object UpdateChecker {
 
     private const val TAG = "UpdateChecker"
 
-    /** GitHub repository Raw config URL. Do not use a custom domain for mobile reliability. */
-    private const val CONFIG_URL = "https://raw.githubusercontent.com/huangder/Lumi_Books/main/docs/app-config.json"
+    /** 自己的服务器上的在线更新配置（放在服务端 public/ 目录下即可）。 */
+    private const val CONFIG_URL = "https://helloac.top/app-config.json"
 
     /** Network request timeout. */
     private const val TIMEOUT_MS = 10_000

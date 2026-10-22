@@ -39,6 +39,7 @@ import com.huangder.lumibooks.util.AuthorizedFolderSnapshotStore
 import com.huangder.lumibooks.util.AuthorizedStorageManager
 import com.huangder.lumibooks.util.toSnapshot
 import com.huangder.lumibooks.util.parser.BookParserFactory
+import com.helloac.mybooks.remote.MyBooksConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -163,6 +164,7 @@ class HomeViewModel @Inject constructor(
     private val dataStoreManager: DataStoreManager,
     private val application: Application,
     private val webdavSyncManager: com.huangder.lumibooks.data.sync.WebdavSyncManager,
+    private val myBooksSyncManager: com.helloac.mybooks.remote.MyBooksSyncManager,
     private val authorizedStorageManager: AuthorizedStorageManager,
     private val authorizedFolderSnapshotStore: AuthorizedFolderSnapshotStore,
     private val database: AppDatabase
@@ -213,6 +215,8 @@ class HomeViewModel @Inject constructor(
         loadFolderBooksLayoutMode()
         loadFolderBooksSort()
         loadAuthorizedBookDirectories()
+        // 启动时静默同步一次服务器书库（10 分钟节流）
+        viewModelScope.launch { myBooksSyncManager.syncIfStale() }
     }
 
     fun loadBooks() {
@@ -487,9 +491,13 @@ class HomeViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            webdavSyncManager.downloadStates.collectLatest { states ->
-                _uiState.value = _uiState.value.copy(downloadStates = states)
-            }
+            kotlinx.coroutines.flow.combine(
+                webdavSyncManager.downloadStates,
+                myBooksSyncManager.downloadStates
+            ) { webdav, mybooks -> webdav + mybooks }
+                .collectLatest { states ->
+                    _uiState.value = _uiState.value.copy(downloadStates = states)
+                }
         }
     }
 
@@ -505,9 +513,13 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun downloadCloudBook(bookId: String) {
+    fun downloadCloudBook(book: Book) {
         viewModelScope.launch {
-            val result = webdavSyncManager.downloadBook(bookId)
+            val result = if (MyBooksConfig.isMyBooks(book)) {
+                myBooksSyncManager.downloadBook(book.id)
+            } else {
+                webdavSyncManager.downloadBook(book.id)
+            }
             if (result.success && result.book != null) {
                 _downloadedBooks.emit(result.book)
             } else {
@@ -2088,7 +2100,7 @@ class HomeViewModel @Inject constructor(
             var remoteFailure: String? = null
             if (mode.cloudFailureBlocksLocalDelete) {
                 val remoteIds = booksToDelete.asSequence()
-                    .filter { it.remoteFileName != null }
+                    .filter { it.remoteFileName != null && !MyBooksConfig.isMyBooks(it) }
                     .mapTo(mutableSetOf()) { it.id }
                 if (remoteIds.isNotEmpty()) {
                     val remoteResult = webdavSyncManager.deleteRemoteBooks(remoteIds)
@@ -2103,19 +2115,23 @@ class HomeViewModel @Inject constructor(
             }
             val failures = deleteBooksAndManagedData(booksToDelete, mode)
             if (mode.forcesLocalDelete) {
-                val remoteFileNames = booksToDelete.associate { book ->
-                    book.id to (book.remoteFileName ?: "${book.id}.${if (book.format == BookFormat.MARKDOWN) "mdpack" else book.format.name.lowercase()}")
-                }
-                val remoteResult = webdavSyncManager.deleteRemoteBooks(
-                    bookIds = booksToDelete.mapTo(mutableSetOf()) { it.id },
-                    remoteFileNames = remoteFileNames,
-                    publishPortableState = true
-                )
-                if (!remoteResult.success) {
-                    remoteFailure = application.getString(
-                        R.string.force_delete_cloud_failed,
-                        remoteResult.message
+                // my-books 的书只做本地删除，不碰 WebDAV
+                val webdavTargets = booksToDelete.filterNot { MyBooksConfig.isMyBooks(it) }
+                if (webdavTargets.isNotEmpty()) {
+                    val remoteFileNames = webdavTargets.associate { book ->
+                        book.id to (book.remoteFileName ?: "${book.id}.${if (book.format == BookFormat.MARKDOWN) "mdpack" else book.format.name.lowercase()}")
+                    }
+                    val remoteResult = webdavSyncManager.deleteRemoteBooks(
+                        bookIds = webdavTargets.mapTo(mutableSetOf()) { it.id },
+                        remoteFileNames = remoteFileNames,
+                        publishPortableState = true
                     )
+                    if (!remoteResult.success) {
+                        remoteFailure = application.getString(
+                            R.string.force_delete_cloud_failed,
+                            remoteResult.message
+                        )
+                    }
                 }
             }
             val messages = failures + listOfNotNull(remoteFailure)
