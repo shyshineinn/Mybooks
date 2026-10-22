@@ -38,8 +38,8 @@ android {
         applicationId = "top.helloac.mybooks"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1602
-        versionName = "16.2-mybooks"
+        versionCode = 1607
+        versionName = "1.6.7"
 
         buildConfigField("boolean", "DIAGNOSTIC_BUILD", "false")
         buildConfigField("boolean", "STARTUP_TRACE_ENABLED", "false")
