@@ -1,5 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -14,6 +16,16 @@ val releaseStartupTrace = providers.gradleProperty("lumiStartupTrace")
     .map { it.toBooleanStrict() }
     .orElse(false)
 
+// 本地正式签名（可选）：在 local.properties 里配置 MYBOOKS_KEYSTORE_FILE 等四项后生效。
+// local.properties 已被 git 忽略，密码不会进入仓库；未配置时保持原样（产出 unsigned 包）。
+val signingProperties = Properties()
+val signingPropertiesFile = rootProject.file("local.properties")
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.inputStream().use { input -> signingProperties.load(input) }
+}
+val releaseKeystorePath = signingProperties.getProperty("MYBOOKS_KEYSTORE_FILE").orEmpty()
+val hasReleaseSigning = releaseKeystorePath.isNotBlank()
+
 android {
     namespace = "com.huangder.lumibooks"
     compileSdk {
@@ -26,8 +38,8 @@ android {
         applicationId = "top.helloac.mybooks"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1601
-        versionName = "16.1-mybooks"
+        versionCode = 1602
+        versionName = "16.2-mybooks"
 
         buildConfigField("boolean", "DIAGNOSTIC_BUILD", "false")
         buildConfigField("boolean", "STARTUP_TRACE_ENABLED", "false")
@@ -47,11 +59,25 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(releaseKeystorePath)
+                storePassword = signingProperties.getProperty("MYBOOKS_KEYSTORE_PASSWORD")
+                keyAlias = signingProperties.getProperty("MYBOOKS_KEY_ALIAS")
+                keyPassword = signingProperties.getProperty("MYBOOKS_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             buildConfigField("boolean", "STARTUP_TRACE_ENABLED", releaseStartupTrace.get().toString())
             isMinifyEnabled = true
             isShrinkResources = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

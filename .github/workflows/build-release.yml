@@ -59,37 +59,36 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          set -e
+          mkdir -p dist
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
-            for apk in app/build/outputs/apk/release/*.apk; do
-              "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign \
-                --ks keystore.jks \
-                --ks-key-alias "$KEY_ALIAS" \
-                --ks-pass "pass:$KEYSTORE_PASSWORD" \
-                --key-pass "pass:$KEY_PASSWORD" \
-                --out "${apk%.apk}-signed.apk" "$apk"
-            done
+            KS_ARGS="--ks keystore.jks --ks-key-alias $KEY_ALIAS --ks-pass pass:$KEYSTORE_PASSWORD --key-pass pass:$KEY_PASSWORD"
           else
             keytool -genkeypair -v -keystore test.jks -storepass android -alias android \
               -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Mybooks Test"
-            for apk in app/build/outputs/apk/release/*.apk; do
-              "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign \
-                --ks test.jks \
-                --ks-key-alias android \
-                --ks-pass pass:android \
-                --key-pass pass:android \
-                --out "${apk%.apk}-test-signed.apk" "$apk"
-            done
+            KS_ARGS="--ks test.jks --ks-key-alias android --ks-pass pass:android --key-pass pass:android"
           fi
+          for apk in app/build/outputs/apk/release/*.apk; do
+            case "$apk" in
+              *arm64-v8a*)   name=Mybooks-arm64-v8a.apk ;;
+              *armeabi-v7a*) name=Mybooks-armeabi-v7a.apk ;;
+              *x86_64*)      name=Mybooks-x86_64.apk ;;
+              *x86*)         name=Mybooks-x86.apk ;;
+              *universal*)   name=Mybooks-universal.apk ;;
+              *)             continue ;;
+            esac
+            "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign $KS_ARGS \
+              --out "dist/$name" "$apk"
+          done
+          ls -l dist
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
           name: mybooks-release-apk
-          path: |
-            app/build/outputs/apk/release/*-signed.apk
-            app/build/outputs/apk/release/*.apk
+          path: dist/*.apk
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -97,6 +96,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            app/build/outputs/apk/release/*-signed.apk \
+            dist/*.apk \
             --title "Mybooks $GITHUB_REF_NAME" \
             --generate-notes

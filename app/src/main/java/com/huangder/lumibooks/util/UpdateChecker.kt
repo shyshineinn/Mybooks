@@ -11,19 +11,18 @@ import java.net.URL
 /**
  * Remote notice and update checker.
  *
- * The app reads app-config.json from the user's own server at startup
- * or when the user manually checks for updates. This static file drives notice,
- * normal update, and forced update dialogs without a separate server.
+ * 配置来自本仓库 docs/app-config.json，更新包来自 GitHub Releases。
  *
  * Config URL:
- * https://helloac.top/app-config.json
+ * https://raw.githubusercontent.com/shyshineinn/Mybooks/main/docs/app-config.json
  */
 object UpdateChecker {
 
     private const val TAG = "UpdateChecker"
 
-    /** 自己的服务器上的在线更新配置（放在服务端 public/ 目录下即可）。 */
-    private const val CONFIG_URL = "https://helloac.top/app-config.json"
+    /** 本仓库的在线更新配置（GitHub Raw）。 */
+    private const val CONFIG_URL =
+        "https://raw.githubusercontent.com/shyshineinn/Mybooks/main/docs/app-config.json"
 
     /** Network request timeout. */
     private const val TIMEOUT_MS = 10_000
