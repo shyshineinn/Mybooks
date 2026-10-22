@@ -37,38 +37,36 @@ jobs:
       - name: Build release APKs
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Sign APKs with release keystore
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+      - name: Sign APKs
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
-          for apk in app/build/outputs/apk/release/*.apk; do
-            "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign \
-              --ks keystore.jks \
-              --ks-key-alias "$KEY_ALIAS" \
-              --ks-pass "pass:$KEYSTORE_PASSWORD" \
-              --key-pass "pass:$KEY_PASSWORD" \
-              --out "${apk%.apk}-signed.apk" "$apk"
-          done
-
-      - name: Sign APKs with test keystore
-        if: ${{ secrets.KEYSTORE_BASE64 == '' }}
-        run: |
-          keytool -genkeypair -v -keystore test.jks -storepass android -alias android \
-            -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Mybooks Test"
-          for apk in app/build/outputs/apk/release/*.apk; do
-            "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign \
-              --ks test.jks \
-              --ks-key-alias android \
-              --ks-pass pass:android \
-              --key-pass pass:android \
-              --out "${apk%.apk}-test-signed.apk" "$apk"
-          done
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
+            for apk in app/build/outputs/apk/release/*.apk; do
+              "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign \
+                --ks keystore.jks \
+                --ks-key-alias "$KEY_ALIAS" \
+                --ks-pass "pass:$KEYSTORE_PASSWORD" \
+                --key-pass "pass:$KEY_PASSWORD" \
+                --out "${apk%.apk}-signed.apk" "$apk"
+            done
+          else
+            keytool -genkeypair -v -keystore test.jks -storepass android -alias android \
+              -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Mybooks Test"
+            for apk in app/build/outputs/apk/release/*.apk; do
+              "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign \
+                --ks test.jks \
+                --ks-key-alias android \
+                --ks-pass pass:android \
+                --key-pass pass:android \
+                --out "${apk%.apk}-test-signed.apk" "$apk"
+            done
+          fi
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4
