@@ -13,7 +13,8 @@ import com.huangder.lumibooks.tts.TtsPlaybackState
 /** 音频焦点变化后要执行的动作，抽成纯函数以便单测。 */
 internal enum class TtsAudioFocusAction {
     IGNORE,
-    PAUSE_FOR_LOSS,
+    PAUSE_FOR_TRANSIENT_LOSS,
+    PAUSE_FOR_PERMANENT_LOSS,
     RESUME_AFTER_LOSS
 }
 
@@ -21,18 +22,28 @@ internal fun ttsAudioFocusActionForChange(
     change: Int,
     pausedForLoss: Boolean
 ): TtsAudioFocusAction = when (change) {
-    AudioManager.AUDIOFOCUS_LOSS,
-    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> TtsAudioFocusAction.PAUSE_FOR_LOSS
+    AudioManager.AUDIOFOCUS_LOSS -> TtsAudioFocusAction.PAUSE_FOR_PERMANENT_LOSS
+    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> TtsAudioFocusAction.PAUSE_FOR_TRANSIENT_LOSS
+    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> TtsAudioFocusAction.IGNORE
     AudioManager.AUDIOFOCUS_GAIN ->
         if (pausedForLoss) TtsAudioFocusAction.RESUME_AFTER_LOSS else TtsAudioFocusAction.IGNORE
     else -> TtsAudioFocusAction.IGNORE
 }
 
+internal fun shouldHoldTtsAudioFocus(
+    playbackState: TtsPlaybackState,
+    usesSystemEngine: Boolean,
+    pausedForLoss: Boolean
+): Boolean = usesSystemEngine && (
+    playbackState == TtsPlaybackState.PLAYING ||
+        playbackState == TtsPlaybackState.INITIALIZING ||
+        pausedForLoss
+    )
+
 /**
  * 系统 TTS 引擎播放时自身不持有音频焦点，部分机型因此把耳机媒体按键路由给“上次播放音频的应用”。
- * 听书（系统引擎）播放期间由本控制器持有焦点：既让系统把本应用视为当前媒体应用，
- * 也让其它播放器让出声音；被电话/导航等抢占时自动暂停，短暂中断结束后自动继续。
+ * 听书（系统引擎）播放期间由本控制器持有可 duck 焦点，让背景音乐可继续播放；
+ * 通知音只触发 duck 时继续朗读，被电话等短暂独占时暂停并在焦点恢复后继续。
  *
  * AI/第三方 TTS 引擎由它自己的播放器管理焦点，这里不重复请求。
  */
@@ -64,15 +75,20 @@ internal class TtsAudioFocusController(
             )
         )
         when (action) {
-            TtsAudioFocusAction.PAUSE_FOR_LOSS -> {
+            TtsAudioFocusAction.PAUSE_FOR_TRANSIENT_LOSS -> {
                 if (ttsController.playbackState.value == TtsPlaybackState.PLAYING) {
                     pausedForLoss = true
                     ttsController.pause()
                 }
             }
+            TtsAudioFocusAction.PAUSE_FOR_PERMANENT_LOSS -> {
+                pausedForLoss = false
+                if (ttsController.playbackState.value == TtsPlaybackState.PLAYING) {
+                    ttsController.pause()
+                }
+            }
             TtsAudioFocusAction.RESUME_AFTER_LOSS -> {
                 if (pausedForLoss) {
-                    pausedForLoss = false
                     ttsController.resume()
                 }
             }
@@ -83,9 +99,11 @@ internal class TtsAudioFocusController(
     /** 按当前会话状态与引擎类型同步焦点持有状态。 */
     fun update(playbackState: TtsPlaybackState, usesSystemEngine: Boolean) {
         if (playbackState == TtsPlaybackState.PLAYING) pausedForLoss = false
-        val shouldHold = usesSystemEngine &&
-            (playbackState == TtsPlaybackState.PLAYING ||
-                playbackState == TtsPlaybackState.INITIALIZING)
+        val shouldHold = shouldHoldTtsAudioFocus(
+            playbackState = playbackState,
+            usesSystemEngine = usesSystemEngine,
+            pausedForLoss = pausedForLoss
+        )
         logTtsServiceEvent(
             event = "audio_focus_policy_evaluated",
             controller = ttsController,
@@ -94,6 +112,7 @@ internal class TtsAudioFocusController(
                 "usesSystemEngine" to usesSystemEngine,
                 "shouldHold" to shouldHold,
                 "currentlyHolding" to holding,
+                "pausedForLoss" to pausedForLoss,
                 "outputTypes" to outputDeviceTypes()
             )
         )
@@ -121,9 +140,8 @@ internal class TtsAudioFocusController(
 
     private fun acquire() {
         if (holding) return
-        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(attributes)
-            .setWillPauseWhenDucked(true)
             .setOnAudioFocusChangeListener(listener, mainHandler)
             .build()
         val result = runCatching { audioManager.requestAudioFocus(request) }

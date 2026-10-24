@@ -1,5 +1,6 @@
 package com.huangder.lumibooks.ui.components
 
+import com.huangder.lumibooks.ui.theme.LocalReduceTransparency
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -97,13 +98,19 @@ internal fun quantizeBlurStrength(strength: Float, steps: Int = PROGRESSIVE_BLUR
     return ((clamped * steps).roundToInt().toFloat() / steps).coerceIn(0f, 1f)
 }
 
-/** Whether the progressive blur can run at all. E-ink always opts out, even on capable devices. */
-internal fun progressiveBlurEnabled(supported: Boolean, eInkMode: Boolean): Boolean =
-    supported && !eInkMode
+/** Progressive blur is optional; e-ink always opts out of blur and its fallback scrim. */
+internal fun progressiveBlurEnabled(
+    supported: Boolean,
+    eInkMode: Boolean,
+    reduceTransparency: Boolean = false
+): Boolean = supported && !eInkMode && !reduceTransparency
 
 /** Whether the blur-free readability scrim should be used instead of the blur band. */
-internal fun progressiveTopScrimEnabled(supported: Boolean, eInkMode: Boolean): Boolean =
-    !supported && !eInkMode
+internal fun progressiveTopScrimEnabled(
+    supported: Boolean,
+    eInkMode: Boolean,
+    reduceTransparency: Boolean = false
+): Boolean = (!supported || reduceTransparency) && !eInkMode
 
 private fun smoothStep(value: Float): Float {
     val x = value.coerceIn(0f, 1f)
@@ -211,10 +218,36 @@ fun ProgressiveTopBlur(
     bandHeight: Dp = ProgressiveTopBlurBandHeight,
     tint: Color? = null,
 ) {
+    ProgressiveBlurBand(backdrop, strength, modifier, maxBlurRadius, bandHeight, tint, fromBottom = false)
+}
+
+/**
+ * Shared band implementation. [fromBottom] anchors the strong end at the bottom edge by reversing
+ * the mask profiles (never by flipping the layer, which would mirror the blurred content).
+ */
+@Composable
+private fun ProgressiveBlurBand(
+    backdrop: Backdrop,
+    strength: Float,
+    modifier: Modifier,
+    maxBlurRadius: Dp,
+    bandHeight: Dp,
+    tint: Color?,
+    fromBottom: Boolean
+) {
+    if (LocalReduceTransparency.current) {
+        val fallbackTint = (tint ?: com.huangder.lumibooks.ui.theme.AppColors.WindowBg).copy(alpha = 1f)
+        if (fromBottom) {
+            ProgressiveBottomScrim(modifier, bandHeight, fallbackTint)
+        } else {
+            ProgressiveTopScrim(strength, modifier, bandHeight, fallbackTint)
+        }
+        return
+    }
     val resolvedStrength = quantizeBlurStrength(strength)
     if (resolvedStrength <= 0f) return
 
-    val masks = remember { ProgressiveBlurMasks() }
+    val masks = remember(fromBottom) { ProgressiveBlurMasks(fromBottom) }
     val fullRadiusPx = with(LocalDensity.current) { maxBlurRadius.toPx() } * resolvedStrength
 
     Box(modifier = modifier.fillMaxWidth().height(bandHeight)) {
@@ -239,7 +272,7 @@ fun ProgressiveTopBlur(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = resolvedStrength }
-                    .background(remember(tint) { tintBrush(tint) })
+                    .background(remember(tint, fromBottom) { tintBrush(tint, fromBottom) })
             )
         }
     }
@@ -264,7 +297,46 @@ fun ProgressiveTopScrim(
             .fillMaxWidth()
             .height(bandHeight)
             .graphicsLayer { alpha = resolvedStrength * PROGRESSIVE_TOP_SCRIM_ALPHA }
-            .background(remember(tint) { tintBrush(tint) })
+            .background(remember(tint) { tintBrush(tint, fromBottom = false) })
+    )
+}
+
+/**
+ * Bottom-edge counterpart of [ProgressiveTopBlur] for floating bottom actions: content scrolling
+ * under the button dissolves into blur instead of being cut off by a hard edge. The strongest
+ * blur sits at the bottom of the window.
+ */
+@Composable
+fun ProgressiveBottomBlur(
+    backdrop: Backdrop,
+    modifier: Modifier = Modifier,
+    maxBlurRadius: Dp = ProgressiveTopBlurMaxRadius,
+    bandHeight: Dp = ProgressiveTopBlurBandHeight,
+    tint: Color? = null,
+) {
+    ProgressiveBlurBand(backdrop, 1f, modifier, maxBlurRadius, bandHeight, tint, fromBottom = true)
+}
+
+/** Blur-free bottom fallback: the same dissolve as a scrim that fades out towards the content. */
+@Composable
+fun ProgressiveBottomScrim(
+    modifier: Modifier = Modifier,
+    bandHeight: Dp = ProgressiveTopBlurBandHeight,
+    tint: Color,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(bandHeight)
+            .background(
+                remember(tint) {
+                    Brush.verticalGradient(
+                        0f to tint.copy(alpha = 0f),
+                        0.45f to tint.copy(alpha = tint.alpha * 0.72f),
+                        1f to tint
+                    )
+                }
+            )
     )
 }
 
@@ -291,22 +363,28 @@ private fun ProgressiveBlurLevel(
     )
 }
 
-private class ProgressiveBlurMasks {
-    val light: Brush = maskBrush(PROGRESSIVE_BLUR_LEVEL_LIGHT)
-    val medium: Brush = maskBrush(PROGRESSIVE_BLUR_LEVEL_MEDIUM)
-    val heavy: Brush = maskBrush(PROGRESSIVE_BLUR_LEVEL_HEAVY)
+private class ProgressiveBlurMasks(fromBottom: Boolean) {
+    val light: Brush = maskBrush(PROGRESSIVE_BLUR_LEVEL_LIGHT, fromBottom)
+    val medium: Brush = maskBrush(PROGRESSIVE_BLUR_LEVEL_MEDIUM, fromBottom)
+    val heavy: Brush = maskBrush(PROGRESSIVE_BLUR_LEVEL_HEAVY, fromBottom)
 }
 
-private fun maskBrush(level: Int): Brush = Brush.verticalGradient(
+/** Distance from the strong edge: the top edge normally, the bottom edge for bottom bands. */
+private fun edgeFraction(index: Int, fromBottom: Boolean): Float {
+    val fraction = index.toFloat() / MASK_SAMPLE_COUNT
+    return if (fromBottom) 1f - fraction else fraction
+}
+
+private fun maskBrush(level: Int, fromBottom: Boolean): Brush = Brush.verticalGradient(
     colorStops = Array(MASK_SAMPLE_COUNT + 1) { index ->
         val fraction = index.toFloat() / MASK_SAMPLE_COUNT
-        fraction to Color.Black.copy(alpha = progressiveBlurLevelAlpha(level, fraction))
+        fraction to Color.Black.copy(alpha = progressiveBlurLevelAlpha(level, edgeFraction(index, fromBottom)))
     }
 )
 
-private fun tintBrush(tint: Color): Brush = Brush.verticalGradient(
+private fun tintBrush(tint: Color, fromBottom: Boolean): Brush = Brush.verticalGradient(
     colorStops = Array(MASK_SAMPLE_COUNT + 1) { index ->
         val fraction = index.toFloat() / MASK_SAMPLE_COUNT
-        fraction to tint.copy(alpha = tint.alpha * progressiveTintAlpha(fraction))
+        fraction to tint.copy(alpha = tint.alpha * progressiveTintAlpha(edgeFraction(index, fromBottom)))
     }
 )

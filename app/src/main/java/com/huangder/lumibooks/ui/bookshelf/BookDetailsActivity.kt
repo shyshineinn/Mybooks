@@ -145,6 +145,7 @@ class BookDetailsActivity : ComponentActivity() {
         setContent {
             val appTheme by dataStoreManager.appTheme.collectAsState(initial = launchTheme.appTheme)
             val accent by dataStoreManager.appAccentColor.collectAsState(initial = launchTheme.appAccentColor)
+            val appFontSize by dataStoreManager.appFontSize.collectAsState(initial = launchTheme.appFontSize)
             val font by dataStoreManager.globalFontMode.collectAsState(initial = launchTheme.globalFontMode)
             val transparency by dataStoreManager.liquidGlassTransparency.collectAsState(initial = launchTheme.liquidGlassTransparency)
             val hdr by dataStoreManager.liquidGlassHdrHighlightEnabled.collectAsState(initial = launchTheme.liquidGlassHdrHighlightEnabled)
@@ -156,7 +157,13 @@ class BookDetailsActivity : ComponentActivity() {
             val resolvedTheme = effectiveAppTheme(appTheme, capability)
             val motion by dataStoreManager.motionPreference.collectAsState(initial = launchTheme.motionPreference)
             val menuAnimationStyleValue by dataStoreManager.menuAnimationStyle.collectAsState(initial = launchTheme.menuAnimationStyle)
+            val liquidGlassStyle by dataStoreManager.liquidGlassStyle
+                .collectAsState(initial = launchTheme.liquidGlassStyle)
+            val reduceTransparencyEnabled by dataStoreManager.reduceTransparencyEnabled
+                .collectAsState(initial = launchTheme.reduceTransparencyEnabled)
             EBookReaderTheme(
+                liquidGlassStyle = liquidGlassStyle,
+                reduceTransparencyEnabled = reduceTransparencyEnabled,
                 menuAnimationStyle = com.huangder.lumibooks.domain.model.MenuAnimationStyle.fromStoredValue(menuAnimationStyleValue),
                 motionPreference = com.huangder.lumibooks.ui.theme.MotionPreference.fromStoredValue(motion),
                 darkTheme = isDark,
@@ -167,6 +174,7 @@ class BookDetailsActivity : ComponentActivity() {
                 liquidGlassTransparency = transparency,
                 liquidGlassHdrHighlightEnabled = hdr && !eInk,
                 eInkMode = eInk,
+                appFontSize = appFontSize,
                 globalFontMode = font
             ) {
                 ConfigurableActivityBack(predictiveBackEnabled = predictiveBack, onBack = { finish() })
@@ -225,7 +233,7 @@ class BookDetailsViewModel @Inject constructor(
                 readingRepository.getActiveDaysByBookId(bookId),
                 readingRepository.getBookmarksByBookId(bookId),
                 readingRepository.getNotesByBookId(bookId)
-            ) { books, duration, days, bookmarks, notes -> BookDetailsUiState(books.firstOrNull { it.id == bookId }, duration ?: 0L, days, bookmarks.size, notes.size, false) }
+            ) { books, duration, days, bookmarks, notes -> BookDetailsUiState(books.firstOrNull { it.id == bookId }, duration ?: 0L, days, bookmarks.size, notes.count { !it.isInkStroke }, false) }
                 .collect { _uiState.value = it }
         }
     }
@@ -492,7 +500,8 @@ fun BookDetailsScreen(
                     syncBadge = if (MyBooksConfig.isMyBooks(book)) syncBadge else null,
                     onEdit = { if (MyBooksConfig.isMyBooks(book)) editingMyBooks = true else editing = true },
                     onTags = { tagsOpen = true },
-                    onMove = { moveOpen = true }
+                    onMove = { moveOpen = true },
+                    onReview = { BookReviewActivity.start(context, book.id, book.title, book.coverPath) }
                 )
             }
             item {
@@ -660,7 +669,8 @@ fun BookDetailsScreen(
     syncBadge: MyBooksSyncBadge?,
     onEdit: () -> Unit,
     onTags: () -> Unit,
-    onMove: () -> Unit
+    onMove: () -> Unit,
+    onReview: () -> Unit
 ) {
     LiquidGlassSurface(AppRoundedCornerShape(AppRadius.lg), AppColors.CardBg, Modifier.fillMaxWidth(), contentScrimColor = Color.Transparent) {
         Column {
@@ -672,6 +682,13 @@ fun BookDetailsScreen(
                 tags.ifBlank { stringResource(R.string.book_detail_none) },
                 true,
                 onTags
+            )
+            DetailRow(
+                stringResource(R.string.book_review),
+                stringResource(R.string.book_review_open),
+                true,
+                onReview,
+                showChevron = true
             )
             if (MyBooksConfig.isMyBooks(book)) {
                 MyBooksContentRows(metaState, notesState, syncBadge)
@@ -754,7 +771,7 @@ fun BookDetailsScreen(
     }
 }
 
-@Composable internal fun DetailRow(label: String, value: String, clickable: Boolean, onClick: () -> Unit = {}) {
+@Composable internal fun DetailRow(label: String, value: String, clickable: Boolean, onClick: () -> Unit = {}, showChevron: Boolean = false) {
     val textMeasurer = rememberTextMeasurer()
     val density = androidx.compose.ui.platform.LocalDensity.current
     val labelStyle = TextStyle(fontSize = AppType.Body)
@@ -770,12 +787,13 @@ fun BookDetailsScreen(
         val labelWidthPx = remember(label, labelStyle) {
             textMeasurer.measure(label, style = labelStyle, maxLines = 1).size.width.toFloat()
         }
-        val valueWidthPx = remember(value, valueStyle) {
+        val valueWidthPx = remember(value, valueStyle, showChevron) {
             textMeasurer.measure(value, style = valueStyle, maxLines = 1).size.width.toFloat()
         }
+        val chevronWidthPx = if (showChevron) with(density) { 20.dp.toPx() } else 0f
         val stack = shouldStackDetailRow(
             labelWidthPx = labelWidthPx,
-            valueWidthPx = valueWidthPx,
+            valueWidthPx = valueWidthPx + chevronWidthPx,
             availableWidthPx = availableWidthPx,
             gapWidthPx = with(density) { gap.toPx() }
         )
@@ -783,23 +801,33 @@ fun BookDetailsScreen(
             Column(Modifier.fillMaxWidth()) {
                 Text(label, style = labelStyle, color = AppColors.TextPrimary)
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    value,
-                    style = valueStyle,
-                    color = AppColors.TextSecondary,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(value, style = valueStyle, color = AppColors.TextSecondary, modifier = Modifier.weight(1f))
+                    if (showChevron) {
+                        Icon(
+                            AppIcons.CaretRight,
+                            contentDescription = null,
+                            tint = AppColors.TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
         } else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, style = labelStyle, color = AppColors.TextPrimary, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(gap))
-                Text(
-                    value,
-                    style = valueStyle,
-                    color = AppColors.TextSecondary,
-                    maxLines = 1
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(value, style = valueStyle, color = AppColors.TextSecondary, maxLines = 1)
+                    if (showChevron) {
+                        Icon(
+                            AppIcons.CaretRight,
+                            contentDescription = null,
+                            tint = AppColors.TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
         }
     }
@@ -818,12 +846,7 @@ internal fun shouldStackDetailRow(
     LiquidGlassSurface(
         shape,
         AppColors.CardBg,
-        modifier.shadow(
-            elevation = 18.dp,
-            shape = shape,
-            ambientColor = Color.Black.copy(alpha = if (isDark) 0.34f else 0.18f),
-            spotColor = Color.Black.copy(alpha = if (isDark) 0.40f else 0.24f)
-        ),
+        modifier.clip(shape),
         controlEdge = true,
         contentScrimColor = if (isDark) Color.Black.copy(alpha = .22f) else Color.White.copy(alpha = .28f)
     ) {

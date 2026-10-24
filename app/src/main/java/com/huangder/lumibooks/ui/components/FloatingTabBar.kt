@@ -1,6 +1,7 @@
 @file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.huangder.lumibooks.ui.components
+import com.huangder.lumibooks.ui.theme.LocalReduceTransparency
 import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -38,6 +39,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -48,6 +51,7 @@ import androidx.compose.foundation.shape.CircleShape
 import com.huangder.lumibooks.ui.theme.AppRoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
@@ -88,6 +92,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import com.huangder.lumibooks.R
 import com.huangder.lumibooks.ui.theme.AppColors
 import com.huangder.lumibooks.ui.theme.LocalAppTheme
@@ -119,7 +124,6 @@ data class TabItem(
 )
 
 private val LiquidTabBarHeight = 64.dp
-private val LiquidTabSelectionHeight = 56.dp
 private val LiquidTabHorizontalPadding = 36.dp
 private val LiquidImportButtonReserve = 100.dp
 private val LiquidImportIconSize = 28.dp
@@ -139,6 +143,7 @@ fun Material3BottomNavigationBar(
     NavigationBar(
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = maxOf(80.dp, with(LocalDensity.current) { 14.sp.toDp() } * 1.5f + 48.dp))
             .semantics { testTagsAsResourceId = true },
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
         tonalElevation = NavigationBarDefaults.Elevation,
@@ -155,7 +160,7 @@ fun Material3BottomNavigationBar(
                         contentDescription = stringResource(tab.titleRes)
                     )
                 },
-                label = { Text(stringResource(tab.titleRes), maxLines = 1) },
+                label = { Text(stringResource(tab.titleRes), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
                 alwaysShowLabel = true
             )
         }
@@ -174,9 +179,20 @@ fun FloatingTabBar(
     val isDark = LocalIsDarkTheme.current
     val isLiquidGlass = LocalAppTheme.current == "liquid_glass"
     val transparency = LocalLiquidGlassTransparency.current
+    val reduceTransparency = LocalReduceTransparency.current
     val motionEnabled = LocalMotionEnabled.current
     val density = LocalDensity.current
-    val barHeight = if (isLiquidGlass) LiquidTabBarHeight else 56.dp
+    val labelMeasurer = rememberTextMeasurer()
+    val labelStyle = LocalTextStyle.current.copy(fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Medium)
+    val labelHeightPx = tabs.maxOf { tab ->
+        val layout = labelMeasurer.measure(stringResource(tab.titleRes), labelStyle, maxLines = 1, softWrap = false)
+        maxOf(layout.size.height, kotlin.math.ceil(layout.getLineBottom(0)).toInt())
+    }
+    // CJK glyph metrics can exceed the requested line height at accessibility sizes.
+    val barHeight = if (isLiquidGlass) {
+        // Icon + gap + padding, with room for the label's font ascent/descent.
+        maxOf(LiquidTabBarHeight, with(density) { labelHeightPx.toDp() } + 50.dp)
+    } else 56.dp
     val accent = AppColors.Accent
     // Automatic backdrop sampling is intentionally disabled. PixelCopy and draw
     // observation both add work to every animated frame on affected devices.
@@ -197,9 +213,11 @@ fun FloatingTabBar(
     val animationScope = rememberCoroutineScope()
     // Compensate the light glass' neutral overlay so the sampled result matches Lumi pink.
     val glassShape = CircleShape
-    val horizontalPadding = if (isLiquidGlass) LiquidTabHorizontalPadding else 80.dp
+    val horizontalPadding = if (isLiquidGlass) {
+        if (density.fontScale > 1.3f) 12.dp else LiquidTabHorizontalPadding
+    } else 80.dp
     val endPadding = if (isLiquidGlass && reserveImportButtonSpace) {
-        LiquidImportButtonReserve
+        if (density.fontScale > 1.3f) 80.dp else LiquidImportButtonReserve
     } else {
         horizontalPadding
     }
@@ -231,7 +249,7 @@ fun FloatingTabBar(
     } else {
         SolidColor(Color.White.copy(alpha = 0.58f))
     }
-    val hazeModifier = hazeState?.let { state ->
+    val hazeModifier = hazeState?.takeIf { !reduceTransparency }?.let { state ->
         Modifier.hazeChild(state) {
             backgroundColor = if (isDark) Color(0xFF1C1C1E) else Color.White
             tints = listOf(
@@ -272,7 +290,9 @@ fun FloatingTabBar(
                 if (transparency < 1f) {
                     blur((6.dp * (1f - transparency)).toPx())
                 }
-                lens(16.dp.toPx(), 28.dp.toPx())
+                if (!reduceTransparency) {
+                    lens(16.dp.toPx(), 28.dp.toPx())
+                }
             },
             highlight = if (LocalLiquidGlassControlEdgeEnabled.current) null else { { liquidGlassHighlight() } },
             onDrawSurface = { drawRect(liquidSurfaceColor) }
@@ -456,7 +476,7 @@ fun FloatingTabBar(
                     modifier = Modifier
                         .align(Alignment.Center)
                         .fillMaxWidth()
-                        .height(LiquidTabSelectionHeight)
+                        .height(barHeight - 8.dp)
                         .clearAndSetSemantics {}
                         .alpha(0f)
                         .layerBackdrop(tabsBackdrop)
@@ -470,10 +490,12 @@ fun FloatingTabBar(
                                 if (transparency < 1f) {
                                     blur((6.dp * (1f - transparency)).toPx())
                                 }
-                                lens(
-                                    16.dp.toPx() * progress,
-                                    20.dp.toPx() * progress
-                                )
+                                if (!reduceTransparency) {
+                                    lens(
+                                        16.dp.toPx() * progress,
+                                        20.dp.toPx() * progress
+                                    )
+                                }
                             },
                             highlight = null,
                             onDrawSurface = { drawRect(liquidSurfaceColor) }
@@ -540,11 +562,13 @@ fun FloatingTabBar(
                         effects = {
                             val opticalProgress =
                                 if (motionEnabled) dragState.pressProgress else 0f
-                            lens(
-                                14.dp.toPx() * opticalProgress,
-                                18.dp.toPx() * opticalProgress,
-                                chromaticAberration = opticalProgress > 0.05f
-                            )
+                            if (!reduceTransparency) {
+                                lens(
+                                    14.dp.toPx() * opticalProgress,
+                                    18.dp.toPx() * opticalProgress,
+                                    chromaticAberration = opticalProgress > 0.05f
+                                )
+                            }
                         },
                         highlight = null,
                         shadow = {
@@ -736,6 +760,8 @@ private fun TabItemView(
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
                 lineHeight = 13.sp,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
                 maxLines = 1
             )
         }

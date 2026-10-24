@@ -9,7 +9,9 @@ import com.huangder.lumibooks.ui.components.lumiCardSurface
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
+import com.huangder.lumibooks.ui.animation.VisualMotion.spring
 import com.huangder.lumibooks.ui.animation.VisualMotion.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -60,6 +62,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -86,6 +91,7 @@ import com.huangder.lumibooks.ui.reader.NoteInputSheet
 import com.huangder.lumibooks.ui.theme.LocalAppTheme
 import com.huangder.lumibooks.ui.theme.LocalEInkMode
 import com.huangder.lumibooks.ui.theme.LocalIsDarkTheme
+import com.huangder.lumibooks.ui.theme.LocalMotionEnabled
 import com.huangder.lumibooks.ui.theme.resolveAppFontFamily
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -360,6 +366,7 @@ fun BookNotesScreen(
             tags = bookmarkRemarkTags,
             availableTags = uiState.availableTags,
             onTagsChange = { bookmarkRemarkTags = it },
+            onCreateTag = viewModel::createTag,
             onConfirm = {
                 editingBookmarkRemark?.let {
                     viewModel.updateBookmarkRemarkAndTags(it, bookmarkRemarkText, bookmarkRemarkTags)
@@ -375,7 +382,8 @@ fun BookNotesScreen(
                 backdrop = glassBackdrop.takeIf { isLiquidGlass },
                 selected = uiState.notes.firstOrNull { it.id == note.id }?.tags ?: note.tags,
                 available = uiState.availableTags,
-                onSave = { viewModel.updateNoteTags(note, it); editingNoteTags = null },
+                onSave = { viewModel.updateNoteTags(note, it) },
+                onCreate = viewModel::createTag,
                 onDismiss = { editingNoteTags = null },
                 onRename = renameTag,
                 onDelete = deleteTag
@@ -386,7 +394,8 @@ fun BookNotesScreen(
                 backdrop = glassBackdrop.takeIf { isLiquidGlass },
                 selected = uiState.bookmarks.firstOrNull { it.id == bookmark.id }?.tags ?: bookmark.tags,
                 available = uiState.availableTags,
-                onSave = { viewModel.updateBookmarkTags(bookmark, it); editingBookmarkTags = null },
+                onSave = { viewModel.updateBookmarkTags(bookmark, it) },
+                onCreate = viewModel::createTag,
                 onDismiss = { editingBookmarkTags = null },
                 onRename = renameTag,
                 onDelete = deleteTag
@@ -396,7 +405,8 @@ fun BookNotesScreen(
             backdrop = glassBackdrop.takeIf { isLiquidGlass },
             selected = emptyList(),
             available = uiState.availableTags,
-            onSave = { managingTags = false },
+            onSave = { names -> names.forEach { viewModel.createTag(it) } },
+            onCreate = viewModel::createTag,
             onDismiss = { managingTags = false },
             onRename = renameTag,
             onDelete = deleteTag,
@@ -408,12 +418,13 @@ fun BookNotesScreen(
 // ─── 分段选择器（设计规范：#F2F2F7 背景, 圆角 20dp, 选中白色带阴影）───
 
 @Composable
-private fun SegmentedTabBar(
+internal fun SegmentedTabBar(
     selectedTab: Int,
     tabs: List<String>,
     onTabSelected: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    backdrop: Backdrop? = null
+    backdrop: Backdrop? = null,
+    labelFontSize: TextUnit = 14.sp
 ) {
     val tabHeight = (40f * LocalDensity.current.fontScale.coerceIn(1f, 1.6f)).dp
     if (LocalAppTheme.current == "liquid_glass" && !LocalEInkMode.current) {
@@ -428,9 +439,11 @@ private fun SegmentedTabBar(
         ) { index, isSelected ->
             Text(
                 text = tabs[index],
-                fontSize = 14.sp,
+                fontSize = labelFontSize,
                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (isSelected) AppColors.TextPrimary.copy(alpha = 0.86f) else AppColors.TextSecondary
+                color = if (isSelected) AppColors.TextPrimary.copy(alpha = 0.86f) else AppColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         return
@@ -483,9 +496,11 @@ private fun SegmentedTabBar(
                 ) {
                     Text(
                         text = label,
-                        fontSize = 14.sp,
+                        fontSize = labelFontSize,
                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (isSelected) AppColors.TextPrimary else AppColors.TextSecondary
+                        color = if (isSelected) AppColors.TextPrimary else AppColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -598,25 +613,46 @@ private fun BookmarkList(
 // ─── 高亮/笔记列表项（设计规范样式）────────────────────────────
 
 @Composable
-private fun HighlightNoteItem(
+internal fun HighlightNoteItem(
     note: Note,
     onShare: () -> Unit,
     onEditTags: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    header: (@Composable () -> Unit)? = null,
+    dateText: String = formatDate(note.createdAt),
+    /** Cross-book feed: tapping a clipped card shows the whole passage instead of navigating. */
+    expandable: Boolean = false,
+    cornerRadius: Dp = 12.dp
 ) {
+    val shape = AppRoundedCornerShape(cornerRadius)
+    var expanded by rememberSaveable(note.id) { mutableStateOf(false) }
+    var truncated by remember(note.id) { mutableStateOf(false) }
+    val motionEnabled = LocalMotionEnabled.current
     SwipeRevealItem(
         onShare = onShare,
         onEditTags = onEditTags,
-        onDelete = onDelete
+        onDelete = onDelete,
+        onClick = if (expandable && (truncated || expanded)) ({ expanded = !expanded }) else null
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(AppRoundedCornerShape(12.dp))
-                .lumiCardSurface(shape = AppRoundedCornerShape(12.dp))
-                .border(1.dp, AppColors.TextSecondary.copy(alpha = 0.24f), AppRoundedCornerShape(12.dp))
+                .then(
+                    if (expandable && motionEnabled) {
+                        Modifier.animateContentSize(
+                            animationSpec = spring(stiffness = 400f, visibilityThreshold = IntSize(1, 1))
+                        )
+                    } else Modifier
+                )
+                .clip(shape)
+                .lumiCardSurface(shape = shape)
+                .border(1.dp, AppColors.TextSecondary.copy(alpha = 0.24f), shape)
                 .padding(16.dp)
         ) {
+            header?.let {
+                it()
+                Spacer(Modifier.height(AppSpace.sm))
+            }
             // 高亮色条 + 文字
             Row(verticalAlignment = Alignment.Top) {
                 Box(
@@ -628,11 +664,12 @@ private fun HighlightNoteItem(
                 )
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    text = note.selectedText.replace('\n', ' '),
+                    text = if (expanded) note.selectedText else note.selectedText.replace('\n', ' '),
                     fontSize = 14.sp,
                     color = AppColors.TextPrimary,
-                    maxLines = 2,
+                    maxLines = if (expanded) Int.MAX_VALUE else 2,
                     overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (expandable && !expanded && it.hasVisualOverflow) truncated = true },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -647,8 +684,9 @@ private fun HighlightNoteItem(
                     text = note.note,
                     fontSize = AppType.Caption,
                     color = AppColors.TextSecondary,
-                    maxLines = 5,
-                    overflow = TextOverflow.Ellipsis
+                    maxLines = if (expanded) Int.MAX_VALUE else 5,
+                    overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (expandable && !expanded && it.hasVisualOverflow) truncated = true }
                 )
             }
             AnnotationTagChips(note.tags, modifier = Modifier.padding(top = 6.dp))
@@ -667,7 +705,7 @@ private fun HighlightNoteItem(
                     color = AppColors.Accent
                 )
                 Text(
-                    text = formatDate(note.createdAt),
+                    text = dateText,
                     fontSize = 12.sp,
                     color = AppColors.Accent
                 )
@@ -679,56 +717,65 @@ private fun HighlightNoteItem(
 // ─── 书签列表项 ──────────────────────────────────────────────────
 
 @Composable
-private fun BookmarkItem(
+internal fun BookmarkItem(
     bookmark: Bookmark,
     onShare: () -> Unit,
     onEditRemark: () -> Unit,
     onEditTags: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    header: (@Composable () -> Unit)? = null,
+    dateText: String = formatDate(bookmark.createdAt),
+    cornerRadius: Dp = 12.dp
 ) {
+    val shape = AppRoundedCornerShape(cornerRadius)
     SwipeRevealItem(
         onShare = onShare,
         onEdit = onEditRemark,
         onEditTags = onEditTags,
         onDelete = onDelete
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(AppRoundedCornerShape(12.dp))
-                .lumiCardSurface(shape = AppRoundedCornerShape(12.dp))
-                .border(1.dp, AppColors.TextSecondary.copy(alpha = 0.24f), AppRoundedCornerShape(12.dp))
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .clip(shape)
+                .lumiCardSurface(shape = shape)
+                .border(1.dp, AppColors.TextSecondary.copy(alpha = 0.24f), shape)
+                .padding(16.dp)
         ) {
-            Icon(
-                imageVector = AppIcons.Bookmark.regular,
-                contentDescription = null,
-                tint = AppColors.Accent,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(Modifier.width(AppSpace.md))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = (if (bookmark.isStale) stringResource(R.string.markdown_original_changed) + " · " else "") +
-                        bookmark.title.ifBlank { stringResource(R.string.chapter_number, bookmark.chapterIndex + 1) },
-                    fontSize = AppType.BodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = AppColors.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            header?.let {
+                it()
+                Spacer(Modifier.height(AppSpace.sm))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = AppIcons.Bookmark.regular,
+                    contentDescription = null,
+                    tint = AppColors.Accent,
+                    modifier = Modifier.size(20.dp)
                 )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = formatDate(bookmark.createdAt),
-                    fontSize = AppType.Caption,
-                    color = AppColors.TextSecondary
-                )
-                if (bookmark.remark.isNotBlank()) {
-                    Text(bookmark.remark, fontSize = AppType.Caption,
-                        color = AppColors.TextSecondary)
+                Spacer(Modifier.width(AppSpace.md))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = (if (bookmark.isStale) stringResource(R.string.markdown_original_changed) + " · " else "") +
+                            bookmark.title.ifBlank { stringResource(R.string.chapter_number, bookmark.chapterIndex + 1) },
+                        fontSize = AppType.BodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AppColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = dateText,
+                        fontSize = AppType.Caption,
+                        color = AppColors.TextSecondary
+                    )
+                    if (bookmark.remark.isNotBlank()) {
+                        Text(bookmark.remark, fontSize = AppType.Caption,
+                            color = AppColors.TextSecondary)
+                    }
+                    AnnotationTagChips(bookmark.tags, modifier = Modifier.padding(top = 6.dp))
                 }
-                AnnotationTagChips(bookmark.tags, modifier = Modifier.padding(top = 6.dp))
             }
         }
     }
@@ -772,13 +819,7 @@ private fun ExportBookmarksButton(
             enabled = buttonEnabled,
             onClick = onClick,
             effectPadding = 2.dp,
-            decorationModifier = Modifier.shadow(
-                elevation = 18.dp,
-                shape = shape,
-                clip = false,
-                ambientColor = Color.Black.copy(alpha = 0.22f),
-                spotColor = Color.Black.copy(alpha = 0.30f)
-            ),
+            decorationModifier = Modifier,
             modifier = modifier
                 .size(60.dp)
         ) {

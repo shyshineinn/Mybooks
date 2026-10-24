@@ -1,4 +1,6 @@
 package com.huangder.lumibooks.ui.bookshelf
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
 import com.huangder.lumibooks.ui.icons.directionalIcon
 import com.huangder.lumibooks.ui.icons.AppIcons
 
@@ -129,6 +131,7 @@ class BookshelfCategoriesActivity : ComponentActivity() {
         setContent {
             val appTheme by dataStoreManager.appTheme.collectAsState(initial = launchTheme.appTheme)
             val appAccentColor by dataStoreManager.appAccentColor.collectAsState(initial = launchTheme.appAccentColor)
+            val appFontSize by dataStoreManager.appFontSize.collectAsState(initial = launchTheme.appFontSize)
             val globalFontMode by dataStoreManager.globalFontMode.collectAsState(initial = launchTheme.globalFontMode)
             val liquidGlassTransparency by dataStoreManager.liquidGlassTransparency.collectAsState(initial = launchTheme.liquidGlassTransparency)
             val liquidGlassHdrHighlightEnabled by dataStoreManager.liquidGlassHdrHighlightEnabled.collectAsState(initial = launchTheme.liquidGlassHdrHighlightEnabled)
@@ -144,7 +147,13 @@ class BookshelfCategoriesActivity : ComponentActivity() {
             val effectiveTheme = effectiveAppTheme(appTheme, capability)
             val motion by dataStoreManager.motionPreference.collectAsState(initial = launchTheme.motionPreference)
             val menuAnimationStyleValue by dataStoreManager.menuAnimationStyle.collectAsState(initial = launchTheme.menuAnimationStyle)
+            val liquidGlassStyle by dataStoreManager.liquidGlassStyle
+                .collectAsState(initial = launchTheme.liquidGlassStyle)
+            val reduceTransparencyEnabled by dataStoreManager.reduceTransparencyEnabled
+                .collectAsState(initial = launchTheme.reduceTransparencyEnabled)
             EBookReaderTheme(
+                liquidGlassStyle = liquidGlassStyle,
+                reduceTransparencyEnabled = reduceTransparencyEnabled,
                 menuAnimationStyle = com.huangder.lumibooks.domain.model.MenuAnimationStyle.fromStoredValue(menuAnimationStyleValue),
                 motionPreference = com.huangder.lumibooks.ui.theme.MotionPreference.fromStoredValue(motion),
                 darkTheme = isDark,
@@ -155,6 +164,7 @@ class BookshelfCategoriesActivity : ComponentActivity() {
                 liquidGlassTransparency = liquidGlassTransparency,
                 liquidGlassHdrHighlightEnabled = liquidGlassHdrHighlightEnabled && !eInkMode,
                 eInkMode = eInkMode,
+                appFontSize = appFontSize,
                 globalFontMode = globalFontMode
             ) {
                 ConfigurableActivityBack(
@@ -1068,6 +1078,9 @@ private fun CategoryBooksPage(
                 onTags = { tagTargetBook = it },
                 onEditInfo = { pendingEditBook = it },
                 onBookDetails = { book -> BookDetailsActivity.start(context, book.id) },
+                onToggleReadStatus = { book ->
+                    viewModel.updateBook(book.copy(readingProgress = if (book.isReadingFinished) 0f else 1f))
+                },
                 onMoveToFolder = { book -> moveTargetBook = book }
             )
         }
@@ -1251,14 +1264,17 @@ private fun CategoryBooksHeader(
                 contentColor = AppColors.TextPrimary,
                 prominentShadow = true,
                 modifier = Modifier
-                    .width(88.dp)
-                    .height(46.dp)
+                    .widthIn(min = 88.dp)
+                    .heightIn(min = 46.dp)
             ) {
                 Text(
                     text = stringResource(R.string.done),
                     color = AppColors.TextPrimary,
                     fontSize = AppType.BodySmall,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
             Spacer(Modifier.width(10.dp))
@@ -1322,10 +1338,10 @@ private fun CategoryBooksHeader(
                 onClick = onEditToggle,
                 tintedColor = AppColors.CardBg,
                 modifier = Modifier
-                    .width(78.dp)
-                    .height(48.dp)
+                    .widthIn(min = 78.dp)
+                    .heightIn(min = 48.dp)
             ) {
-                Text(stringResource(R.string.edit), color = AppColors.TextPrimary)
+                Text(stringResource(R.string.edit), color = AppColors.TextPrimary, maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         }
     }

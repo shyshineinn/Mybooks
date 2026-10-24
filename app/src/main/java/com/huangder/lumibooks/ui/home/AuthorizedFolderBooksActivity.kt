@@ -62,6 +62,7 @@ class AuthorizedFolderBooksActivity : ComponentActivity() {
             val appTheme by dataStoreManager.appTheme.collectAsState(initial = launchTheme.appTheme)
             val appAccentColor by dataStoreManager.appAccentColor
                 .collectAsState(initial = launchTheme.appAccentColor)
+            val appFontSize by dataStoreManager.appFontSize.collectAsState(initial = launchTheme.appFontSize)
             val globalFontMode by dataStoreManager.globalFontMode.collectAsState(initial = launchTheme.globalFontMode)
             val liquidGlassTransparency by dataStoreManager.liquidGlassTransparency
                 .collectAsState(initial = launchTheme.liquidGlassTransparency)
@@ -89,7 +90,13 @@ class AuthorizedFolderBooksActivity : ComponentActivity() {
             val effectiveTheme = effectiveAppTheme(appTheme, capability)
 
             val menuAnimationStyleValue by dataStoreManager.menuAnimationStyle.collectAsState(initial = launchTheme.menuAnimationStyle)
+            val liquidGlassStyle by dataStoreManager.liquidGlassStyle
+                .collectAsState(initial = launchTheme.liquidGlassStyle)
+            val reduceTransparencyEnabled by dataStoreManager.reduceTransparencyEnabled
+                .collectAsState(initial = launchTheme.reduceTransparencyEnabled)
             EBookReaderTheme(
+                liquidGlassStyle = liquidGlassStyle,
+                reduceTransparencyEnabled = reduceTransparencyEnabled,
                 menuAnimationStyle = com.huangder.lumibooks.domain.model.MenuAnimationStyle.fromStoredValue(menuAnimationStyleValue),
                 darkTheme = isDark,
                 dynamicColor = effectiveTheme == "material3",
@@ -101,6 +108,7 @@ class AuthorizedFolderBooksActivity : ComponentActivity() {
                 cardOutlinesEnabled = cardOutlinesEnabled,
                 coverReadingProgressEnabled = coverReadingProgressEnabled,
                 eInkMode = eInkMode,
+                appFontSize = appFontSize,
                 globalFontMode = globalFontMode,
                 motionPreference = MotionPreference.fromStoredValue(motionPreferenceValue)
             ) {

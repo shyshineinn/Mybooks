@@ -1,5 +1,6 @@
 package com.huangder.lumibooks.ui.home
 
+import androidx.compose.foundation.layout.heightIn
 import com.huangder.lumibooks.ui.components.lumiCardSurface
 import com.huangder.lumibooks.ui.components.liquidGlassMenuAnchor
 
@@ -62,7 +63,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
@@ -80,6 +80,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.shadow
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.huangder.lumibooks.R
 import com.huangder.lumibooks.ui.animation.AppEasing
@@ -623,7 +624,7 @@ private fun FolderBooksHeader(
                 Spacer(Modifier.width(AppSpace.sm))
                 LiquidGlassButton(
                     onClick = onSelectAll,
-                    modifier = Modifier.height(44.dp),
+                    modifier = Modifier.heightIn(min = 44.dp),
                     shape = AppRoundedCornerShape(AppRadius.capsule),
                     tintedColor = AppColors.Accent,
                     prominentShadow = false,
@@ -633,7 +634,10 @@ private fun FolderBooksHeader(
                         text = selectAllLabel,
                         color = AppColors.OnAccent,
                         fontSize = AppType.BodySmall,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
             }
@@ -1350,13 +1354,11 @@ private fun FolderBooksConfirmButton(
         enabled = enabled,
         modifier = Modifier
             .fillMaxWidth()
-            .height(58.dp)
+            .heightIn(min = 58.dp)
             .then(
-                if (enabled) {
+                if (enabled && LocalAppTheme.current != "liquid_glass") {
                     Modifier.shadow(
-                        elevation = 28.dp,
-                        shape = shape,
-                        clip = false,
+                        elevation = 28.dp, shape = shape, clip = false,
                         ambientColor = Color.Black.copy(alpha = 0.10f),
                         spotColor = Color.Black.copy(alpha = 0.08f)
                     )
@@ -1373,7 +1375,10 @@ private fun FolderBooksConfirmButton(
             text = stringResource(R.string.import_confirm),
             color = if (enabled) AppColors.OnAccent else AppColors.TextSecondary,
             fontSize = AppType.Body,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            softWrap = false,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
         )
     }
 }

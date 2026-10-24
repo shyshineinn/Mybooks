@@ -124,9 +124,9 @@ fun MyBooksContentRows(
     }
     val context = LocalContext.current
     buildServerDetailRows(meta).forEach { row ->
-        DetailRow(row.label, row.value, row.url != null) {
+        DetailRow(row.label, row.value, row.url != null, onClick = {
             row.url?.let { openServerUrl(context, it) }
-        }
+        })
     }
     ReadingRecordBlock(meta)
     if (notesState != null) {
