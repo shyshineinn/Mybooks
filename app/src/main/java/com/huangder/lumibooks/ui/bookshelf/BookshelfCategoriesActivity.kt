@@ -85,6 +85,7 @@ import com.huangder.lumibooks.domain.model.BookFormat
 import com.huangder.lumibooks.domain.model.FolderMoveResult
 import com.huangder.lumibooks.domain.model.LibraryTag
 import com.huangder.lumibooks.domain.model.LibraryFolder
+import com.huangder.lumibooks.domain.model.ReadingStatus
 import com.huangder.lumibooks.ui.components.ConfigurableActivityBack
 import com.huangder.lumibooks.ui.components.CloudAwareBookDeleteDialog
 import com.huangder.lumibooks.ui.components.ConfigurableBackHandler
@@ -227,6 +228,10 @@ internal sealed interface BookshelfCategoryTarget {
     val title: String
 
     data class All(override val title: String) : BookshelfCategoryTarget
+    data class ServerStatus(
+        val status: ReadingStatus,
+        override val title: String
+    ) : BookshelfCategoryTarget
     data class EpubMobi(override val title: String) : BookshelfCategoryTarget
     data class Pdf(override val title: String) : BookshelfCategoryTarget
     data class Markdown(override val title: String) : BookshelfCategoryTarget
@@ -272,10 +277,34 @@ private fun BookshelfCategoriesScreen(
         if (uri != null && folder != null) viewModel.updateFolderCover(folder, uri)
     }
     val allTitle = stringResource(R.string.filter_all)
+    val wishTitle = stringResource(R.string.reading_status_wish)
+    val readingTitle = stringResource(R.string.reading_status_reading)
+    val doneTitle = stringResource(R.string.reading_status_done)
     val epubMobiTitle = stringResource(R.string.filter_epub_mobi)
     val favoritesTitle = stringResource(R.string.filter_favorites)
     val rows = buildList {
         add(CategoryRowModel(BookshelfCategoryTarget.All(allTitle), uiState.books.size, AppIcons.BookOpen))
+        add(
+            CategoryRowModel(
+                BookshelfCategoryTarget.ServerStatus(ReadingStatus.WISH, wishTitle),
+                uiState.serverReadingStatusByBookId.values.count { it == ReadingStatus.WISH },
+                AppIcons.Bookmark.regular
+            )
+        )
+        add(
+            CategoryRowModel(
+                BookshelfCategoryTarget.ServerStatus(ReadingStatus.READING, readingTitle),
+                uiState.serverReadingStatusByBookId.values.count { it == ReadingStatus.READING },
+                AppIcons.BookOpen
+            )
+        )
+        add(
+            CategoryRowModel(
+                BookshelfCategoryTarget.ServerStatus(ReadingStatus.DONE, doneTitle),
+                uiState.serverReadingStatusByBookId.values.count { it == ReadingStatus.DONE },
+                AppIcons.CheckCircle
+            )
+        )
         add(
             CategoryRowModel(
                 BookshelfCategoryTarget.EpubMobi(epubMobiTitle),
@@ -445,10 +474,14 @@ internal fun BookshelfCategoryBooksRoute(
         uiState.books,
         uiState.folders,
         uiState.bookFolderLinks,
+        uiState.serverReadingStatusByBookId,
         tagIdsByBook
     ) {
         when (selectedTarget) {
             is BookshelfCategoryTarget.All -> uiState.books
+            is BookshelfCategoryTarget.ServerStatus -> uiState.books.filter {
+                uiState.serverReadingStatusByBookId[it.id] == selectedTarget.status
+            }
             is BookshelfCategoryTarget.EpubMobi -> uiState.books.filter(Book::isEpubMobi)
             is BookshelfCategoryTarget.Pdf -> uiState.books.filter { it.format == BookFormat.PDF }
             is BookshelfCategoryTarget.Markdown -> uiState.books.filter { it.format == BookFormat.MARKDOWN }
@@ -1079,7 +1112,7 @@ private fun CategoryBooksPage(
                 onEditInfo = { pendingEditBook = it },
                 onBookDetails = { book -> BookDetailsActivity.start(context, book.id) },
                 onToggleReadStatus = { book ->
-                    viewModel.updateBook(book.copy(readingProgress = if (book.isReadingFinished) 0f else 1f))
+                    viewModel.toggleReadStatus(book)
                 },
                 onMoveToFolder = { book -> moveTargetBook = book }
             )

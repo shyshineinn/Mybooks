@@ -356,6 +356,7 @@ fun MainNavGraph(
     // 选完文件后逐本补充信息并添加到服务器书库。
     var importCreateSources by remember { mutableStateOf(emptyList<MyBooksCreateSource>()) }
     var importCreateIndex by remember { mutableIntStateOf(0) }
+    var importToServer by rememberSaveable { mutableStateOf(false) }
     var transientMessage by remember { mutableStateOf<String?>(null) }
     var pendingCloudBook by remember { mutableStateOf<Book?>(null) }
     var autoOpenDownloadedBookId by remember { mutableStateOf<String?>(null) }
@@ -381,6 +382,8 @@ fun MainNavGraph(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (showImportActions) {
+            val toServer = importToServer
+            importToServer = false
             val candidates = uris.mapNotNull { uri ->
                 val name = FileUtils.getFileNameFromUri(context, uri) ?: return@mapNotNull null
                 if (FileUtils.getFileExtension(name) !in setOf("epub", "pdf", "txt", "mobi", "cbz", "md", "markdown")) {
@@ -397,15 +400,14 @@ fun MainNavGraph(
             if (candidates.isNotEmpty()) {
                 isPreparingImport = false
                 showImportActions = false
-                if (MyBooksConfig.hasWriteToken()) {
-                    // 有写令牌：先补充信息，再添加到服务器并留本地副本。
+                if (toServer && MyBooksConfig.hasWriteToken()) {
+                    // 添加到服务器：先补充信息，再建服务器书并留本地副本。
                     importCreateSources = candidates.map {
                         MyBooksCreateSource(fileName = it.name, uri = it.uri)
                     }
                     importCreateIndex = 0
-                    importRequestFolderId = null
                 } else {
-                    // 只读构建没有上传能力，保持原有本地导入。
+                    // 从文件导入/只读构建：保持原有本地导入。
                     homeViewModel.importBooks(
                         context = context,
                         uris = candidates.map { it.uri },
@@ -416,6 +418,18 @@ fun MainNavGraph(
             } else if (uris.isNotEmpty()) {
                 transientMessage = context.getString(R.string.import_no_supported_files)
             }
+        }
+    }
+    val launchImportPicker: (Boolean) -> Unit = { toServer ->
+        importToServer = toServer
+        runCatching {
+            importLauncher.launch(arrayOf("*/*"))
+        }.onFailure { error ->
+            importToServer = false
+            transientMessage = context.getString(
+                R.string.import_failed,
+                error.message.orEmpty()
+            )
         }
     }
     val directoryLauncher = rememberLauncherForActivityResult(
@@ -577,11 +591,6 @@ fun MainNavGraph(
 
     fun requestOpenBook(book: Book, sourceBounds: Rect? = null,
         sourcePresentation: com.huangder.lumibooks.ui.animation.BookReaderPresentation? = null) {
-        if (MyBooksConfig.isMyBooks(book)) {
-            // 服务器书：直接进详情页，先看简介/标签再决定下载
-            com.huangder.lumibooks.ui.bookshelf.BookDetailsActivity.start(context, book.id)
-            return
-        }
         if (book.isCloudOnly) {
             cloudOpenSource = Triple(book.id, sourceBounds, sourcePresentation)
             if (homeUiState.downloadStates[book.id] is com.huangder.lumibooks.data.sync.BookDownloadState.Downloading) {
@@ -1264,15 +1273,11 @@ fun MainNavGraph(
                     selectedImportBookUris = emptySet()
                     showImportActions = false
                 },
-                onSelectFiles = {
-                    runCatching {
-                        importLauncher.launch(arrayOf("*/*"))
-                    }.onFailure { error ->
-                        transientMessage = context.getString(
-                            R.string.import_failed,
-                            error.message.orEmpty()
-                        )
-                    }
+                onSelectFiles = { launchImportPicker(false) },
+                onAddToServer = if (MyBooksConfig.hasWriteToken()) {
+                    { launchImportPicker(true) }
+                } else {
+                    null
                 },
                 onAuthorizeDirectory = {
                     runCatching {
@@ -1468,7 +1473,8 @@ fun MainNavGraph(
                             fileName = source.fileName,
                             remoteId = created.id,
                             title = created.title,
-                            author = created.author
+                            author = created.author,
+                            targetFolderId = importRequestFolderId
                         ) {
                             readerNavigationScope.launch { homeViewModel.syncMyBooksNow() }
                         }
@@ -1477,10 +1483,12 @@ fun MainNavGraph(
                         } else {
                             importCreateSources = emptyList()
                             importCreateIndex = 0
+                            importRequestFolderId = null
                         }
                     } else {
                         importCreateSources = emptyList()
                         importCreateIndex = 0
+                        importRequestFolderId = null
                     }
                 }
             )

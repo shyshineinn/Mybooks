@@ -24,6 +24,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.palette.graphics.Palette
 import com.huangder.lumibooks.data.local.DataStoreManager
+import com.huangder.lumibooks.data.sync.MyBooksConfig
+import com.huangder.lumibooks.data.sync.MyBooksReadStatus
+import com.huangder.lumibooks.data.sync.MyBooksSyncManager
 import com.huangder.lumibooks.domain.model.ReaderFirstOpenHintPolicy
 import com.huangder.lumibooks.data.local.ReaderPreferencesSnapshot
 import com.huangder.lumibooks.domain.model.AnnotationEditPlan
@@ -593,6 +596,7 @@ class ReaderViewModel @Inject constructor(
     private val mineruTokenStore: MineruTokenStore,
     private val webdavSyncManager: com.huangder.lumibooks.data.sync.WebdavSyncManager,
     private val webdavAutoSyncScheduler: com.huangder.lumibooks.data.sync.WebdavAutoSyncScheduler,
+    private val myBooksSyncManager: MyBooksSyncManager,
     private val fontDownloadManager: com.huangder.lumibooks.util.FontDownloadManager,
     private val highlightRuleRepository: HighlightRuleRepository,
     private val highlightRuleMaterializer: HighlightRuleMaterializer,
@@ -5065,8 +5069,10 @@ class ReaderViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            val previous = bookRepository.getBookById(bookId)
             bookRepository.updateReadingProgress(bookId, p)
             bookRepository.updateLastReadTime(bookId, System.currentTimeMillis())
+            autoMarkServerReadIfNeeded(previous, p)
         }
     }
 
@@ -6673,10 +6679,20 @@ class ReaderViewModel @Inject constructor(
         book: Book,
         position: ReaderCacheRecoveryPosition
     ) {
+        val previous = bookRepository.getBookById(book.id)
         bookRepository.updateReadingProgress(book.id, position.readingProgress, position.locatorJson)
         bookRepository.updateLastReadTime(book.id, System.currentTimeMillis())
+        autoMarkServerReadIfNeeded(previous, position.readingProgress)
         // Trigger debounced WebDAV sync for reading progress
         webdavSyncManager.scheduleReadingProgressSync(book.id)
+    }
+
+    /** 本地首次读到 100% 时，把 my-books 服务器也标成已读；重复写入 1.0 不会重复推送。 */
+    private suspend fun autoMarkServerReadIfNeeded(previousBook: Book?, progress: Float) {
+        val book = previousBook ?: return
+        if (!MyBooksReadStatus.becameFinished(book.readingProgress, progress)) return
+        if (!MyBooksConfig.isMyBooks(book) || !MyBooksConfig.hasWriteToken()) return
+        runCatching { myBooksSyncManager.setReadStatus(book.id, true) }
     }
 
     fun clearError() {

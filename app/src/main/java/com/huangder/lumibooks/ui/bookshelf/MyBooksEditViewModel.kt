@@ -20,7 +20,9 @@ import com.huangder.lumibooks.data.sync.normalizeRemoteAuthor
 import com.huangder.lumibooks.data.sync.optTextAt
 import com.huangder.lumibooks.data.sync.optTextOrEmpty
 import com.huangder.lumibooks.data.sync.optTextOrNull
+import com.huangder.lumibooks.data.sync.parseRemoteTags
 import com.huangder.lumibooks.domain.model.Book
+import com.huangder.lumibooks.domain.model.TagNameValidator
 import com.huangder.lumibooks.domain.repository.TagRepository
 import com.huangder.lumibooks.util.FileUtils
 import com.huangder.lumibooks.domain.repository.BookRepository
@@ -36,6 +38,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -540,9 +543,24 @@ class MyBooksEditViewModel @Inject constructor(
                     bookRepository.updateBookTitleAuthor(activeBook.id, newTitle, newAuthor)
                     book = activeBook.copy(title = newTitle, author = newAuthor)
                     // 豆瓣带回来的标签：写成本地标签，合并流程会把新增标签推到服务器。
-                    current.tags.forEach { name ->
-                        runCatching { tagRepository.createAndAssignTag(activeBook.id, name) }
+                    val tagCatalog = tagRepository.getAllTags().first()
+                    val seenTags = mutableSetOf<String>()
+                    current.tags.forEach { rawName ->
+                        if (!TagNameValidator.isValid(rawName)) return@forEach
+                        val normalized = TagNameValidator.normalized(rawName)
+                        if (!seenTags.add(normalized)) return@forEach
+                        val existingTag = tagCatalog.firstOrNull {
+                            TagNameValidator.normalized(it.name) == normalized
+                        }
+                        runCatching {
+                            if (existingTag != null) {
+                                tagRepository.assignTag(activeBook.id, existingTag.id)
+                            } else {
+                                tagRepository.createAndAssignTag(activeBook.id, rawName)
+                            }
+                        }
                     }
+                    if (seenTags.isNotEmpty()) syncManager.schedulePush()
                     // 豆瓣填充带回来的封面：落到本地封面目录，再由同步流程上传到服务器。
                     val remoteId = MyBooksConfig.remoteIdOf(activeBook.id)
                     if (remoteId != null && current.coverUrl != null) {
@@ -701,7 +719,10 @@ class MyBooksEditViewModel @Inject constructor(
                 identifiers = identifiers,
                 candidates = emptyList(),
                 coverUrl = candidate.coverUrl?.takeIf { it.isNotBlank() } ?: state.coverUrl,
-                tags = candidate.tags.ifEmpty { state.tags },
+                tags = (state.tags + candidate.tags)
+                    .map { TagNameValidator.clean(it) }
+                    .filter { TagNameValidator.isValid(it) }
+                    .distinctBy { TagNameValidator.normalized(it) },
                 lookupMessage = context.getString(R.string.mybooks_douban_filled)
             )
         }
@@ -786,7 +807,8 @@ class MyBooksEditViewModel @Inject constructor(
             identifiers = draftIds,
             customColumns = columns,
             customValues = customValues,
-            readLogs = logs.map { MyBooksReadLogDraft(it.first, it.second) }
+            readLogs = logs.map { MyBooksReadLogDraft(it.first, it.second) },
+            tags = parseRemoteTags(base.opt("tags"))
         )
     }
 
@@ -1041,7 +1063,9 @@ class MyBooksEditViewModel @Inject constructor(
             a.doubanId == b.doubanId &&
             a.identifiers == b.identifiers &&
             a.customValues == b.customValues &&
-            a.readLogs == b.readLogs
+            a.readLogs == b.readLogs &&
+            a.tags == b.tags &&
+            a.coverUrl == b.coverUrl
 
     private fun customToDraft(column: MyBooksCustomColumn, raw: Any?): String = when {
         raw == null || raw == JSONObject.NULL -> ""

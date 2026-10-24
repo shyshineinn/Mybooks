@@ -191,7 +191,7 @@ private fun formatNoteTime(raw: String?): String {
 fun MyBooksFileRows(book: Book, metaState: MyBooksMetaUiState) {
     val meta = metaState.meta ?: return
     fileRowValue(meta, book.isCloudOnly)?.let { value ->
-        DetailRow("电子书文件", value, false)
+        DetailRow(stringResource(R.string.server_meta_file), value, false)
     }
 }
 
@@ -222,7 +222,7 @@ private fun SummaryRow(summary: String) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "简介",
+                stringResource(R.string.server_meta_summary),
                 fontSize = AppType.Body,
                 color = AppColors.TextPrimary,
                 modifier = Modifier.weight(1f)
@@ -262,7 +262,7 @@ private fun ReadingRecordBlock(meta: ServerBookMeta) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "阅读记录",
+                    stringResource(R.string.server_meta_read_logs),
                     fontSize = AppType.Body,
                     color = AppColors.TextPrimary,
                     modifier = Modifier.weight(1f)
@@ -278,11 +278,15 @@ private fun ReadingRecordBlock(meta: ServerBookMeta) {
     }
 
     readingDateLabel(meta)?.let { dates ->
-        DetailRow("阅读日期", dates, false)
+        DetailRow(stringResource(R.string.server_meta_read_date), dates, false)
         return
     }
     if (meta.readCount > 0) {
-        DetailRow("阅读次数", "${meta.readCount} 次", false)
+        DetailRow(
+            stringResource(R.string.server_meta_read_count),
+            stringResource(R.string.server_meta_read_count_value, meta.readCount),
+            false
+        )
     }
 }
 
@@ -295,13 +299,13 @@ private fun MetaRetryRow(onRetry: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            "同步后可查看简介、评分等完整信息",
+            stringResource(R.string.server_meta_sync_hint),
             fontSize = AppType.BodySmall,
             color = AppColors.TextSecondary,
             modifier = Modifier.weight(1f)
         )
         LiquidGlassTextButton(
-            text = "重试",
+            text = stringResource(R.string.server_meta_retry),
             onClick = onRetry,
             modifier = Modifier.height(44.dp),
             contentColor = AppColors.Accent

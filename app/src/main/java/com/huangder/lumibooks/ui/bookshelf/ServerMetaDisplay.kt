@@ -1,9 +1,13 @@
 package com.huangder.lumibooks.ui.bookshelf
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
+import com.huangder.lumibooks.R
 import com.huangder.lumibooks.data.sync.RemoteBookFormats
 import com.huangder.lumibooks.data.sync.ServerBookMeta
 import com.huangder.lumibooks.data.sync.ServerIdentifier
 import com.huangder.lumibooks.data.sync.ServerReadLog
+import com.huangder.lumibooks.domain.model.ReadingStatus
 import java.util.Locale
 
 internal data class ServerDetailRow(
@@ -12,12 +16,14 @@ internal data class ServerDetailRow(
     val url: String? = null
 )
 
-internal fun statusDisplay(status: String): String = when (status.trim().lowercase(Locale.ROOT)) {
-    "want", "wish" -> "想读"
-    "reading" -> "在读"
-    "done", "finished", "read" -> "已读"
-    else -> status.trim()
-}
+@Composable
+internal fun statusDisplay(status: String): String =
+    when (ReadingStatus.fromServerStatus(status)) {
+        ReadingStatus.WISH -> stringResource(R.string.reading_status_wish)
+        ReadingStatus.READING -> stringResource(R.string.reading_status_reading)
+        ReadingStatus.DONE -> stringResource(R.string.reading_status_done)
+        null -> status.trim()
+    }
 
 /** 服务端评分为 0–10 分制；0 / null / NaN 视为未评分。 */
 internal fun ratingDisplay(rating: Double?): String? {
@@ -95,18 +101,36 @@ internal fun customRows(meta: ServerBookMeta, reserved: Set<String> = emptySet()
 }
 
 /** 内容卡中的元数据行（简介单独渲染，阅读记录和文件行由各自的区块处理）。 */
+@Composable
 internal fun buildServerDetailRows(meta: ServerBookMeta): List<ServerDetailRow> {
     val rows = mutableListOf<ServerDetailRow>()
     statusDisplay(meta.status).takeIf { it.isNotBlank() }?.let {
-        rows += ServerDetailRow("阅读状态", it)
+        rows += ServerDetailRow(stringResource(R.string.server_meta_status), it)
     }
-    ratingDisplay(meta.rating)?.let { rows += ServerDetailRow("评分", it) }
-    seriesDisplay(meta)?.let { rows += ServerDetailRow("系列", it) }
-    publicationDisplay(meta)?.let { rows += ServerDetailRow("出版", it) }
+    ratingDisplay(meta.rating)?.let {
+        rows += ServerDetailRow(stringResource(R.string.server_meta_rating), it)
+    }
+    seriesDisplay(meta)?.let {
+        rows += ServerDetailRow(stringResource(R.string.server_meta_series), it)
+    }
+    publicationDisplay(meta)?.let {
+        rows += ServerDetailRow(stringResource(R.string.server_meta_publication), it)
+    }
     isbnRow(meta)?.let { rows += it }
     rows += identifierRows(meta)
     val reserved = buildSet {
         rows.forEach { add(it.label) }
+        listOf(
+            R.string.server_meta_status,
+            R.string.server_meta_rating,
+            R.string.server_meta_series,
+            R.string.server_meta_publication,
+            R.string.server_meta_summary,
+            R.string.server_meta_read_logs,
+            R.string.server_meta_read_date,
+            R.string.server_meta_read_count,
+            R.string.server_meta_file
+        ).forEach { add(stringResource(it)) }
         meta.identifiers.forEach { identifier ->
             identifier.label?.takeIf { it.isNotBlank() }?.let(::add)
             identifier.type?.takeIf { it.isNotBlank() }?.let(::add)
@@ -127,29 +151,39 @@ internal fun sortedReadingLogs(meta: ServerBookMeta): List<ServerReadLog> {
         .filter { seen.add("${it.start.orEmpty()}\u0000${it.finish.orEmpty()}") }
 }
 
+@Composable
 internal fun readingLogLabels(meta: ServerBookMeta): List<String> =
     sortedReadingLogs(meta).mapNotNull { log ->
         val start = log.start?.takeIf { it.isNotBlank() }
         val finish = log.finish?.takeIf { it.isNotBlank() }
         when {
-            start != null && finish != null -> "$start 至 $finish"
-            start != null -> "$start · 进行中"
-            finish != null -> "至 $finish"
+            start != null && finish != null -> stringResource(R.string.server_meta_read_range, start, finish)
+            start != null -> stringResource(R.string.server_meta_reading_in_progress, start)
+            finish != null -> stringResource(R.string.server_meta_until, finish)
             else -> null
         }
     }
 
+@Composable
 internal fun readCountLabel(meta: ServerBookMeta): String? =
-    meta.readCount.takeIf { it > 0 }?.let { "共 $it 次" }
+    meta.readCount.takeIf { it > 0 }?.let {
+        stringResource(R.string.server_meta_read_count_value, it)
+    }
 
+@Composable
 internal fun readingDateLabel(meta: ServerBookMeta): String? {
     val parts = listOfNotNull(
-        meta.startDate?.takeIf { it.isNotBlank() }?.let { "开始 $it" },
-        meta.finishDate?.takeIf { it.isNotBlank() }?.let { "读完 $it" }
+        meta.startDate?.takeIf { it.isNotBlank() }?.let {
+            stringResource(R.string.server_meta_start_date, it)
+        },
+        meta.finishDate?.takeIf { it.isNotBlank() }?.let {
+            stringResource(R.string.server_meta_finish_date, it)
+        }
     )
     return parts.joinToString(" · ").takeIf { it.isNotBlank() }
 }
 
+@Composable
 internal fun fileRowValue(meta: ServerBookMeta, isCloudOnly: Boolean): String? {
     val files = meta.files
         .filter { RemoteBookFormats.isSupported(it.format) }
@@ -163,7 +197,11 @@ internal fun fileRowValue(meta: ServerBookMeta, isCloudOnly: Boolean): String? {
         }
     }
     if (!isCloudOnly) return null
-    return if (meta.files.isEmpty()) "暂无电子书文件" else "暂无可阅读格式"
+    return if (meta.files.isEmpty()) {
+        stringResource(R.string.server_meta_no_files)
+    } else {
+        stringResource(R.string.server_meta_no_supported_format)
+    }
 }
 
 internal fun formatServerFileSize(bytes: Long): String {

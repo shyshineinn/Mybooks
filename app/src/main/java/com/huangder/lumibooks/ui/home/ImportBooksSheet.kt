@@ -209,6 +209,7 @@ fun ImportBooksActionSheet(
     authorizedDirectoryUris: List<String>,
     onDismiss: () -> Unit,
     onSelectFiles: () -> Unit,
+    onAddToServer: (() -> Unit)? = null,
     onAuthorizeDirectory: () -> Unit,
     onOpenFolderBooks: () -> Unit,
     onImportWebdav: () -> Unit,
@@ -223,6 +224,7 @@ fun ImportBooksActionSheet(
             isPreparing = isPreparing,
             authorizedDirectoryUris = authorizedDirectoryUris,
             onSelectFiles = onSelectFiles,
+            onAddToServer = onAddToServer,
             onAuthorizeDirectory = onAuthorizeDirectory,
             onOpenFolderBooks = onOpenFolderBooks,
             onImportWebdav = onImportWebdav,
@@ -335,6 +337,7 @@ private fun ImportActionsStage(
     isPreparing: Boolean,
     authorizedDirectoryUris: List<String>,
     onSelectFiles: () -> Unit,
+    onAddToServer: (() -> Unit)?,
     onAuthorizeDirectory: () -> Unit,
     onOpenFolderBooks: () -> Unit,
     onImportWebdav: () -> Unit,
@@ -373,6 +376,14 @@ private fun ImportActionsStage(
             primary = true,
             enabled = !isPreparing
         )
+        if (onAddToServer != null) {
+            Spacer(Modifier.height(8.dp))
+            ImportActionButton(
+                text = stringResource(R.string.import_add_to_server),
+                onClick = onAddToServer,
+                enabled = !isPreparing
+            )
+        }
         Spacer(Modifier.height(8.dp))
         ImportActionButton(
             text = stringResource(R.string.import_select_folder_books),

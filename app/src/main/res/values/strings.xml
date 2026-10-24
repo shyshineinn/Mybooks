@@ -435,6 +435,9 @@
     <string name="filter_downloaded">EPUB &amp; MOBI</string>
     <string name="filter_pdf">PDF</string>
     <string name="filter_favorites">收藏</string>
+    <string name="reading_status_wish">想读</string>
+    <string name="reading_status_reading">在读</string>
+    <string name="reading_status_done">已读</string>
     <string name="edit_book_info">修改书本信息</string>
     <string name="book_title_label">书名</string>
     <string name="book_author_label">作者</string>
@@ -1213,6 +1216,7 @@
 1. 选择文件：书籍将被复制到应用目录下进行读取和编辑，不影响原文件。
 2. 授权书籍文件夹：直接读取该文件夹内的书籍原文件，不复制到应用目录，TXT 编辑也会直接保存到原文件。</string>
     <string name="import_select_files">从文件导入</string>
+    <string name="import_add_to_server">添加到服务器</string>
     <string name="import_authorize_directory">授权一个书籍文件夹</string>
     <string name="import_select_folder_books">从授权文件夹导入</string>
     <string name="import_folder_books_refresh">重新扫描授权文件夹</string>
@@ -1879,5 +1883,34 @@
     <string name="mybooks_sync_pending">待同步 %1$d 项</string>
     <string name="mybooks_sync_failed">同步失败</string>
     <string name="mybooks_pull_sync_hint">松手同步服务器书库</string>
-    <string name="mybooks_pull_syncing">正在同步服务器书库…</string>
+    <string name="server_meta_status">阅读状态</string>
+    <string name="server_meta_rating">评分</string>
+    <string name="server_meta_series">系列</string>
+    <string name="server_meta_publication">出版</string>
+    <string name="server_meta_summary">简介</string>
+    <string name="server_meta_read_logs">阅读记录</string>
+    <string name="server_meta_read_date">阅读日期</string>
+    <string name="server_meta_read_count">阅读次数</string>
+    <string name="server_meta_file">电子书文件</string>
+    <string name="server_meta_no_files">暂无电子书文件</string>
+    <string name="server_meta_no_supported_format">暂无可阅读格式</string>
+    <string name="server_meta_read_range">%1$s 至 %2$s</string>
+    <string name="server_meta_reading_in_progress">%1$s · 进行中</string>
+    <string name="server_meta_until">至 %1$s</string>
+    <string name="server_meta_read_count_value">共 %1$d 次</string>
+    <string name="server_meta_start_date">开始 %1$s</string>
+    <string name="server_meta_finish_date">读完 %1$s</string>
+    <string name="server_meta_sync_hint">同步后可查看简介、评分等完整信息</string>
+    <string name="server_meta_retry">重试</string>
+    <string name="server_meta_no_file">暂无文件</string>
+    <string name="mybooks_connection_failed">无法连接书库</string>
+    <string name="mybooks_empty_library_skip_delete">服务器返回空书库，已跳过本地删除</string>
+    <string name="mybooks_sync_summary">已同步书库（新增 %1$d · 更新 %2$d · 移除 %3$d）</string>
+    <string name="mybooks_no_download_source">这本书没有可下载来源</string>
+    <string name="mybooks_no_download_file">没有可下载的电子书文件</string>
+    <string name="mybooks_unsupported_format">暂不支持 %1$s 格式</string>
+    <string name="mybooks_download_write_failed">无法把下载文件写入书库目录</string>
+    <string name="mybooks_download_read_failed">下载完成但无法读取本地记录</string>
+    <string name="mybooks_download_done">下载完成</string>
+    <string name="mybooks_download_failed">下载失败</string>
 </resources>

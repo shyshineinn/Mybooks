@@ -111,7 +111,7 @@ fun CloudAwareBookDeleteDialog(
                         fontSize = 13.sp
                     )
                 }
-                if (hasRemoteBooks) {
+                if (!myBooksOnly) {
                     Text(
                         text = stringResource(R.string.force_delete_hint),
                         color = AppColors.TextSecondary,
@@ -161,7 +161,7 @@ fun CloudAwareBookDeleteDialog(
                         onClick = { onDelete(BookDeleteMode.LOCAL_ONLY) }
                     )
                 }
-                if (hasRemoteBooks) {
+                if (!myBooksOnly) {
                     LiquidGlassTextButton(
                         text = stringResource(R.string.force_delete),
                         tintedColor = Color(0xFFB42318),

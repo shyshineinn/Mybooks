@@ -16,6 +16,7 @@ import androidx.lifecycle.viewModelScope
 import com.huangder.lumibooks.R
 import com.huangder.lumibooks.data.local.DataStoreManager
 import com.huangder.lumibooks.data.sync.BookDownloadState
+import com.huangder.lumibooks.data.sync.MyBooksReadStatus
 import com.huangder.lumibooks.domain.model.Book
 import com.huangder.lumibooks.domain.model.BookDeleteMode
 import com.huangder.lumibooks.domain.model.BookFolderLink
@@ -26,6 +27,7 @@ import com.huangder.lumibooks.domain.model.FolderMoveResult
 import com.huangder.lumibooks.domain.model.FolderPreviewPlanner
 import com.huangder.lumibooks.domain.model.LibraryFolder
 import com.huangder.lumibooks.domain.model.LibraryTag
+import com.huangder.lumibooks.domain.model.ReadingStatus
 import com.huangder.lumibooks.domain.model.TagNameValidator
 import com.huangder.lumibooks.domain.repository.BookRepository
 import com.huangder.lumibooks.domain.repository.FolderRepository
@@ -153,6 +155,8 @@ data class HomeUiState(
     val streakDays: Int = 0,
     /** WebDAV 同步已完成的书籍 ID 集合，用于在书架标题旁显示云图标 */
     val syncedBookIds: Set<String> = emptySet(),
+    /** 服务器 status 分类；本地导入书不在其中。 */
+    val serverReadingStatusByBookId: Map<String, ReadingStatus> = emptyMap(),
     val isWebdavSyncing: Boolean = false,
     val downloadStates: Map<String, BookDownloadState> = emptyMap(),
     val isBookDeleteInProgress: Boolean = false
@@ -207,6 +211,7 @@ class HomeViewModel @Inject constructor(
     init {
         loadBooks()
         loadTags()
+        loadServerReadingStatuses()
         loadFolders()
         loadTodayReadingTime()
         loadAvatar()
@@ -290,6 +295,29 @@ class HomeViewModel @Inject constructor(
                     tags = tags,
                     bookTagLinks = links
                 )
+            }
+        }
+    }
+
+    /** 服务器状态分类：只包含仍有本地书架记录的 MyBooks 书。 */
+    private fun loadServerReadingStatuses() {
+        viewModelScope.launch {
+            combine(
+                bookRepository.getAllBooks(),
+                database.myBooksSyncStateDao().observeAll()
+            ) { books, states ->
+                val myBooksIds = books.asSequence()
+                    .filter { MyBooksConfig.isMyBooks(it) }
+                    .mapTo(mutableSetOf()) { it.id }
+                buildMap {
+                    states.forEach { state ->
+                        if (state.bookId !in myBooksIds) return@forEach
+                        MyBooksReadStatus.categoryStatus(state.overridesJson, state.baseJson)
+                            ?.let { put(state.bookId, it) }
+                    }
+                }
+            }.collectLatest { statuses ->
+                _uiState.value = _uiState.value.copy(serverReadingStatusByBookId = statuses)
             }
         }
     }
@@ -645,6 +673,7 @@ class HomeViewModel @Inject constructor(
         remoteId: Long,
         title: String,
         author: String,
+        targetFolderId: String? = null,
         onDone: () -> Unit = {}
     ) {
         importDocumentsAsync(
@@ -664,7 +693,7 @@ class HomeViewModel @Inject constructor(
                 )
             ),
             copyIntoApp = true,
-            targetFolderId = null,
+            targetFolderId = targetFolderId,
             groupByAuthorizedSource = false,
             onDone = onDone
         )
@@ -2231,6 +2260,23 @@ class HomeViewModel @Inject constructor(
                     if (fields.isNotEmpty()) {
                         myBooksSyncManager.recordLocalEdit(book.id, fields)
                     }
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message)
+            }
+        }
+    }
+
+    fun toggleReadStatus(book: Book) {
+        viewModelScope.launch {
+            try {
+                val finished = !book.isReadingFinished
+                bookRepository.updateReadingProgress(
+                    bookId = book.id,
+                    progress = if (finished) 1f else 0f
+                )
+                if (MyBooksConfig.isMyBooks(book) && MyBooksConfig.hasWriteToken()) {
+                    myBooksSyncManager.setReadStatus(book.id, finished)
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(error = e.message)

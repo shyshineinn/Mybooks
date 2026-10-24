@@ -1,6 +1,7 @@
 package com.huangder.lumibooks.data.sync
 
 import android.content.Context
+import com.huangder.lumibooks.R
 import com.huangder.lumibooks.data.local.dao.MyBooksSyncStateDao
 import com.huangder.lumibooks.data.local.dao.SyncStateDao
 import com.huangder.lumibooks.data.local.dao.TagDao
@@ -36,6 +37,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -98,7 +100,7 @@ class MyBooksSyncManager @Inject constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            MyBooksSyncResult(error.message ?: "无法连接书库", false)
+            MyBooksSyncResult(error.message ?: context.getString(R.string.mybooks_connection_failed), false)
         } finally {
             _isSyncing.value = false
         }
@@ -146,6 +148,36 @@ class MyBooksSyncManager @Inject constructor(
             )
         )
         schedulePush()
+    }
+
+    /**
+     * 快捷“标记已读/取消已读”同步到服务器：
+     * 标记时补一条读完记录，取消时清掉最后一条 finish；两者与 status 一起进入现有合并通道。
+     */
+    suspend fun setReadStatus(bookId: String, finished: Boolean) {
+        val state = myBooksSyncStateDao.get(bookId) ?: return
+        val base = runCatching { JSONObject(state.baseJson) }.getOrDefault(JSONObject())
+        val overrides = runCatching { JSONObject(state.overridesJson) }.getOrDefault(JSONObject())
+        val currentLogs = MyBooksReadStatus.parseLogs(
+            if (overrides.has("read_logs")) overrides.opt("read_logs") else base.opt("read_logs")
+        )
+        val toggle = MyBooksReadStatus.toggle(
+            currentLogs = currentLogs,
+            markRead = finished,
+            today = LocalDate.now().toString()
+        )
+        val logsChanged = MyBooksReadStatus.canonical(toggle.logs) !=
+            MyBooksReadStatus.canonical(currentLogs)
+        val currentStatus = (if (overrides.has("status")) {
+            overrides.optString("status")
+        } else {
+            base.optString("status")
+        }).ifBlank { "wish" }
+        if (toggle.status == currentStatus && !logsChanged) return
+
+        val fields = linkedMapOf<String, Any?>("status" to toggle.status)
+        if (logsChanged) fields["read_logs"] = MyBooksReadStatus.logsToJson(toggle.logs)
+        recordLocalEdit(bookId, fields)
     }
 
     fun recordCoverChange(bookId: String, editedAt: Long = System.currentTimeMillis()) {
@@ -257,7 +289,7 @@ class MyBooksSyncManager @Inject constructor(
     ): MyBooksNotesPayload {
         val remoteId = MyBooksConfig.remoteIdOf(bookId) ?: error("不是服务器书籍")
         val token = MyBooksConfig.adminToken
-        require(token.isNotBlank()) { "只读模式：未配置写入令牌" }
+        require(token.isNotBlank()) { context.getString(R.string.mybooks_readonly) }
         val payload = withContext(Dispatchers.IO) {
             client.saveNotes(remoteId, content, expectedUpdatedAt, token)
         }
@@ -274,12 +306,18 @@ class MyBooksSyncManager @Inject constructor(
         val remoteBooks = try {
             client.fetchBooks()
         } catch (error: Exception) {
-            return MyBooksSyncResult(error.message ?: "无法连接书库", false)
+            return MyBooksSyncResult(
+                error.message ?: context.getString(R.string.mybooks_connection_failed),
+                false
+            )
         }
 
         val localBefore = bookRepository.getAllBooks().first().filter(MyBooksConfig::isMyBooks)
         if (remoteBooks.isEmpty() && localBefore.isNotEmpty()) {
-            return MyBooksSyncResult("服务器返回空书库,已跳过本地删除", true)
+            return MyBooksSyncResult(
+                context.getString(R.string.mybooks_empty_library_skip_delete),
+                true
+            )
         }
 
         var added = 0
@@ -316,7 +354,7 @@ class MyBooksSyncManager @Inject constructor(
         val now = System.currentTimeMillis()
         syncStateDao.putState(SyncStateEntity(KEY_LAST_SYNC, now.toString()))
         return MyBooksSyncResult(
-            "已同步书库（新增 $added · 更新 $updated · 移除 $removed）",
+            context.getString(R.string.mybooks_sync_summary, added, updated, removed),
             true
         )
     }
@@ -325,7 +363,7 @@ class MyBooksSyncManager @Inject constructor(
         val bookId = MyBooksConfig.BOOK_ID_PREFIX + remote.id
         val existing = bookRepository.getBookById(bookId)
         var state = myBooksSyncStateDao.get(bookId)
-        val localTags = existing?.let { tagDao.getTagsForBook(bookId).map(TagEntity::name) }.orEmpty()
+        var localTags = existing?.let { tagDao.getTagsForBook(bookId).map(TagEntity::name) }.orEmpty()
 
         if (existing == null) {
             val detailJson = client.fetchBookJson(remote.id)
@@ -373,6 +411,12 @@ class MyBooksSyncManager @Inject constructor(
             val detail = parseRemoteBook(detailJson, MyBooksConfig.SERVER_URL)
             state = createBaselineState(existing, detailJson, detail, remote.updatedAt)
             myBooksSyncStateDao.upsert(state)
+            // 新建服务器书后本地副本还没有标签；先以服务器为准补齐，
+            // 否则三方合并会把服务器标签误判成“本地删除”并清空。
+            if (localTags.isEmpty() && detail.tags.isNotEmpty()) {
+                applyTags(bookId, detail.tags)
+                localTags = detail.tags
+            }
         }
         val currentState = state ?: return 0
 
@@ -387,7 +431,12 @@ class MyBooksSyncManager @Inject constructor(
         val merge = mergeState(existing, currentState, localTags, detailJson)
 
         if (token.isBlank()) {
-            applyRemote(existing, detail, merge.localWonFields, merge.coverAction == MyBooksCoverAction.DOWNLOAD_REMOTE)
+            applyRemote(
+                existing,
+                detail,
+                merge.localWonFields,
+                merge.coverAction == MyBooksCoverAction.DOWNLOAD_REMOTE
+            )
             applyTags(bookId, merge.mergedTags)
             val updatedState = stateAfterRemoteOnly(currentState, detailJson, remoteUpdatedAt, detail.tags, merge)
             myBooksSyncStateDao.upsert(updatedState)
@@ -423,7 +472,12 @@ class MyBooksSyncManager @Inject constructor(
         repeat(2) { attempt ->
             val patch = buildPatch(merge, uploadedCoverUrl)
             if (patch.length() == 0) {
-                applyRemote(existing, remoteDetail, merge.localWonFields, merge.coverAction == MyBooksCoverAction.DOWNLOAD_REMOTE)
+                applyRemote(
+                    existing,
+                    remoteDetail,
+                    merge.localWonFields,
+                    merge.coverAction == MyBooksCoverAction.DOWNLOAD_REMOTE
+                )
                 applyTags(existing.id, merge.mergedTags)
                 myBooksSyncStateDao.upsert(
                     stateAfterRemoteOnly(state, remoteJson, remoteUpdatedAt, remoteDetail.tags, merge)
@@ -435,7 +489,12 @@ class MyBooksSyncManager @Inject constructor(
             try {
                 val response = client.patchBook(state.remoteId, patch, token)
                 val responseDetail = parseRemoteBook(response, MyBooksConfig.SERVER_URL)
-                applyRemote(existing, responseDetail, emptySet(), downloadCover = false)
+                applyRemote(
+                    existing,
+                    responseDetail,
+                    emptySet(),
+                    downloadCover = false
+                )
                 applyTags(existing.id, responseDetail.tags)
                 val next = stateAfterPush(
                     state = state,
@@ -755,15 +814,27 @@ class MyBooksSyncManager @Inject constructor(
     /** 下载服务器书正文到本地书库,进度写入 [downloadStates]。 */
     suspend fun downloadBook(bookId: String): CloudBookDownloadResult {
         val remoteId = MyBooksConfig.remoteIdOf(bookId)
-            ?: return CloudBookDownloadResult(null, "这本书没有可下载来源", false)
+            ?: return CloudBookDownloadResult(
+                null,
+                context.getString(R.string.mybooks_no_download_source),
+                false
+            )
         return try {
             val detailJson = client.fetchBookJson(remoteId)
             metaCache.write(remoteId, detailJson)
             val detail = parseRemoteBook(detailJson, MyBooksConfig.SERVER_URL)
             val file = RemoteBookFormats.preferredFile(detail.files)
-                ?: return CloudBookDownloadResult(null, "没有可下载的电子书文件", false)
+                ?: return CloudBookDownloadResult(
+                    null,
+                    context.getString(R.string.mybooks_no_download_file),
+                    false
+                )
             val format = file.format.toBookFormatOrNull()
-                ?: return CloudBookDownloadResult(null, "暂不支持 ${file.format} 格式", false)
+                ?: return CloudBookDownloadResult(
+                    null,
+                    context.getString(R.string.mybooks_unsupported_format, file.format),
+                    false
+                )
             val extension = format.extensionName()
             val booksDirectory = FileUtils.getBooksDirectory(context)
             val partial = File(booksDirectory, "$bookId.$extension.part")
@@ -783,7 +854,7 @@ class MyBooksSyncManager @Inject constructor(
                     (bookId to BookDownloadState.Downloading(bytesRead, totalBytes))
             }
             if (!partial.renameTo(destination)) {
-                error("无法把下载文件写入书库目录")
+                error(context.getString(R.string.mybooks_download_write_failed))
             }
             val readingFile = if (format == BookFormat.MARKDOWN) {
                 com.huangder.lumibooks.util.markdown.MarkdownSnapshotStore.create(
@@ -807,7 +878,7 @@ class MyBooksSyncManager @Inject constructor(
             }
             bookRepository.markBookDownloaded(bookId, readingFile.absolutePath)
             val updated = bookRepository.getBookById(bookId)
-                ?: error("下载完成但无法读取本地记录")
+                ?: error(context.getString(R.string.mybooks_download_read_failed))
             _downloadStates.value = _downloadStates.value + (bookId to BookDownloadState.Completed)
             scope.launch {
                 delay(1_500)
@@ -815,7 +886,7 @@ class MyBooksSyncManager @Inject constructor(
                     _downloadStates.value = _downloadStates.value - bookId
                 }
             }
-            CloudBookDownloadResult(updated, "下载完成", true)
+            CloudBookDownloadResult(updated, context.getString(R.string.mybooks_download_done), true)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -823,8 +894,14 @@ class MyBooksSyncManager @Inject constructor(
                 ?.filter { it.name.startsWith("$bookId.") && it.name.endsWith(".part") }
                 ?.forEach { it.delete() }
             _downloadStates.value = _downloadStates.value +
-                (bookId to BookDownloadState.Failed(error.message ?: "下载失败"))
-            CloudBookDownloadResult(null, error.message ?: "下载失败", false)
+                (bookId to BookDownloadState.Failed(
+                    error.message ?: context.getString(R.string.mybooks_download_failed)
+                ))
+            CloudBookDownloadResult(
+                null,
+                error.message ?: context.getString(R.string.mybooks_download_failed),
+                false
+            )
         }
     }
 

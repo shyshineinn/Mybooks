@@ -123,6 +123,7 @@ import com.huangder.lumibooks.data.sync.BookDownloadState
 import com.huangder.lumibooks.domain.model.BookFormat
 import com.huangder.lumibooks.domain.model.FolderMoveResult
 import com.huangder.lumibooks.domain.model.LibraryFolder
+import com.huangder.lumibooks.domain.model.ReadingStatus
 import com.huangder.lumibooks.domain.model.FolderPreviewPlanner
 import com.huangder.lumibooks.data.sync.MyBooksConfig
 import com.huangder.lumibooks.ui.animation.AppEasing
@@ -177,17 +178,13 @@ import kotlinx.coroutines.launch
 private fun MyBooksPullHint(
     bounceState: OverscrollBounceState,
     headerHeight: Dp,
-    refreshing: Boolean,
     enabled: Boolean
 ) {
     if (!enabled) return
     val thresholdPx = with(LocalDensity.current) { PULL_TO_REFRESH_THRESHOLD_DP.dp.toPx() }
-    val progress = if (refreshing) 1f else pullToRefreshProgress(bounceState.offset, thresholdPx)
     PullToRefreshHint(
-        text = stringResource(
-            if (refreshing) R.string.mybooks_pull_syncing else R.string.mybooks_pull_sync_hint
-        ),
-        progress = progress,
+        text = stringResource(R.string.mybooks_pull_sync_hint),
+        progress = pullToRefreshProgress(bounceState.offset, thresholdPx),
         // 落在顶栏下方：顶栏两侧是按钮，提示压在上面会挡住它们。
         topPadding = headerHeight + AppSpace.sm
     )
@@ -312,6 +309,9 @@ fun BookshelfScreen(
 
     val filterTabs = buildList {
         add(BookshelfFilterTab(BookshelfFilter.All, stringResource(R.string.filter_all)))
+        add(BookshelfFilterTab(BookshelfFilter.Wish, stringResource(R.string.reading_status_wish)))
+        add(BookshelfFilterTab(BookshelfFilter.Reading, stringResource(R.string.reading_status_reading)))
+        add(BookshelfFilterTab(BookshelfFilter.Done, stringResource(R.string.reading_status_done)))
         add(BookshelfFilterTab(BookshelfFilter.EpubMobi, stringResource(R.string.filter_epub_mobi)))
         add(BookshelfFilterTab(BookshelfFilter.Pdf, stringResource(R.string.format_pdf)))
         add(BookshelfFilterTab(BookshelfFilter.Txt, stringResource(R.string.format_txt)))
@@ -521,7 +521,7 @@ fun BookshelfScreen(
                 PendingBookMenuActionType.BookDetails ->
                     BookDetailsActivity.start(context, currentBook.id)
                 PendingBookMenuActionType.ToggleReadStatus ->
-                    viewModel.updateBook(currentBook.copy(readingProgress = if (currentBook.isReadingFinished) 0f else 1f))
+                    viewModel.toggleReadStatus(currentBook)
                 PendingBookMenuActionType.MoveToFolder -> moveTargetBook = currentBook
             }
         }
@@ -582,9 +582,23 @@ fun BookshelfScreen(
     val allFolderCounts = remember(uiState.folders, uiState.bookFolderLinks) {
         folderBookCounts(uiState.folders, uiState.bookFolderLinks)
     }
-    val matchingBookIds = remember(uiState.books, tagIdsByBook, selectedFilter) {
+    val matchingBookIds = remember(
+        uiState.books,
+        tagIdsByBook,
+        selectedFilter,
+        uiState.serverReadingStatusByBookId
+    ) {
         when (val filter = selectedFilter) {
             BookshelfFilter.All -> null
+            BookshelfFilter.Wish -> uiState.books
+                .filter { uiState.serverReadingStatusByBookId[it.id] == ReadingStatus.WISH }
+                .mapTo(mutableSetOf()) { it.id }
+            BookshelfFilter.Reading -> uiState.books
+                .filter { uiState.serverReadingStatusByBookId[it.id] == ReadingStatus.READING }
+                .mapTo(mutableSetOf()) { it.id }
+            BookshelfFilter.Done -> uiState.books
+                .filter { uiState.serverReadingStatusByBookId[it.id] == ReadingStatus.DONE }
+                .mapTo(mutableSetOf()) { it.id }
             BookshelfFilter.EpubMobi -> uiState.books.filter(Book::isEpubMobi).mapTo(mutableSetOf()) { it.id }
             BookshelfFilter.Pdf -> uiState.books.filter { it.format == BookFormat.PDF }.mapTo(mutableSetOf()) { it.id }
             BookshelfFilter.Markdown -> uiState.books.filter { it.format == BookFormat.MARKDOWN }.mapTo(mutableSetOf()) { it.id }
@@ -1212,7 +1226,7 @@ fun BookshelfScreen(
                 },
                 onToggleReadStatus = { book ->
                     expandedSearchBookId = null
-                    viewModel.updateBook(book.copy(readingProgress = if (book.isReadingFinished) 0f else 1f))
+                    viewModel.toggleReadStatus(book)
                 },
                 launcherBounds = searchLauncherBounds,
                 modifier = Modifier.zIndex(2.6f)
@@ -1320,7 +1334,6 @@ fun BookshelfScreen(
         MyBooksPullHint(
             bounceState = bounceState,
             headerHeight = with(density) { bookshelfHeaderHeightPx.toDp() },
-            refreshing = myBooksRefreshing,
             enabled = myBooksPullEnabled
         )
 
@@ -2508,6 +2521,9 @@ private data class PendingFolderMenuAction(
 
 private sealed interface BookshelfFilter {
     data object All : BookshelfFilter
+    data object Wish : BookshelfFilter
+    data object Reading : BookshelfFilter
+    data object Done : BookshelfFilter
     data object EpubMobi : BookshelfFilter
     data object Pdf : BookshelfFilter
     data object Markdown : BookshelfFilter

@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalView
 import com.huangder.lumibooks.MainActivity
 import com.huangder.lumibooks.data.local.DataStoreManager
 import com.huangder.lumibooks.domain.model.DEFAULT_APP_ACCENT_HEX
+import com.huangder.lumibooks.domain.model.ReadingStatus
 import com.huangder.lumibooks.ui.components.ConfigurableActivityBack
 import com.huangder.lumibooks.ui.components.LiquidGlassDialogHost
 import com.huangder.lumibooks.ui.theme.AppColors
@@ -129,6 +130,11 @@ class BookshelfCategoryBooksActivity : ComponentActivity() {
         internal fun createIntent(context: Context, target: BookshelfCategoryTarget): Intent {
             val kind = when (target) {
                 is BookshelfCategoryTarget.All -> "all"
+                is BookshelfCategoryTarget.ServerStatus -> when (target.status) {
+                    ReadingStatus.WISH -> "status_wish"
+                    ReadingStatus.READING -> "status_reading"
+                    ReadingStatus.DONE -> "status_done"
+                }
                 is BookshelfCategoryTarget.EpubMobi -> "epub_mobi"
                 is BookshelfCategoryTarget.Pdf -> "pdf"
                 is BookshelfCategoryTarget.Txt -> "txt"
@@ -155,6 +161,9 @@ class BookshelfCategoryBooksActivity : ComponentActivity() {
             val title = getStringExtra(EXTRA_TITLE)?.takeIf { it.isNotBlank() } ?: return null
             return when (getStringExtra(EXTRA_KIND)) {
                 "all" -> BookshelfCategoryTarget.All(title)
+                "status_wish" -> BookshelfCategoryTarget.ServerStatus(ReadingStatus.WISH, title)
+                "status_reading" -> BookshelfCategoryTarget.ServerStatus(ReadingStatus.READING, title)
+                "status_done" -> BookshelfCategoryTarget.ServerStatus(ReadingStatus.DONE, title)
                 "epub_mobi" -> BookshelfCategoryTarget.EpubMobi(title)
                 "pdf" -> BookshelfCategoryTarget.Pdf(title)
                 "txt" -> BookshelfCategoryTarget.Txt(title)

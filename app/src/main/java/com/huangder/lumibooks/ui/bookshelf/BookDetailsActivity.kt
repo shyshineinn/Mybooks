@@ -324,11 +324,12 @@ fun BookDetailsScreen(
         }
     }
     val canReadLocal = notesState.localHas && (!notesState.serverHas || notesState.upToDate)
-    val heroFormatLabel = remember(book.format, book.isCloudOnly, metaState.meta) {
+    val noFileLabel = stringResource(R.string.server_meta_no_file)
+    val heroFormatLabel = remember(book.format, book.isCloudOnly, metaState.meta, noFileLabel) {
         val hasNoReadableFile = MyBooksConfig.isMyBooks(book) &&
             book.isCloudOnly &&
             metaState.meta?.files?.none { RemoteBookFormats.isSupported(it.format) } == true
-        if (hasNoReadableFile) "暂无文件" else book.format.name
+        if (hasNoReadableFile) noFileLabel else book.format.name
     }
     val currentFolderId = library.bookFolderLinks.firstOrNull { it.bookId == book.id }?.folderId
     val folderName = currentFolderId?.let { id -> folderPath(library.folders, id).joinToString(" / ") { it.name } }
