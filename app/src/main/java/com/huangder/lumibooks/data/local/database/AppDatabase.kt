@@ -24,6 +24,9 @@ import com.huangder.lumibooks.data.local.entity.BookHighlightRuleStateEntity
 import com.huangder.lumibooks.data.local.entity.BookHighlightSettingsEntity
 import com.huangder.lumibooks.data.local.entity.HighlightRuleExclusionEntity
 import com.huangder.lumibooks.data.local.dao.HighlightRuleDao
+import com.huangder.lumibooks.data.local.dao.MyBooksSyncStateDao
+import com.huangder.lumibooks.data.local.entity.MyBooksSyncStateEntity
+import com.huangder.lumibooks.data.local.entity.MyBooksPendingDeleteEntity
 
 @Database(
     entities = [
@@ -40,9 +43,11 @@ import com.huangder.lumibooks.data.local.dao.HighlightRuleDao
         HighlightRuleEntity::class,
         BookHighlightRuleStateEntity::class,
         BookHighlightSettingsEntity::class,
-        HighlightRuleExclusionEntity::class
+        HighlightRuleExclusionEntity::class,
+        MyBooksSyncStateEntity::class,
+        MyBooksPendingDeleteEntity::class
     ],
-    version = 19,
+    version = 20,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -54,4 +59,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun folderDao(): FolderDao
     abstract fun syncStateDao(): SyncStateDao
     abstract fun highlightRuleDao(): HighlightRuleDao
+    abstract fun myBooksSyncStateDao(): MyBooksSyncStateDao
 }

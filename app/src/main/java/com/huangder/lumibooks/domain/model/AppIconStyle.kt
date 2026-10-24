@@ -4,7 +4,8 @@ package com.huangder.lumibooks.domain.model
 enum class AppIconStyle(val storedValue: String) {
     LUMI_CHAN("lumi_chan"),
     LUMI_2("lumi2"),
-    CLASSIC("classic");
+    CLASSIC("classic"),
+    BOOK_LINE("book_line");
 
     companion object {
         fun fromStoredValue(value: String?): AppIconStyle =

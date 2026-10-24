@@ -94,6 +94,14 @@ internal fun AppIconStyleOptions(
             onSelect = onSelect,
             modifier = Modifier.weight(1f)
         )
+        AppIconStyleOption(
+            style = AppIconStyle.BOOK_LINE,
+            label = stringResource(R.string.icon_style_book_line),
+            imageRes = R.mipmap.ic_launcher_book_line,
+            selected = selectedStyle == AppIconStyle.BOOK_LINE.storedValue,
+            onSelect = onSelect,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 

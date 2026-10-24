@@ -6,6 +6,7 @@ plugins {
 
 android {
     namespace = "com.davemorrissey.labs.subscaleview"
+    buildToolsVersion = "36.0.0"
     compileSdk {
         version = release(37) {
             minorApiLevel = 0

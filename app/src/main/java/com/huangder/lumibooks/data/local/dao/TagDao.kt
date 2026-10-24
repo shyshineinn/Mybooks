@@ -20,6 +20,15 @@ abstract class TagDao {
     @Query("SELECT * FROM tags WHERE normalizedName = :normalizedName LIMIT 1")
     abstract suspend fun getTagByNormalizedName(normalizedName: String): TagEntity?
 
+    @Query("SELECT * FROM book_tag_cross_refs WHERE bookId = :bookId")
+    abstract suspend fun getBookTagLinks(bookId: String): List<BookTagCrossRefEntity>
+
+    @Query(
+        "SELECT t.* FROM tags t INNER JOIN book_tag_cross_refs r ON r.tagId = t.id " +
+            "WHERE r.bookId = :bookId"
+    )
+    abstract suspend fun getTagsForBook(bookId: String): List<TagEntity>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     abstract suspend fun insertTag(tag: TagEntity): Long
 

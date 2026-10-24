@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -22,7 +23,12 @@ import com.huangder.lumibooks.ui.theme.LocalAppTheme
 /** Wrapping labels remain visible on narrow cards and at large font scales. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun AnnotationTagChips(tags: List<String>, onEdit: (() -> Unit)? = null, modifier: Modifier = Modifier) {
+fun AnnotationTagChips(
+    tags: List<String>,
+    onEdit: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    icon: ImageVector = AppIcons.Tag
+) {
     if (tags.isEmpty() && onEdit == null) return
     val shape = AppRoundedCornerShape(12.dp)
     val glass = LocalAppTheme.current == "liquid_glass"
@@ -42,7 +48,7 @@ fun AnnotationTagChips(tags: List<String>, onEdit: (() -> Unit)? = null, modifie
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Icon(AppIcons.Tag, null, tint = AppColors.Accent, modifier = Modifier.size(13.dp))
+                Icon(icon, null, tint = AppColors.Accent, modifier = Modifier.size(13.dp))
                 Text(tag, color = AppColors.TextPrimary, fontSize = AppType.Caption,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }

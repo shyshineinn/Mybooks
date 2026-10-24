@@ -69,8 +69,17 @@ internal data class LiquidGlassDialogSpec(
     val backgroundBlurRadius: androidx.compose.ui.unit.Dp,
     val transparencyOverride: Float?,
     val properties: DialogProperties,
+    val motion: LiquidGlassDialogMotion = LiquidGlassDialogMotion.DIALOG,
     val content: @Composable BoxScope.() -> Unit
 )
+
+/**
+ * 对话框宿主的动效模式。
+ *
+ * [DIALOG] 是普通对话框的居中缩放；[BOTTOM_SHEET] 是底部 Sheet 的上滑，
+ * 参数取自 `BottomSheetMotion.bottomSheetEnterTransition/ExitTransition`（规范 §7.1）。
+ */
+enum class LiquidGlassDialogMotion { DIALOG, BOTTOM_SHEET }
 
 class LiquidGlassDialogHostState internal constructor(
     private val scope: CoroutineScope
@@ -192,6 +201,8 @@ fun LiquidGlassDialogHost(
                 ) {
                     val containerEnter = if (!motionEnabled) {
                         fadeIn(tween(140))
+                    } else if (spec.motion == LiquidGlassDialogMotion.BOTTOM_SHEET) {
+                        bottomSheetEnterTransition()
                     } else if (spec.alignment == Alignment.BottomCenter) {
                         scaleIn(
                             initialScale = 0.86f,
@@ -212,6 +223,8 @@ fun LiquidGlassDialogHost(
                     }
                     val containerExit = if (!motionEnabled) {
                         fadeOut(tween(160))
+                    } else if (spec.motion == LiquidGlassDialogMotion.BOTTOM_SHEET) {
+                        bottomSheetExitTransition()
                     } else if (spec.alignment == Alignment.BottomCenter) {
                         scaleOut(
                             targetScale = 0.88f,
@@ -307,6 +320,7 @@ fun LiquidGlassDialog(
     backgroundBlurRadius: androidx.compose.ui.unit.Dp = 0.dp,
     transparencyOverride: Float? = null,
     properties: DialogProperties = DialogProperties(),
+    motion: LiquidGlassDialogMotion = LiquidGlassDialogMotion.DIALOG,
     content: @Composable BoxScope.() -> Unit
 ) {
     val isLiquidGlass = LocalAppTheme.current == "liquid_glass"
@@ -335,7 +349,8 @@ fun LiquidGlassDialog(
             backgroundScrimColor,
             backgroundBlurRadius,
             transparencyOverride,
-            properties
+            properties,
+            motion
         ) {
             host.show(
                 LiquidGlassDialogSpec(
@@ -350,6 +365,7 @@ fun LiquidGlassDialog(
                     backgroundBlurRadius = backgroundBlurRadius,
                     transparencyOverride = transparencyOverride,
                     properties = properties,
+                    motion = motion,
                     content = { latestContent() }
                 )
             )

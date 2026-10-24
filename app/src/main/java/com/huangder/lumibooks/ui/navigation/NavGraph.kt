@@ -61,8 +61,10 @@ import androidx.navigation.navArgument
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.huangder.lumibooks.R
-import com.helloac.mybooks.remote.MyBooksConfig
+import com.huangder.lumibooks.data.sync.MyBooksConfig
 import com.huangder.lumibooks.ui.bookshelf.BookshelfScreen
+import com.huangder.lumibooks.ui.bookshelf.MyBooksCreateSource
+import com.huangder.lumibooks.ui.bookshelf.MyBooksEditSheet
 import com.huangder.lumibooks.ui.components.BookTransitionOverlay
 import com.huangder.lumibooks.ui.components.FloatingTabBar
 import com.huangder.lumibooks.ui.components.Material3BottomNavigationBar
@@ -339,6 +341,9 @@ fun MainNavGraph(
     var importRequestFolderId by remember { mutableStateOf<String?>(null) }
     var isPreparingImport by remember { mutableStateOf(false) }
     var importPreparationGeneration by remember { mutableIntStateOf(0) }
+    // 选完文件后逐本补充信息并添加到服务器书库。
+    var importCreateSources by remember { mutableStateOf(emptyList<MyBooksCreateSource>()) }
+    var importCreateIndex by remember { mutableIntStateOf(0) }
     var transientMessage by remember { mutableStateOf<String?>(null) }
     var pendingCloudBook by remember { mutableStateOf<Book?>(null) }
     var autoOpenDownloadedBookId by remember { mutableStateOf<String?>(null) }
@@ -363,23 +368,31 @@ fun MainNavGraph(
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
-        if (showImportActions) {
-            val candidates = uris.mapNotNull { uri ->
-                val name = FileUtils.getFileNameFromUri(context, uri) ?: return@mapNotNull null
-                if (FileUtils.getFileExtension(name) !in setOf("epub", "pdf", "txt", "mobi", "cbz", "md", "markdown")) {
-                    return@mapNotNull null
+        val candidates = uris.mapNotNull { uri ->
+            val name = FileUtils.getFileNameFromUri(context, uri) ?: return@mapNotNull null
+            if (FileUtils.getFileExtension(name) !in setOf("epub", "pdf", "txt", "mobi", "cbz", "md", "markdown")) {
+                return@mapNotNull null
+            }
+            SelectedImportBook(
+                uri = uri,
+                name = name,
+                sourceDocumentKey = authorizedStorageManager.documentKey(uri),
+                sourceLastModified = authorizedStorageManager.queryLastModified(context, uri),
+                sourceSize = com.huangder.lumibooks.util.BookFileAccess.size(context, uri.toString())
+            )
+        }.distinctBy { it.uri.toString() }
+        if (candidates.isNotEmpty()) {
+            isPreparingImport = false
+            showImportActions = false
+            showImportConfirmation = false
+            if (MyBooksConfig.hasWriteToken()) {
+                // 选完文件先进书籍编辑弹窗补充信息，确认后添加到服务器书库。
+                importCreateSources = candidates.map {
+                    MyBooksCreateSource(fileName = it.name, uri = it.uri)
                 }
-                SelectedImportBook(
-                    uri = uri,
-                    name = name,
-                    sourceDocumentKey = authorizedStorageManager.documentKey(uri),
-                    sourceLastModified = authorizedStorageManager.queryLastModified(context, uri),
-                    sourceSize = com.huangder.lumibooks.util.BookFileAccess.size(context, uri.toString())
-                )
-            }.distinctBy { it.uri.toString() }
-            if (candidates.isNotEmpty()) {
-                isPreparingImport = false
-                showImportActions = false
+                importCreateIndex = 0
+            } else {
+                // 只读构建没有上传能力，退回本地导入。
                 homeViewModel.importBooks(
                     context = context,
                     uris = candidates.map { it.uri },
@@ -387,6 +400,8 @@ fun MainNavGraph(
                 )
                 importRequestFolderId = null
             }
+        } else if (uris.isNotEmpty()) {
+            transientMessage = context.getString(R.string.import_no_supported_files)
         }
     }
     val directoryLauncher = rememberLauncherForActivityResult(
@@ -970,7 +985,6 @@ fun MainNavGraph(
                     requestedFolderId = requestedOpenFolderId,
                     onRequestedFolderConsumed = onOpenBookshelfRequestConsumed,
                     onMessage = { transientMessage = it },
-                    onRefreshAuthorizedDirectories = { startAuthorizedRefresh(false) },
                     onOverlayProgressChange = { progress ->
                         bookshelfOverlayProgress = progress.coerceIn(0f, 1f)
                     },
@@ -1348,6 +1362,42 @@ fun MainNavGraph(
                         folderBooksLauncher.launch(
                             AuthorizedFolderBooksActivity.createIntent(context)
                         )
+                    }
+                }
+            )
+        }
+
+        // 选完文件后的书籍编辑弹窗：补充信息后添加到服务器书库。
+        importCreateSources.getOrNull(importCreateIndex)?.let { source ->
+            MyBooksEditSheet(
+                book = null,
+                meta = null,
+                createSource = source,
+                onDismiss = { created ->
+                    if (created != null) {
+                        // 服务器上已有这本书：本地留一份正文副本，同一个 id，不必再下载。
+                        // 副本落库后再同步，否则同步会先把它变成"仅在云端"的占位书。
+                        // 书名/作者用服务器上那份，否则副本会退回文件名/未知作者，
+                        // 随后的同步再把这份值推回服务器，覆盖刚填好的书名作者。
+                        homeViewModel.importLocalCopyOfServerBook(
+                            context = context,
+                            uri = source.uri,
+                            fileName = source.fileName,
+                            remoteId = created.id,
+                            title = created.title,
+                            author = created.author
+                        ) {
+                            readerNavigationScope.launch { homeViewModel.syncMyBooksNow() }
+                        }
+                        if (importCreateIndex + 1 < importCreateSources.size) {
+                            importCreateIndex += 1
+                        } else {
+                            importCreateSources = emptyList()
+                            importCreateIndex = 0
+                        }
+                    } else {
+                        importCreateSources = emptyList()
+                        importCreateIndex = 0
                     }
                 }
             )

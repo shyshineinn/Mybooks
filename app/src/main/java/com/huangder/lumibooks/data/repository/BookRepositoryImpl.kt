@@ -59,6 +59,14 @@ class BookRepositoryImpl @Inject constructor(
         bookDao.updateBook(book.copy(metadataUpdatedAt = System.currentTimeMillis()).toEntity())
     }
 
+    override suspend fun updateBookTitleAuthor(bookId: String, title: String, author: String) {
+        bookDao.updateBookTitleAuthor(bookId, title, author, System.currentTimeMillis())
+    }
+
+    override suspend fun updateBookCover(bookId: String, coverPath: String) {
+        bookDao.updateBookCoverPath(bookId, coverPath)
+    }
+
     override suspend fun deleteBook(book: Book) {
         syncStateDao.upsertTombstones(
             listOf(

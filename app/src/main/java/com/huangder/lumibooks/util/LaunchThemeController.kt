@@ -231,14 +231,7 @@ object LaunchThemeController {
         val unlocked = context.getSharedPreferences(STATE_PREFERENCES, Context.MODE_PRIVATE)
             .getBoolean(EASTER_EGG_UNLOCKED, false)
         val desired = launcherComponentStates(style, splashEnabled, unlocked)
-        val manifestDefaults = mapOf(
-            LauncherComponentNames.LUMI_CHAN_SPLASH to false,
-            LauncherComponentNames.LUMI_CHAN_DIRECT to false,
-            LauncherComponentNames.LUMI_2_SPLASH to true,
-            LauncherComponentNames.LUMI_2_DIRECT to false,
-            LauncherComponentNames.CLASSIC_SPLASH to false,
-            LauncherComponentNames.CLASSIC_DIRECT to false
-        )
+        val manifestDefaults = LauncherComponentNames.manifestDefaults
 
         val alreadySynchronized = desired.all { (name, shouldBeEnabled) ->
             val current = isComponentEnabled(

@@ -75,7 +75,8 @@ object AppModule {
             DatabaseMigrations.MIGRATION_15_16,
             DatabaseMigrations.MIGRATION_16_17,
             DatabaseMigrations.MIGRATION_17_18,
-            DatabaseMigrations.MIGRATION_18_19
+            DatabaseMigrations.MIGRATION_18_19,
+            DatabaseMigrations.MIGRATION_19_20
         )
             .build()
     }
@@ -126,6 +127,11 @@ object AppModule {
     @Provides
     @Singleton
     fun provideSyncStateDao(database: AppDatabase): SyncStateDao = database.syncStateDao()
+
+    @Provides
+    @Singleton
+    fun provideMyBooksSyncStateDao(database: AppDatabase): com.huangder.lumibooks.data.local.dao.MyBooksSyncStateDao =
+        database.myBooksSyncStateDao()
 
     @Provides
     @Singleton

@@ -1115,11 +1115,16 @@ fun DisplayDetail(viewModel: SettingsViewModel) {
         SettingsSwitchRow(stringResource(R.string.label_card_outlines), checked = uiState.cardOutlinesEnabled,
             onCheckedChange = viewModel::saveCardOutlinesEnabled)
         SettingsDivider()
-        SettingsNavigationRow(label = stringResource(R.string.icon_style_title), supportingText = when (uiState.appIconStyle) {
-            AppIconStyle.LUMI_CHAN.storedValue -> stringResource(R.string.icon_style_lumi_chan)
-            AppIconStyle.CLASSIC.storedValue -> stringResource(R.string.icon_style_classic)
-            else -> stringResource(R.string.icon_style_lumi2)
-        }) { context.startActivity(Intent(context, DetailActivity::class.java).putExtra("category", "icon_style")) }
+        // 按枚举穷举：新增图标样式时忘记加分支会被编译器拦下，而不是静默显示成 Lumi 2。
+        SettingsNavigationRow(
+            label = stringResource(R.string.icon_style_title),
+            supportingText = when (AppIconStyle.fromStoredValue(uiState.appIconStyle, uiState.lumiEasterEggUnlocked)) {
+                AppIconStyle.LUMI_CHAN -> stringResource(R.string.icon_style_lumi_chan)
+                AppIconStyle.LUMI_2 -> stringResource(R.string.icon_style_lumi2)
+                AppIconStyle.CLASSIC -> stringResource(R.string.icon_style_classic)
+                AppIconStyle.BOOK_LINE -> stringResource(R.string.icon_style_book_line)
+            }
+        ) { context.startActivity(Intent(context, DetailActivity::class.java).putExtra("category", "icon_style")) }
     }
 
 

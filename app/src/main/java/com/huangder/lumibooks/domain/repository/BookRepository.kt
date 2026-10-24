@@ -14,6 +14,8 @@ interface BookRepository {
     suspend fun updateBook(book: Book)
     suspend fun updateSourceSha256(bookId: String, sha256: String)
     suspend fun updateBookMetadata(book: Book)
+    suspend fun updateBookTitleAuthor(bookId: String, title: String, author: String)
+    suspend fun updateBookCover(bookId: String, coverPath: String)
     suspend fun deleteBook(book: Book)
     suspend fun markBookCloudOnly(bookId: String)
     suspend fun markBookDownloaded(bookId: String, filePath: String)

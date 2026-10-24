@@ -188,9 +188,12 @@ class BookContextMenuState(private val scope: CoroutineScope) {
      *
      * 退出时序：
      * 0ms   - 操作面板缩小退出
-     * 80ms  - 信息面板缩小退出
-     * 200ms - 封面归位 + 遮罩消失
-     * 460ms - 原位书本渐显
+     * 60ms  - 信息面板缩小退出
+     * 0ms   - 封面归位 + 遮罩消失（与面板并行）
+     * 之后  - 原位书本渐显
+     *
+     * 面板与封面/遮罩并行收场，整体退场从两段串行压到 ~350ms；
+     * 交叠转场时下一个 Sheet 只需等 [ContextMenuMotion.SheetSwitchDelayMillis]。
      */
     fun dismiss() {
         if (phase != ContextMenuPhase.Visible && phase != ContextMenuPhase.Enlarging) return
@@ -198,8 +201,8 @@ class BookContextMenuState(private val scope: CoroutineScope) {
         phase = ContextMenuPhase.Dismissing
 
         transitionJob = scope.launch {
-            // ① 操作项 + 信息面板并行消失
             coroutineScope {
+                // ① 操作项 + 信息面板消失
                 launch {
                     actionsAlpha.animateTo(
                         targetValue = 0f,
@@ -213,9 +216,7 @@ class BookContextMenuState(private val scope: CoroutineScope) {
                         animationSpec = ContextMenuMotion.InfoPanelExit
                     )
                 }
-            }
-            // ② 封面归位 + 遮罩消失（并行，等动画完成）
-            coroutineScope {
+                // ② 封面归位 + 遮罩消失，与面板同时进行
                 launch {
                     coverScale.animateTo(
                         targetValue = 1f,

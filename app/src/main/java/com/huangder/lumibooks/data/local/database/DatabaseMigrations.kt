@@ -269,4 +269,33 @@ object DatabaseMigrations {
             db.execSQL("ALTER TABLE bookmarks ADD COLUMN isStale INTEGER NOT NULL DEFAULT 0")
         }
     }
+
+    val MIGRATION_19_20 = object : Migration(19, 20) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `mybooks_sync_state` (" +
+                    "`bookId` TEXT NOT NULL, " +
+                    "`remoteId` INTEGER NOT NULL, " +
+                    "`serverUpdatedAt` TEXT NOT NULL DEFAULT '', " +
+                    "`baseJson` TEXT NOT NULL DEFAULT '', " +
+                    "`overridesJson` TEXT NOT NULL DEFAULT '{}', " +
+                    "`editedAtJson` TEXT NOT NULL DEFAULT '{}', " +
+                    "`baseTagsJson` TEXT NOT NULL DEFAULT '[]', " +
+                    "`coverDirty` INTEGER NOT NULL DEFAULT 0, " +
+                    "`coverEditedAt` INTEGER NOT NULL DEFAULT 0, " +
+                    "`lastSyncAt` INTEGER NOT NULL DEFAULT 0, " +
+                    "`lastError` TEXT, " +
+                    "PRIMARY KEY(`bookId`))"
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `mybooks_pending_delete` (" +
+                    "`remoteId` INTEGER NOT NULL, " +
+                    "`bookId` TEXT NOT NULL, " +
+                    "`deletedAt` INTEGER NOT NULL, " +
+                    "`lastAttemptAt` INTEGER NOT NULL DEFAULT 0, " +
+                    "`lastError` TEXT, " +
+                    "PRIMARY KEY(`remoteId`))"
+            )
+        }
+    }
 }

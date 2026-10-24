@@ -74,6 +74,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.huangder.lumibooks.R
 import com.huangder.lumibooks.data.local.DataStoreManager
+import com.huangder.lumibooks.data.sync.BookDownloadState
+import com.huangder.lumibooks.data.sync.MyBooksConfig
 import com.huangder.lumibooks.domain.model.DEFAULT_APP_ACCENT_HEX
 import com.huangder.lumibooks.domain.model.Book
 import com.huangder.lumibooks.domain.model.BookDeleteMode
@@ -103,6 +105,7 @@ import com.huangder.lumibooks.ui.theme.KaiTi
 import com.huangder.lumibooks.ui.theme.LocalAppTheme
 import com.huangder.lumibooks.ui.theme.resolveAppFontFamily
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
@@ -464,6 +467,7 @@ internal fun BookshelfCategoryBooksRoute(
         books = selectedBooks,
         tagNamesByBook = tagNamesByBook,
         syncedBookIds = uiState.syncedBookIds,
+        downloadStates = uiState.downloadStates,
         layoutMode = com.huangder.lumibooks.domain.model.BookshelfLayout.conventional(uiState.bookshelfLayoutMode),
         isLoading = uiState.isLoading,
         tags = uiState.tags,
@@ -858,6 +862,7 @@ private fun CategoryBooksPage(
     books: List<Book>,
     tagNamesByBook: Map<String, List<String>>,
     syncedBookIds: Set<String>,
+    downloadStates: Map<String, BookDownloadState>,
     layoutMode: Int,
     isLoading: Boolean,
     tags: List<LibraryTag>,
@@ -881,6 +886,15 @@ private fun CategoryBooksPage(
     var showBatchMoveSheet by remember { mutableStateOf(false) }
     var tagTargetBook by remember { mutableStateOf<Book?>(null) }
     var editingBook by remember { mutableStateOf<Book?>(null) }
+    var editingMyBooksBook by remember { mutableStateOf<Book?>(null) }
+    var pendingEditBook by remember { mutableStateOf<Book?>(null) }
+    val openBookEditor: (Book) -> Unit = { book ->
+        if (MyBooksConfig.isMyBooks(book)) {
+            editingMyBooksBook = book
+        } else {
+            editingBook = book
+        }
+    }
     var coverTargetBook by remember { mutableStateOf<Book?>(null) }
     var coverSourceBook by remember { mutableStateOf<Book?>(null) }
     var moveTargetBook by remember { mutableStateOf<Book?>(null) }
@@ -911,6 +925,15 @@ private fun CategoryBooksPage(
             selectedBookIds = emptySet()
             isEditing = false
         }
+    }
+    LaunchedEffect(pendingEditBook) {
+        val book = pendingEditBook ?: return@LaunchedEffect
+        if (contextMenuState.phase != ContextMenuPhase.Idle) {
+            // 交叠转场（规范 §7.3）：菜单先退场 90ms，再挂载编辑弹窗。
+            delay(ContextMenuMotion.SheetSwitchDelayMillis)
+        }
+        openBookEditor(book)
+        pendingEditBook = null
     }
     LaunchedEffect(books) {
         val ids = books.mapTo(mutableSetOf()) { it.id }
@@ -972,7 +995,7 @@ private fun CategoryBooksPage(
                 selectedBookIds = selectedBookIds,
                 contextMenuState = contextMenuState,
                 syncedBookIds = syncedBookIds,
-                downloadStates = viewModel.uiState.value.downloadStates,
+                downloadStates = downloadStates,
                 expandedListBookId = expandedListBookId,
                 topPadding = collectionTopPadding,
                 bottomPadding = 32.dp,
@@ -987,7 +1010,7 @@ private fun CategoryBooksPage(
                 onExpandedBookChange = { expandedListBookId = it },
                 onBookClick = { book, _ -> onOpenBook(book) },
                 onAddBook = {},
-                onEditInfo = { editingBook = it },
+                onEditInfo = { openBookEditor(it) },
                 onBookDetails = { book -> BookDetailsActivity.start(context, book.id) },
                 onMoveToFolder = { book -> moveTargetBook = book },
                 onDelete = {
@@ -1043,7 +1066,7 @@ private fun CategoryBooksPage(
                     )
                 },
                 onTags = { tagTargetBook = it },
-                onEditInfo = { editingBook = it },
+                onEditInfo = { pendingEditBook = it },
                 onBookDetails = { book -> BookDetailsActivity.start(context, book.id) },
                 onMoveToFolder = { book -> moveTargetBook = book }
             )
@@ -1145,6 +1168,13 @@ private fun CategoryBooksPage(
             }
         )
     }
+    editingMyBooksBook?.let { book ->
+        MyBooksEditSheet(
+            book = book,
+            meta = null,
+            onDismiss = { editingMyBooksBook = null }
+        )
+    }
     editingBook?.let { book ->
         LiquidGlassDialog(
             onDismissRequest = { editingBook = null },
@@ -1178,6 +1208,7 @@ private fun CategoryBooksPage(
         CloudAwareBookDeleteDialog(
             bookCount = targets.size,
             hasRemoteBooks = targets.any { it.remoteFileName != null },
+            hasMyBooksBooks = targets.any { com.huangder.lumibooks.data.sync.MyBooksConfig.isMyBooks(it) },
             onDismiss = {
                 showDeleteConfirm = false
                 pendingDeleteBooks = emptyList()

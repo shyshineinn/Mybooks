@@ -78,7 +78,9 @@ class EBookReaderApp : Application(), Application.ActivityLifecycleCallbacks, Co
             "diagnosticBuild" to BuildConfig.DIAGNOSTIC_BUILD,
             "debuggable" to ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)
         ))
-        LaunchThemeController.synchronizeLauncherComponents(this)
+        // 启动别名同步只是便利功能：失败时不能让整个 App 起不来。
+        runCatching { LaunchThemeController.synchronizeLauncherComponents(this) }
+            .onFailure { diagnosticLogger.log("app", "launcher_alias_sync_failed", DiagnosticLevel.ERROR) }
         registerActivityLifecycleCallbacks(this)
         floatingSubtitleOverlayController.start()
         webdavAutoSyncScheduler.start()

@@ -24,9 +24,19 @@ class LauncherComponentSelectionTest {
         assertOnlyEnabled("classic", splashEnabled = false, LauncherComponentNames.CLASSIC_DIRECT)
     }
 
+    @Test
+    fun `book line with splash enables only book line splash alias`() {
+        assertOnlyEnabled("book_line", splashEnabled = true, LauncherComponentNames.BOOK_LINE_SPLASH)
+    }
+
+    @Test
+    fun `book line without splash enables only book line direct alias`() {
+        assertOnlyEnabled("book_line", splashEnabled = false, LauncherComponentNames.BOOK_LINE_DIRECT)
+    }
+
     private fun assertOnlyEnabled(style: String, splashEnabled: Boolean, expected: String) {
         val states = launcherComponentStates(style, splashEnabled)
-        assertEquals(6, states.size)
+        assertEquals(8, states.size)
         assertEquals(listOf(expected), states.filterValues { it }.keys.toList())
     }
 
@@ -42,7 +52,7 @@ class LauncherComponentSelectionTest {
     }
     @Test
     fun `every icon splash and unlock combination enables exactly one alias`() {
-        for (style in listOf(null, "unknown", "lumi2", "classic", "lumi_chan")) {
+        for (style in listOf(null, "unknown", "lumi2", "classic", "lumi_chan", "book_line")) {
             for (splash in listOf(false, true)) for (unlocked in listOf(false, true)) {
                 val enabled = launcherComponentStates(style, splash, unlocked).filterValues { it }.keys
                 assertEquals(1, enabled.size)
@@ -51,5 +61,15 @@ class LauncherComponentSelectionTest {
                 }
             }
         }
+    }
+
+    /**
+     * 新增启动别名时必须同步 manifest 默认值表：
+     * 启动时 `manifestDefaults.getValue(name)` 缺键会抛 NoSuchElementException，App 秒退。
+     */
+    @Test
+    fun `every launcher component has a manifest default`() {
+        val componentNames = launcherComponentStates("lumi2", splashEnabled = true).keys
+        assertEquals(componentNames.toSet(), LauncherComponentNames.manifestDefaults.keys)
     }
 }

@@ -1,11 +1,11 @@
 {
   "config_version": 2,
-  "generated_at": "2026-10-22T21:00:00+08:00",
+  "generated_at": "2026-10-24T22:10:00+08:00",
   "terms_version": 0,
   "privacy_version": 0,
   "update": {
-    "latest_version_code": 1602,
-    "latest_version_name": "16.2-mybooks",
+    "latest_version_code": 2210,
+    "latest_version_name": "2.2.10",
     "download_url": "https://github.com/shyshineinn/Mybooks/releases/latest/download/Mybooks-arm64-v8a.apk",
     "title": "Mybooks 新版本",
     "message": "建议更新到最新版本，以获得更稳定的使用体验。",

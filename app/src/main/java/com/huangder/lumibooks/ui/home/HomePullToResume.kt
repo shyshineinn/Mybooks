@@ -1,25 +1,20 @@
 package com.huangder.lumibooks.ui.home
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.huangder.lumibooks.R
 import com.huangder.lumibooks.ui.animation.OverscrollBounceState
-import com.huangder.lumibooks.ui.theme.AppColors
+import com.huangder.lumibooks.ui.components.PULL_TO_REFRESH_HINT_SLIDE_DP
+import com.huangder.lumibooks.ui.components.PULL_TO_REFRESH_THRESHOLD_DP
+import com.huangder.lumibooks.ui.components.PullToRefreshHint
+import com.huangder.lumibooks.ui.components.pullToRefreshProgress
+import com.huangder.lumibooks.ui.components.shouldTriggerPullActionOnRelease
 import com.huangder.lumibooks.ui.theme.AppSpace
-import com.huangder.lumibooks.ui.theme.AppType
 
 /**
  * 首页顶部下拉「松手继续阅读」。
@@ -30,10 +25,10 @@ import com.huangder.lumibooks.ui.theme.AppType
  */
 
 /** 触发打开书籍所需的内容下移量。阻尼为 0.4，因此约等于 240dp 的手指行程，避免误触。 */
-internal const val PULL_TO_RESUME_THRESHOLD_DP = 96f
+internal const val PULL_TO_RESUME_THRESHOLD_DP = PULL_TO_REFRESH_THRESHOLD_DP
 
 /** 提示文字随下拉进度下滑的距离，进度为 1 时落到锚点位置。 */
-internal const val PULL_TO_RESUME_HINT_SLIDE_DP = 12f
+internal const val PULL_TO_RESUME_HINT_SLIDE_DP = PULL_TO_REFRESH_HINT_SLIDE_DP
 
 internal const val HOME_PULL_TO_RESUME_HINT_TAG = "home_pull_to_resume_hint"
 
@@ -42,14 +37,12 @@ internal const val HOME_PULL_TO_RESUME_HINT_TAG = "home_pull_to_resume_hint"
  *
  * 只有内容被向下拉出（`offsetPx > 0`）时才可见；底部回弹的负位移与静置都返回 0。
  */
-internal fun pullToResumeProgress(offsetPx: Float, thresholdPx: Float): Float {
-    if (offsetPx <= 0f || thresholdPx <= 0f) return 0f
-    return (offsetPx / thresholdPx).coerceIn(0f, 1f)
-}
+internal fun pullToResumeProgress(offsetPx: Float, thresholdPx: Float): Float =
+    pullToRefreshProgress(offsetPx, thresholdPx)
 
 /** 松手时是否应打开最近阅读的书籍。原路推回（位移回落）时不满足阈值，因此不做任何事。 */
 internal fun shouldOpenRecentBookOnRelease(releasedOffsetPx: Float, thresholdPx: Float): Boolean =
-    thresholdPx > 0f && releasedOffsetPx >= thresholdPx
+    shouldTriggerPullActionOnRelease(releasedOffsetPx, thresholdPx)
 
 /**
  * 绘制在首页列表上方的下拉提示。只读取 [bounceState] 的位移，
@@ -63,28 +56,10 @@ internal fun HomePullToResumeHint(
 ) {
     val thresholdPx = with(LocalDensity.current) { PULL_TO_RESUME_THRESHOLD_DP.dp.toPx() }
     val progress = pullToResumeProgress(bounceState.offset, thresholdPx)
-    if (progress <= 0f) return
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(top = statusBarTopPadding + AppSpace.sm)
-            .graphicsLayer {
-                alpha = progress
-                translationY = -PULL_TO_RESUME_HINT_SLIDE_DP.dp.toPx() * (1f - progress)
-            },
-        contentAlignment = Alignment.TopCenter
-    ) {
-        Text(
-            text = stringResource(R.string.home_pull_to_resume_recent_book),
-            modifier = Modifier
-                .padding(horizontal = AppSpace.lg)
-                .testTag(HOME_PULL_TO_RESUME_HINT_TAG),
-            fontSize = AppType.BodySmall,
-            color = AppColors.TextSecondary,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
+    PullToRefreshHint(
+        text = stringResource(R.string.home_pull_to_resume_recent_book),
+        progress = progress,
+        topPadding = statusBarTopPadding + AppSpace.sm,
+        modifier = modifier.testTag(HOME_PULL_TO_RESUME_HINT_TAG)
+    )
 }

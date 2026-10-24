@@ -706,6 +706,7 @@ private fun ContinueReadingCard(
         CloudAwareBookDeleteDialog(
             bookCount = 1,
             hasRemoteBooks = book.remoteFileName != null,
+            hasMyBooksBooks = com.huangder.lumibooks.data.sync.MyBooksConfig.isMyBooks(book),
             onDismiss = { showDeleteConfirm = false },
             onDelete = { mode ->
                 showDeleteConfirm = false

@@ -26,8 +26,18 @@ if (signingPropertiesFile.exists()) {
 val releaseKeystorePath = signingProperties.getProperty("MYBOOKS_KEYSTORE_FILE").orEmpty()
 val hasReleaseSigning = releaseKeystorePath.isNotBlank()
 
+// my-books 管理令牌:编译进 BuildConfig,不做任何前端输入/显示。
+// local.properties 已被 git 忽略;未配置时为空,App 自动只读。
+val myBooksAdminToken = signingProperties.getProperty("MYBOOKS_ADMIN_TOKEN").orEmpty()
+val escapedMyBooksAdminToken = myBooksAdminToken
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+    .replace("\r", "")
+    .replace("\n", "")
+
 android {
     namespace = "com.huangder.lumibooks"
+    buildToolsVersion = "36.0.0"
     compileSdk {
         version = release(37) {
             minorApiLevel = 0
@@ -38,11 +48,12 @@ android {
         applicationId = "top.helloac.mybooks"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1607
-        versionName = "1.6.7"
+        versionCode = 2210
+        versionName = "2.2.10"
 
         buildConfigField("boolean", "DIAGNOSTIC_BUILD", "false")
         buildConfigField("boolean", "STARTUP_TRACE_ENABLED", "false")
+        buildConfigField("String", "MYBOOKS_ADMIN_TOKEN", "\"$escapedMyBooksAdminToken\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -54,8 +65,14 @@ android {
         abi {
             isEnable = true
             reset()
-            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-            isUniversalApk = true
+            val abiFilter = providers.gradleProperty("abiFilter").orNull
+            if (abiFilter != null) {
+                include(abiFilter)
+                isUniversalApk = false
+            } else {
+                include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+                isUniversalApk = true
+            }
         }
     }
 
@@ -66,6 +83,10 @@ android {
                 storePassword = signingProperties.getProperty("MYBOOKS_KEYSTORE_PASSWORD")
                 keyAlias = signingProperties.getProperty("MYBOOKS_KEY_ALIAS")
                 keyPassword = signingProperties.getProperty("MYBOOKS_KEY_PASSWORD")
+                // minSdk 26 起 v2 已足够，AGP 不再输出 v1(JAR) 签名；
+                // 显式打开 v3 以支持密钥轮换，并与 CI 用 apksigner 的行为保持一致。
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }

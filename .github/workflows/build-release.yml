@@ -43,7 +43,7 @@ jobs:
         run: |
           set -e
           yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
+          sdkmanager "platforms;android-37.0" "build-tools;36.0.0" "platform-tools"
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -78,7 +78,7 @@ jobs:
               *universal*)   name=Mybooks-universal.apk ;;
               *)             continue ;;
             esac
-            "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign $KS_ARGS \
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign $KS_ARGS \
               --out "dist/$name" "$apk"
           done
           ls -l dist

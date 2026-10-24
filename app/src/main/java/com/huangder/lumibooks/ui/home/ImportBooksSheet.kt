@@ -356,14 +356,14 @@ private fun ImportActionsStage(
         )
         Spacer(Modifier.height(12.dp))
         ImportActionButton(
-            text = stringResource(R.string.import_authorize_directory),
-            onClick = onAuthorizeDirectory,
+            text = stringResource(R.string.import_select_folder_books),
+            onClick = onOpenFolderBooks,
             enabled = !isPreparing
         )
         Spacer(Modifier.height(12.dp))
         ImportActionButton(
-            text = stringResource(R.string.import_select_folder_books),
-            onClick = onOpenFolderBooks,
+            text = stringResource(R.string.import_authorize_directory),
+            onClick = onAuthorizeDirectory,
             enabled = !isPreparing
         )
         if (isPreparing) {
@@ -468,7 +468,9 @@ private fun ImportActionButton(
             text = text,
             color = labelColor,
             fontSize = 17.sp,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

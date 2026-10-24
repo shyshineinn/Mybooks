@@ -72,6 +72,14 @@ internal object ContextMenuMotion {
     const val CoverReturnMillis = 260
     const val ScrimExitMillis = 260
 
+    /**
+     * 退场时挂载下一个 Sheet 的延时（规范 §7.3 交叠转场）。
+     *
+     * 菜单开始退场后延迟这么久就创建编辑弹窗，两个容器短暂同时动画，
+     * 避免「完整退出后再完整进入」造成的停顿。
+     */
+    const val SheetSwitchDelayMillis = 90L
+
     val ScrimEnterEasing: Easing = AppEasing.Decelerate
     val ScrimExitEasing: Easing = AppEasing.Accelerate
     val CoverReturnEasing: Easing = AppEasing.Decelerate

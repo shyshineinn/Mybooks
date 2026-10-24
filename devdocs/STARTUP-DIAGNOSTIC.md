@@ -2,7 +2,7 @@
 
 如果只有 release 闪屏，使用 **release + 启动日志开关**。`diagnostic` 的 debuggable、混淆、资源压缩及额外诊断与 release 不同，不能代替 release 复现。
 
-当前工程已在 `gradle.properties` 临时开启 `lumiStartupTrace=true`，同步后按原方式打 release 即可，无需额外参数。排查结束后删除该行或改为 false，恢复普通发布配置。
+当前工程已在 `gradle.properties` 将 `lumiStartupTrace` 置为 `false`（排查已结束，发布包不采集启动日志）。需要复现时改为 `true` 后按原方式打 release，无需额外参数。排查结束后改回 false，恢复普通发布配置。
 
 命令行打包时，在原 release 命令后加 `-PlumiStartupTrace=true`，例如 `./gradlew.bat :app:assembleRelease -PlumiStartupTrace=true`（签名沿用原有配置）。
 通过 Android Studio 打签名包时，在项目 `gradle.properties` 临时加入 `lumiStartupTrace=true`，同步后仍选择 **release** 打包；发完专项包后删除此行或改为 false。

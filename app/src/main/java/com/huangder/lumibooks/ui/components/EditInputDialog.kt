@@ -82,18 +82,20 @@ private class LegacyEditDialogShape(private val cornerRadius: Float) : Shape {
  * @param fields  需要编辑的字段列表，每项为 (标签, 占位符, 初始值)
  * @param onBack  点击返回箭头
  * @param onConfirm 点击确认，参数为新值列表（与 fields 一一对应）
+ * @param resetKey 变化时重置字段内容，用于同一个弹窗逐条编辑不同对象；默认不重置
  */
 @Composable
 fun EditInputDialog(
     title: String,
     fields: List<Triple<String, String, String>>,  // (label, placeholder, initialValue)
     onBack: () -> Unit,
-    onConfirm: (List<String>) -> Unit
+    onConfirm: (List<String>) -> Unit,
+    resetKey: Any? = null
 ) {
     val isLiquidGlass = LocalAppTheme.current == "liquid_glass"
-    // 每个字段的编辑状态
+    // 每个字段的编辑状态；resetKey 变化时重置，用于逐条编辑不同对象。
     val values = fields.mapIndexed { index, (_, _, initial) ->
-        remember { mutableStateOf(initial) }
+        remember(resetKey, index) { mutableStateOf(initial) }
     }
 
     val density = LocalDensity.current

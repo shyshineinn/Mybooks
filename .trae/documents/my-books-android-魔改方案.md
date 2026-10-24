@@ -1,374 +1,329 @@
-# MyBooks 安卓端改造方案 v2：服务器书库直接融合进本地书架
+# MyBooks 安卓端魔改：服务器书库融合进本地书架
 
-## 一、目标（按最新要求修订）
+> 状态：**已实现**（本文件按当前代码现状维护，不是待执行方案）
+> 最后核对：2026-10-24 / 代码版本 2.2.10 (versionCode 2210)
+> 服务端仓库：`C:\littleBIngbing\my-books`
 
-把 `https://helloac.top`（my-books）上的书**直接变成 Lumi 书架里的书**，和本地导入的书混排在一起：
+---
 
-- 打开 App 后书架里就能看到服务器上的书（封面、书名、作者），带「云端」角标；
-- 点封面弹出原有的「下载」弹窗 → 下载进度环 → 下载完成后**原地变成可阅读的本地书**，自动进入阅读器；
-- 阅读进度、笔记、书签、统计**只存在本地**，不回传，不做进度同步；
-- 不新增独立页面、不改数据库结构、不新增路由；上游 Lumi 更新时冲突点控制在 6 处。
+## 一、目标与边界
 
-上一版方案是「新增一个独立云端书库 Activity」，与现在的需求不符，本次改为**数据层融合**。
+把 `https://helloac.top`（my-books）上的书**直接变成 Lumi 书架里的书**，与本地导入的书混排：
 
-## 二、现状分析（全部已核实的代码事实）
+- 书架里能看到服务器上的书（封面、书名、作者），带云端角标；
+- 下载完成后原地变成可阅读的本地书；
+- 阅读进度、笔记、书签、统计**只存在本地**，不回传；
+- 不新增独立书库页面，复用现有书架、封面角标、详情页、删除弹窗、阅读器。
 
-### 2.1 上游已有「云端书」机制，可直接复用
+**明确不做**：云端阅读进度同步、笔记回传、服务器端统计展示。
 
-Lumi 本身支持 WebDAV 云书库，云端书就是一条普通 `books` 记录，只是 `isCloudOnly = 1`、`filePath = ""`：
+---
 
-- [BookEntity.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/local/entity/BookEntity.kt) 已有 `isCloudOnly / remoteLibraryKey / remoteFileName / remoteFileSize / remoteFileSha256 / sourceUri` 字段，**无需迁移**；
-- [BookDao.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/local/dao/BookDao.kt#L15-L19) `getAllBooks()` 不过滤 `isCloudOnly` → 云端书天然出现在书架；
-- [BookDao.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/local/dao/BookDao.kt#L52-L56) `insertBook` 是 `@Upsert`（整行替换）→ **更新已有书必须用 `updateBookMetadata`，不能 upsert**，否则会清掉阅读进度；
-- [BookDao.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/local/dao/BookDao.kt#L67-L71) `markBookCloudOnly` / `markBookDownloaded(bookId, filePath)`：下载完成只需把 `isCloudOnly` 置 0 并写入 filePath；
-- [CloudBookUi.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/components/CloudBookUi.kt#L144-L176) `BookCoverStatusBadge` 按 `book.isCloudOnly` 显示云端下载角标；
-- [NavGraph.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/navigation/NavGraph.kt#L539-L557) 点云端书：`pendingCloudBook = book` 弹下载弹窗；下载中再点则 `autoOpenDownloadedBookId` 自动跳阅读器；
-- [NavGraph.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/navigation/NavGraph.kt#L1400-L1407) 弹窗确认 → `homeViewModel.downloadCloudBook(book.id)`；
-- [HomeScreen.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeScreen.kt#L231-L258) 卡片把 `downloadStates` 画成进度环；
-- 已有「书籍详情」页 [BookDetailsActivity.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/BookDetailsActivity.kt#L220-L349)：封面/书名/作者/进度/时长/笔记/书签/文件大小/文件夹/标签/存储状态/导入时间/最后阅读/路径，且 `InfoCard` 已能显示「仅在云端」（[L399-L407](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/BookDetailsActivity.kt#L399-L407)），`fileSize()` 优先用 `remoteFileSize`（[L576-L580](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/BookDetailsActivity.kt#L576-L580)）——**详情页对云端占位书本来就不会崩，只缺"服务器元数据"和"下载按钮"**。
+## 二、代码落点（现状）
 
-结论：**只要把服务器上的书写进 `books` 表并让 `downloadCloudBook` 认识它们，书架/卡片/下载弹窗/阅读器全自动复用；详情页只需追加一张图书信息卡**。
+魔改代码当前放在**上游包内**，不是独立 `com.helloac.mybooks` 包：
 
-### 2.2 需要接入的上游点
-
-| 位置 | 现状 | 需要的行为 |
+| 层 | 路径 | 文件 |
 |---|---|---|
-| [HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L202-L216) `init` | 加载本地数据 | 追加一次服务器书库同步（节流） |
-| [HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L483-L494) `loadWebdavSyncStatus` | 只收集 WebDAV 的 `downloadStates` | 改为 `combine(webdav, mybooks)` 合并进度 |
-| [HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L508-L517) `downloadCloudBook` | 全部交给 `webdavSyncManager` | 按 `remoteLibraryKey` 前缀分流 |
-| [HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L2089-L2113) `deleteBooks` | 云端删除全走 WebDAV | 过滤掉 `mybooks:` 的书 |
-| [HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L250-L256) `syncedBookIds` | 过滤 `remoteFileName != null` | 不改（本书 `remoteFileName` 保持 null，见 3.3） |
+| 数据层 | `app/src/main/java/com/huangder/lumibooks/data/sync/` | `MyBooksConfig.kt` (38)、`MyBooksApiClient.kt` (347)、`MyBooksSyncManager.kt` (850)、`MyBooksMetaCache.kt` (238)、`MyBooksMerge.kt` (383)、`MyBooksNotesStore.kt` (68)、`MyBooksCoverUploader.kt` (70)、`RemoteBook.kt` (201)、`JsonText.kt` (25) |
+| UI 层 | `app/src/main/java/com/huangder/lumibooks/ui/bookshelf/` | `MyBooksBookInfoCard.kt` (321)、`ServerMetaDisplay.kt` (179)、`MyBooksEditSheet.kt` (1210)、`MyBooksEditViewModel.kt` (1293)、`MyBooksNotesActivity.kt` (365)、`MyBooksNotesViewModel.kt` (269) |
+| 公共组件 | `app/src/main/java/com/huangder/lumibooks/ui/components/` | `PullToRefreshHint.kt` (79) |
+| 持久层 | `app/src/main/java/com/huangder/lumibooks/data/local/` | `dao/MyBooksSyncStateDao.kt` (41)、`entity/MyBooksSyncStateEntity.kt` (33) |
+| 测试 | `app/src/test/java/com/huangder/lumibooks/data/sync/` | `MyBooksJsonTextTest.kt`、`MyBooksMergeTest.kt` |
 
-### 2.3 my-books 接口（已读源码）
+新增合计约 6000 行。`BookDownloadState` / `CloudBookDownloadResult` 复用上游 `data/sync/WebdavSyncManager.kt` 中的定义，不另造一套。
 
-- `GET /api/books`：全量列表，含 `id/title/author/status/tags/cover/series_label/created_at/updated_at`，**不含 files**（[routes.books.js](file:///C:/littleBIngbing/my-books/src/http/routes.books.js#L90-L103)）；
-- `GET /api/books/:id`：详情，含 `files: [{format, path, size}]`（`path` 为相对文件名）；
-- 封面：`cover` = `/uploads/xxx`，静态托管（[server.js](file:///C:/littleBIngbing/my-books/server.js#L53)）；
-- 正文：`/books-files/<path>` 静态托管（[server.js](file:///C:/littleBIngbing/my-books/server.js#L55)）；
-- 鉴权：`requireAdmin` 对 GET/HEAD/OPTIONS 一律放行（[middleware.auth.js](file:///C:/littleBIngbing/my-books/src/http/middleware.auth.js#L149)），客户端**只发 GET、不带令牌**。
+> **与早期方案的差异**：早期方案要求新建 `com/helloac/mybooks/remote/` 包以"零上游代码改动"。实际实现放进了上游包内，理由是 `BookDownloadState` 等类型已在 `data/sync` 中、跨包引用反而更绕。代价是上游合并时这 14 个新文件是"新增到上游目录"，冲突面比独立包大。详见 §9 待办。
 
-### 2.4 上一轮已写入、需调整的代码
+---
 
-- 保留并改造：`RemoteBook.kt`、`MyBooksApiClient.kt`
-- 删除：`RemoteLibraryActivity.kt`、`RemoteLibraryScreen.kt`、`RemoteLibraryViewModel.kt`、`RemoteLibraryPrefs.kt`
-- 回退：[AndroidManifest.xml](file:///C:/littleBIngbing/mybooks/app/src/main/AndroidManifest.xml) 中新增的 Activity 节点
-- 保留：[HomeScreen.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeScreen.kt) 头部云图标，但改为「立即同步服务器书库」
+## 三、数据模型与映射
 
-## 三、方案
+服务器书 → 本地 `Book`（[MyBooksSyncManager.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksSyncManager.kt#L328-L345)）：
 
-### 3.1 数据映射：服务器书 → 本地 Book
-
-| Book 字段 | 取值 | 说明 |
-|---|---|---|
-| `id` | `"mybooks-" + remoteId` | 稳定、可反解 remoteId、不会与 WebDAV 的 hex id 冲突 |
-| `title` / `author` | 服务端字段，author 空则「未知作者」 | |
-| `filePath` | `""`（占位）→ 下载后由 `markBookDownloaded` 写入 | |
-| `coverPath` | 同步时把 `/uploads/...` 下载到 `getCoversDirectory()/mybooks_cover_{id}.jpg` | 复用 Coil 本地文件加载；失败则为 null（EPUB 下载后会自动补封面） |
-| `format` | 首选文件的格式 | 预览角标/打开方式依赖它 |
-| `readingProgress` | `0f`，已有记录则保持原值 | |
-| `lastReadTime` | 新插入用 `now`，已有记录保持不变 | 避免每次同步打乱"最近阅读" |
-| `isCloudOnly` | `true` → 下载后 `false` | |
-| `remoteLibraryKey` | `"mybooks:helloac.top"` | 用于下载/删除分流 |
-| `remoteFileName` | **null** | 关键决策，见 3.3 |
-| `remoteFileSize` | 首选文件 size | 卡片可显示体积 |
-| `sourceUri` | `"mybooks://book/{remoteId}"` | 去重键，`getBookBySourceUri` 已有 |
-| `metadataUpdatedAt` | 同步时间 / 服务端 `updated_at` | 仅元数据更新用 |
-
-不支持格式（AZW3 等）只在有可支持文件时入库；一本书一个格式，优先 `EPUB → PDF → MOBI → TXT → CBZ → MD`。
-
-### 3.2 新增模块（全部落在新包，零上游代码改动）
-
-`app/src/main/java/com/helloac/mybooks/remote/`
-
-1. **`MyBooksConfig.kt`**
-   ```kotlin
-   const val SERVER_URL = "https://helloac.top"
-   const val LIBRARY_KEY = "mybooks:helloac.top"
-   const val BOOK_ID_PREFIX = "mybooks-"
-   const val SOURCE_URI_PREFIX = "mybooks://book/"
-   fun remoteIdOf(bookId: String): Long?
-   fun libraryKeyOf(book: Book): Boolean
-   ```
-
-2. **`RemoteBook.kt`**（改造现有文件）
-   - 保留 `RemoteBook/RemoteBookFile/RemoteBookFormats`
-   - 增加 `parseRemoteBook(json, baseUrl)` 单本解析（详情复用）
-   - 删除独立页面用的 UI 相关辅助（`statusFilter` 等留在 ViewModel 里已随删除消失）
-
-3. **`MyBooksApiClient.kt`**（改造）
-   ```kotlin
-   suspend fun fetchBooks(): List<RemoteBook>            // GET /api/books
-   suspend fun fetchBook(id: Long): RemoteBook           // GET /api/books/{id}
-   suspend fun fetchCover(url: String, dest: File): Boolean
-   suspend fun downloadFile(url: String, dest: File, onProgress: (Long, Long) -> Unit)
-   ```
-   只发 GET；错误转成中文提示。
-
-4. **`MyBooksSyncManager.kt`**（核心，`@Singleton`）
-   ```kotlin
-   val downloadStates: StateFlow<Map<String, BookDownloadState>>  // 复用上游类型
-   suspend fun syncIfStale(maxAgeMs: Long = 10 * 60_000)
-   suspend fun syncNow(): SyncResult
-   suspend fun downloadBook(bookId: String): CloudBookDownloadResult
-   ```
-   `syncNow()` 逻辑：
-   - `Mutex` 防并发；GET 列表；逐本 `getBookBySourceUri`：
-     - 不存在 → 选首选文件 + 下封面 → `insertBook(Book(isCloudOnly = true, ...))`
-     - 已存在且 `isCloudOnly` → 下封面（若远端换了封面）→ `updateBookMetadata(existing.copy(title, author, coverPath, format, remoteFileSize))`
-     - 已存在且已下载 → 仅更新 title/author/coverPath，**不动 filePath/进度/时间**
-   - 服务端删掉的书：本地仍保留（不自动删，避免误删本地已下载的书）；占位书可后续做"仅在服务端不存在时清理"的可选项，本轮不做。
-   - 网络失败：不动本地数据，返回 Result.failure。
-
-   `downloadBook(bookId)` 逻辑：
-   - 反解 `remoteId` → `GET /api/books/{id}` 取最新 `files` → 选首选格式；
-   - `.part` 流式下载到 `getBooksDirectory()/{bookId}.{ext}`，每 64KB 更新 `downloadStates`（`BookDownloadState.Downloading`）；
-   - 成功后 `renameTo` 正式文件 → 若 `coverPath` 为空则 `BookParserFactory.createParser(...).extractCoverPath` 并写回；
-   - `bookRepository.markBookDownloaded(bookId, filePath)`；失败清 `.part`，状态 `Failed(message)`；
-   - 返回 `CloudBookDownloadResult(book, message, success)`（上游已有此类）。
-
-5. **`MyBooksMetaCache.kt`**：`ServerBookMeta`（简介/标签/状态/评分/系列/files/更新时间）+ `filesDir/mybooks/meta/{remoteId}.json` 读写。
-
-6. **`MyBooksBookInfoCard.kt`**：书籍详情页里的「服务器信息」Composable，见 3.4。
-
-### 3.3 关键决策：`remoteFileName = null`
-
-- 上游 `deleteBooks` 只对 `remoteFileName != null` 的书调用 WebDAV 删除（[HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L2089-L2113)），WebDAV 上传循环也只处理有 manifest 条目的云书（[WebdavSyncManager.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/WebdavSyncManager.kt#L202-L206)）。
-- 设为 null 后：my-books 的书**永远不会**被 WebDAV 上传/删除逻辑碰到，也不会因 `LOCAL_ONLY` 删除留下"幽灵占位"。
-- 代价：`syncedBookIds`（WebDAV"已同步"集合）不包含它们——但它们的云端角标来自 `isCloudOnly`，视觉不受影响。
-- 额外保险：`deleteBooks` 里把 `mybooks:` 前缀的书从 `remoteIds` / `forceDelete` 的远端调用中过滤，防止 `FORCE_LOCAL_AND_CLOUD` 误走 WebDAV。
-
-### 3.4 服务器图书详情在应用中的呈现
-
-**结论：复用现有「书籍详情」页，不新建页面；在详情页追加一张「服务器信息」卡片，服务器上的书点按后直接进这张详情页，看简介/标签再决定下载。**
-
-#### 3.4.1 元数据来自哪里
-
-- 同步时把每本书的原始 JSON 存到 `filesDir/mybooks/meta/{remoteId}.json`（`MyBooksMetaCache`）；
-- 打开详情页时后台再 `GET /api/books/{id}` 刷新（拿到 `files` 与最新简介），失败就用缓存；
-- 下载完成后缓存保留，详情页永远能显示来源、简介、标签。
-
-#### 3.4.1b 服务端详情字段 → 页面展示 全量映射（已对照服务端代码逐项核实）
-
-服务端 `GET /api/books/:id`（[routes.books.js](file:///C:/littleBIngbing/my-books/src/http/routes.books.js#L30-L55) `withFiles` + [index.js](file:///C:/littleBIngbing/my-books/src/db/index.js#L41-L108) 建表/迁移）实际返回的全部字段：
-
-| 服务端字段 | 类型/取值 | 安卓端显示位置 | 是否新增承载 |
-|---|---|---|---|
-| `id` | int | 仅用于本地去重键 `mybooks-{id}` | 否（不显示） |
-| `title` | string | ① Hero 书名 | 复用 |
-| `author` | string | ① Hero 作者 | 复用 |
-| `status` | wish/reading/done | ④ 信息卡「阅读状态」chips（想读/在读/已读） | 新增 |
-| `summary` | string（可长文本） | ④ 信息卡「简介」，4 行折叠 + 「展开/收起」 | 新增 |
-| `tags` | JSON 数组字符串 | ④ 信息卡「标签」chips（水平流式换行） | 新增 |
-| `start_date` / `finish_date` | string | ④ 信息卡「开始/读完日期」（为空则不显示） | 新增 |
-| `cover` | /uploads/xx | ① Hero 封面（同步时下载到本地缓存） | 复用 |
-| `notes_url` | string | ④ 信息卡「笔记链接」可点击（打开浏览器） | 新增 |
-| `publisher` / `pub_year` / `isbn` / `douban_id` | string | ④ 信息卡「出版信息」行（出版社/年份/ISBN） | 新增 |
-| `rating` | REAL 5 分制 | ④ 信息卡「评分 ★4.5」 | 新增 |
-| `series_label` | string（如「基地 #3」） | ④ 信息卡「系列」 | 新增 |
-| `files[]` | [{format,path,size}] | ④ 信息卡「可下载格式」列表 + ⑤ 下载按钮尺寸 | 新增 |
-| `file_formats` | 逗号串 | ① Hero 格式角标（取首选格式） | 复用 |
-| `identifiers` / `identifier_list` | [{type,label,value,url}] | ④ 信息卡「识别号」链接列表（ISBN/豆瓣/Goodreads 等可点击） | 新增 |
-| `custom_display` | {label→字符串/数组} | ④ 信息卡「自定义字段」行（有才显示，动态渲染） | 新增 |
-| `created_at` / `updated_at` | string | **不显示**（服务器时间戳，用户要求不出现来源/域名等信息） | — |
-| `read_count` | int | **不显示**（服务器统计，同上） | — |
-| `notes` / `read_logs` | JSON 数组 | **不显示**（笔记/阅读日志属用户私人数据，且本轮不做进度同步） | — |
-| `custom` | 原始值 | 不显示（仅表单回填用） | — |
-
-结论：**除 `notes`/`read_logs`/`custom` 三项（与"进度完全本地"目标冲突/仅表单用）及 `created_at`/`updated_at`/`read_count` 三项服务器信息（用户要求不显示）外，服务端详情字段在详情页 100% 可见**，没有放不下的字段——长文本用折叠、标签/识别号用流式 chips 和链接列表，自定义字段动态渲染。卡片只展示书籍本身的内容元数据，**不出现域名、来源标识、服务器地址、服务器时间戳等任何"服务器信息"**。
-
-#### 3.4.2 展示内容
-
-| 位置 | 内容 | 数据来源 |
-|---|---|---|
-| 复用现有 Hero | 封面、书名、作者、格式、阅读进度 | 本地 `Book` |
-| 复用现有 MetricGrid | 进度、阅读时长、笔记、书签、活跃天数、文件大小 | 本地 Room（云端书时长为 0） |
-| 复用现有 InfoCard | 文件名、格式、文件夹、本地标签、存储状态（「仅在云端」）、导入时间、最后阅读、路径 | 本地 `Book` |
-| **新增图书信息卡** | 简介（4 行折叠/展开）、标签 chips、阅读状态（想读/在读/已读）、评分、系列、出版信息、识别号、自定义字段、可下载格式与大小（**不含域名/来源/服务器地址/时间戳等**） | `MyBooksMetaCache` + 按需详情刷新 |
-| **新增下载操作** | 云端书：主按钮「下载 EPUB · 12.4 MB」+ 进度条；已下载：不显示 | `MyBooksSyncManager.downloadStates` |
-
-#### 3.4.3 页面实际长什么样（示例值）
-
-插入位置：[BookDetailsActivity.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/BookDetailsActivity.kt#L285-L310) 的 `LazyColumn` 里，`item { BookHero(...) }`、`item { MetricGrid(...) }`、`item { InfoCard(...) }` 之后，**第 4 个 item**。
-
-```
-┌──────────────────────────────────────────────┐
-│ ‹  书籍详情                        [服务器书] │
-│                                              │
-│  ┌────┐  深度工作                              │  ← ① BookHero（原有）
-│  │封面│  EPUB · 卡尔·纽波特                    │     数据：本地 Book
-│  └────┘  效率 / 方法论                        │
-│          0% · 仅在云端                        │
-│                                              │
-│  ┌────────┬────────┬────────┐                │  ← ② MetricGrid（原有）
-│  │   0%   │   —    │ 12.4MB │                │     数据：本地 Room
-│  │阅读进度 │阅读时长 │文件大小 │                │     （云端书时长/笔记/书签为 0）
-│  └────────┴────────┴────────┘                │
-│                                              │
-│  ┌────────────────────────────────────────┐  │  ← ③ InfoCard（原有）
-│  │ 存储        仅在云端                    │  │     数据：本地 Book
-│  │ 格式        EPUB                       │  │
-│  │ 本地标签     未分类                     │  │
-│  │ 导入时间     2026-10-20                │  │
-│  └────────────────────────────────────────┘  │
-│                                              │
-│  ┌────────────────────────────────────────┐  │  ← ④ 新增：图书信息卡
-│  │ 图书信息                              │  │     数据：MyBooksMetaCache
-│  │ 在无干扰状态下专注进行职业活动的能力，是  │  │     + GET /api/books/{id}
-│  │ 稀缺且价值极高的技能。本书给出四条准则。  │  │     （不含域名/来源/服务器信息）
-│  │ [效率] [方法论] [自我管理]              │  │
-│  │ 状态 想读    评分 4.5    系列 —         │  │
-│  │ ┌──────────────────────────────────┐   │  │
-│  │ │ EPUB · 可下载                12.4 MB │   │  │
-│  │ │ PDF  · 可下载                 8.1 MB │   │  │
-│  │ └──────────────────────────────────┘   │  │
-│  └────────────────────────────────────────┘  │
-│                                              │
-│  ┌────────────────────────────────────────┐  │  ← ⑤ 新增：下载主按钮
-│  │        下载 EPUB · 12.4 MB              │  │     进度中显示进度环 + 百分比
-│  └────────────────────────────────────────┘  │
-│                                              │
-│   删除   编辑   移动   笔记        阅读       │  ← 原有底部操作栏（已下载后可用）
-└──────────────────────────────────────────────┘
-```
-
-数值示例来自真实字段：`title/author/summary/tags/status/rating/series_label/files[].format/size/updated_at`；`12.4 MB` 取自 `files[].size`，`文件大小` 取自本地 `remoteFileSize`。
-
-三种状态：
-
-| 状态 | 图书信息卡 | 底部按钮 |
-|---|---|---|
-| 未同步过（离线且无缓存） | 显示「同步后可查看简介」+ 重试 | 「下载」（点击时在线拉详情，失败提示） |
-| 已同步、未下载 | 完整简介/标签/状态/评分/格式 | 「下载 EPUB · 12.4 MB」 |
-| 已下载到本地 | 完整信息保留（标明来自服务器） | 不显示下载按钮；底部「阅读」可用 |
-
-#### 3.4.4 新增文件
-
-`app/src/main/java/com/helloac/mybooks/remote/`
-
-- **`MyBooksMetaCache.kt`**：`ServerBookMeta` 数据类（summary/tags/status/rating/series/files/updatedAt），读写 JSON 缓存；
-- **`MyBooksBookInfoCard.kt`**：Composable，入参 `book: Book`；内部用 `MyBooksConfig.remoteIdOf(book.id)` 读缓存，`LaunchedEffect` 触发详情刷新；渲染上述字段 + 下载按钮/进度（**只展示书籍内容元数据，不含域名/来源/服务器信息**）；无缓存时显示「同步后可查看完整信息」+ 重试。
-
-#### 3.4.5 上游改动（2 处，各 1-3 行）
-
-| 文件 | 改动 |
+| Book 字段 | 取值 |
 |---|---|
-| `BookDetailsActivity.kt` | `LazyColumn` 在 `InfoCard` 之后追加：`if (MyBooksConfig.isMyBooks(book)) item { MyBooksBookInfoCard(book) }`；再加 1 行 import |
-| `NavGraph.kt` | `requestOpenBook`（[L539-L547](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/navigation/NavGraph.kt#L539-L547)）的 `if (book.isCloudOnly)` 分支里最前面加：`if (MyBooksConfig.isMyBooks(book)) { BookDetailsActivity.start(context, book.id); return }`，其余 WebDAV 行为不变 |
+| `id` | `"mybooks-" + remoteId` |
+| `title` / `author` | 服务端详情字段 |
+| `filePath` | `""`（占位），下载后写入 |
+| `coverPath` | 同步时缓存到 `getCoversDirectory()/mybooks_cover_{remoteId}_{hash}.jpg` |
+| `format` | 首选文件格式，无可用文件时 `EPUB` |
+| `isCloudOnly` | `true`，下载后置 `false` |
+| `remoteLibraryKey` | `"mybooks:helloac.top"` |
+| `remoteFileName` | **null**（见 §3.1） |
+| `remoteFileSize` | 首选文件 size |
+| `sourceUri` | `"mybooks://book/" + remoteId`（去重键） |
+| `metadataUpdatedAt` | 服务端 `updated_at` |
+| `readingProgress` | `0f`，已存在记录保持原值 |
 
-#### 3.4.6 交互流程
+### 3.1 `remoteFileName = null` 的原因
 
-```
-书架长按/点按服务器书
-  → 书籍详情页（图书信息卡：简介/标签/状态/评分/格式）
-  → 点「下载 EPUB · 12.4 MB」
-      → 进度条（复用 downloadStates）
-      → 完成后卡片上的「仅在云端」变为本地，底部「阅读」可用
-  → 点「阅读」/ 返回书架点封面 → 进入阅读器（进度只存本地）
-```
+上游 `deleteBooks` 只对 `remoteFileName != null` 的书调 WebDAV 删除，WebDAV 上传循环也只处理有 manifest 条目的云书。设为 null 后 my-books 的书不会被 WebDAV 逻辑碰到，也不会因 `LOCAL_ONLY` 删除留下幽灵占位。
 
-- 已下载的服务器书再次进详情页，图书信息卡仍显示（离线也可见）；
-- 长按菜单原有的「书籍详情」入口无需改动，自动受益；
-- 删除仍走原有 `CloudAwareBookDeleteDialog`（`hasRemoteBooks` 为 false，只会本地删除）。
+代价：`syncedBookIds`（WebDAV"已同步"集合）不含它们，但云端角标来自 `isCloudOnly`，视觉不受影响。
 
-### 3.5 上游文件改动清单（共 7 个文件、9 处，均为追加式）
+---
 
-| # | 文件 | 具体改动 |
-|---|---|---|
-| 1 | `HomeViewModel.kt` | 构造函数注入 `MyBooksSyncManager`；`init` 加 `viewModelScope.launch { myBooksSyncManager.syncIfStale() }`；`loadWebdavSyncStatus` 中 `downloadStates` 收集改为 `combine(webdavSyncManager.downloadStates, myBooksSyncManager.downloadStates) { a, b -> a + b }`；`downloadCloudBook` 开头按 `MyBooksConfig.isMyBooks(book)` 分流到 `myBooksSyncManager.downloadBook`（成功后 `_downloadedBooks.emit(book)`）；新增 `fun syncMyBooksNow()`（失败写 `_uiState.error`，成功 emit 提示）；`deleteBooks` 过滤 `mybooks:` 书不参与 WebDAV 远端删除 |
-| 2 | `HomeScreen.kt` | 头部云图标（已加）回调改为新参数 `onSyncCloudLibrary: () -> Unit`；文案「云端书库」→「同步服务器书库」 |
-| 3 | `NavGraph.kt` | ① `HomeScreen(...)` 调用处传 `onSyncCloudLibrary = { homeViewModel.syncMyBooksNow() }`；② `requestOpenBook` 的云端分支前加 my-books 书 → 打开 `BookDetailsActivity` |
-| 4 | `BookDetailsActivity.kt` | `InfoCard` 后追加 `MyBooksBookInfoCard(book)`（1 行 + 1 import） |
-| 5 | `UpdateChecker.kt` | `CONFIG_URL`（[L26](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/util/UpdateChecker.kt#L26)）一行改为 `https://raw.githubusercontent.com/shyshineinn/Mybooks/main/docs/app-config.json`，其余逻辑全部不动 |
-| 6 | `app/build.gradle.kts` | `applicationId = "top.helloac.mybooks"`；`versionCode = 1601`；`versionName = "16.1-mybooks"`；**namespace/包名保持 `com.huangder.lumibooks`** |
-| 7 | `res/values*/strings.xml`（8 个语言目录） | `app_name = Mybooks` |
+## 四、同步流程
 
-> 无 Room 迁移、无路由新增、无 Manifest 改动（回退上一轮的 Activity）。
+### 4.1 拉取
 
-### 3.5b 在线更新改成自己的（用户明确要求）
+入口：[HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L222) 启动时 `syncIfStale()`（10 分钟节流）、[BookshelfScreen.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/BookshelfScreen.kt#L184) 书架列表/网格下拉（CoverFlow 不启用）、[HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L2346) `syncMyBooksNow()`。
 
-**机制**：Lumi 的更新检查是拉 GitHub 仓库里一份静态 `docs/app-config.json`（[UpdateChecker.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/util/UpdateChecker.kt#L11-L19)），改一行 URL 即指向自己的仓库。**注意 URL 是 `shyshineinn/Mybooks`（你的 fork），不是上游**。
+`runSyncNow()`（[MyBooksSyncManager.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksSyncManager.kt#L261-L313)）：
 
-**你需要在 fork 仓库里自建并维护 `docs/app-config.json`**（模板，字段与 UpdateChecker 的 `UpdateConfig` 严格对应）：
+1. `Mutex` 防并发；先推送待删队列；
+2. `GET /api/books` 拿全量列表；**列表为空且本地有书时跳过删除**（防服务端异常导致误删）；
+3. 逐本 `syncOneBook()`（[L315](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksSyncManager.kt#L315)）：
+   - 不存在 → 拉详情、选首选文件、下封面、`insertBook(isCloudOnly = true)`、写基线快照、同步标签与心得；
+   - 已存在 → 走 §4.2 合并；
+   - 单本失败只记 `lastError`，不影响其他书；
+4. `pruneRemovedBooks()`（[L667](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksSyncManager.kt#L667)）：服务器已无此书 → 删本地正文/封面/索引/TXT 缓存、删 books 记录、删同步状态、删心得与元数据缓存。
 
-```json
-{
-  "latestVersion": "16.1",
-  "latestVersionCode": 1601,
-  "releaseUrl": "https://github.com/shyshineinn/Mybooks/releases/download/v16.1/Mybooks-v16.1.apk",
-  "updateTitle": "发现新版本",
-  "updateMessage": "已适配最新版 Lumi，修复若干问题。",
-  "changelog": "",
-  "forceUpdateBelowVersionCode": 0,
-  "termsVersion": 0,
-  "privacyVersion": 0,
-  "notice": null,
-  "fonts": []
-}
-```
+### 4.2 推送：三方合并
 
-**维护规则（决定更新是否弹出）**：
-- 每次发版：`latestVersionCode` 必须 > 本地 `versionCode`（1601/1602…）才会提示；
-- `releaseUrl` 指向你自己 GitHub Release 上传的 APK；
-- `forceUpdateBelowVersionCode`：设 0 = 永远不强更；设 `1600` = 低于 1601 的版本强制更新；
-- 若仓库还没有 `docs/app-config.json`：请求 404 → `UpdateChecker` 现有逻辑**静默跳过**（无弹窗、不崩溃），升级到 1601 前无影响；
-- `notice` 可留 null；`fonts` 留空数组（字体不沿用上游的远程字体，避免指向 huangder 的下载源）。
-
-**效果**：用户不再收到 Lumi 官方 APK 的更新提示；更新提示来自你的仓库、指向你的 APK。APK 由 `applicationId` 区分签名，你的包不会被官方更新覆盖，官方包也不会收到你的更新。
-
-### 3.6 分支与跟版（不变）
+[MyBooksMerge.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksMerge.kt#L49) 是纯函数：
 
 ```
-main     ← 仅 ff-only 跟随 upstream/main，不直接提交
-custom   ← 默认分支，全部魔改
+base   = 上次同步的服务器快照（mybooks_sync_state.baseJson）
+local  = 本地当前值（Book 字段 + overrides + 标签表）
+remote = 本次服务器详情
 ```
 
-- `.github/workflows/sync-upstream.yml`：每日把 `upstream/main` 快进到 `main`，再对 `custom` 开合并 PR；
-- 本地 `git config rerere.enabled true`；
-- `versionCode` 规则 `上游主版本×100 + 自建序号`；
-- 自备 keystore（CI secrets，不入库）；GPLv3 需继续开源。
+受管标量字段：`title / author / status / summary / rating / series / series_index / publisher / pub_year / isbn / douban_id / notes_url`。
 
-## 四、假设与决策
+判定规则：
 
-| 项 | 决策 | 理由 |
-|---|---|---|
-| 服务器地址 | 常量 `https://helloac.top` | 个人单服务器，无需设置页；换地址改一行 |
-| 融合粒度 | 只读同步（服务器→本地） | 用户要求"全部存在本地"，不上传进度 |
-| 服务端删除同步 | 不自动删本地 | 避免误删已读书籍 |
-| 书库规模 | 全量拉取 | 个人库；上千本再考虑分页 |
-| 封面 | 同步时缓存到本地 | 离线可显示；失败不阻塞入库 |
-| 手动刷新入口 | 首页头部云图标 | 复用已加按钮，不加新页面 |
-| 详情页 | 复用 `BookDetailsActivity` + 追加图书信息卡 | 不新建页面，1 行接入 |
-| 服务器书的点按行为 | 打开详情页（非直接弹下载框） | 先看简介/标签再决定下载；WebDAV 书保持原行为 |
-| 详情元数据存储 | JSON 缓存到 `filesDir/mybooks/meta/` | 不改 Room schema，离线可见，下载后仍保留 |
-| 应用名称 | `Mybooks` | 用户明确要求 |
-| 在线更新 | `UpdateChecker.CONFIG_URL` → `shyshineinn/Mybooks` 的 `docs/app-config.json` | 用户明确要求；更新源改为自己的 fork + 自己的 GitHub Release |
-| 图书信息卡内容 | 只展示书籍内容元数据（简介/标签/状态/评分/系列/出版/识别号/自定义字段/格式）；**不含域名、来源标识、服务器地址、服务器时间戳、服务器统计** | 用户明确要求 |
+- 本地没改 → 采用服务器值，并清掉对应 override；
+- 只有本地改 → 打进 patch 推给服务器；
+- 双方都改 → 比较 `editedAt`（本地修改时间）与服务器 `updated_at`，取较晚者；
+- `notes_url` 恒取基线值（App 不编辑心得链接）。
 
-## 五、验证步骤
+标签独立合并（`baseTagsJson` vs 本地标签表），有差异时 `patch.put("tags", ...)`。封面单独走 `coverDirty / coverEditedAt` 判定方向。
 
-1. **接口预检**（无需 App）：
-   ```powershell
-   (Invoke-RestMethod https://helloac.top/api/books).Count
-   Invoke-RestMethod https://helloac.top/api/books/1 | Select-Object id,title,files
-   ```
-   再用 `files[0].path` 拼 `https://helloac.top/books-files/<path>` 验证可下载。
-2. **编译**（本机无 JDK/SDK，需 Android Studio）：
-   ```powershell
-   .\gradlew.bat :app:assembleDebug
-   ```
-3. **手工验收**：
-   - 首次启动 → 书架出现服务器书（云端角标 + 封面），与本地书混排；
-   - 点服务器书 → 进「书籍详情」：Hero/Metric/Info 正常，图书信息卡显示简介、标签、状态、评分、可下载格式；
-   - 详情页点「下载 EPUB」→ 进度条 → 完成后「仅在云端」变本地，「阅读」可用；
-   - 已下载后再次进详情，图书信息卡仍在（断网也显示缓存内容）；
-   - 下载一本书 → 回到书架，卡片角标消失、可直接阅读；
-   - 阅读几页 → 杀进程重开 → 进度仍在；服务器不会收到任何进度（抓包只有 GET）；
-   - 删除某本已下载书（仅本地）→ 下次同步重新出现为云端占位；
-   - 关闭网络启动 → 书架正常、同步静默失败、已有书可读；
-   - 重复点同步不会产生重复书（`sourceUri` 去重）；
-   - 若同时配置了 WebDAV，两侧书互不干扰（my-books 书不进 WebDAV 上传/删除）。
-4. **品牌/更新验收**：
-   - 桌面图标与应用名显示 `Mybooks`（8 个语言目录均已改）；
-   - 安装包 `applicationId = top.helloac.mybooks`，与官方 Lumi 可共存；
-   - 手动检查更新：`latestVersionCode` 设为小于本地的值 → 提示「已是最新」；设为大于本地的值 → 弹出更新框，确认 `releaseUrl` 指向 `shyshineinn/Mybooks` 的 Release，而非 huangder；
-   - 删除/不提供 `docs/app-config.json` → 更新检查静默失败，不弹官方更新。
+推送走 `PATCH /api/books/:id`，带 `expected_updated_at`；**409 冲突**时用服务端当前值重跑一次合并再试（[MyBooksSyncManager.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksSyncManager.kt#L414-L430)）。
+
+### 4.3 删除
+
+本地删书（[HomeViewModel.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L2288)）：
+
+- `LOCAL_ONLY` → 只删本地，服务器书保留；
+- `LOCAL_AND_CLOUD` → 删本地 + 把服务器软删除（进回收站）排进 `mybooks_pending_delete` 队列，由同步器推送 `DELETE /api/books/:id`；
+- `FORCE_LOCAL_AND_CLOUD` 按钮对 my-books 书**不显示**（[CloudBookUi.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/components/CloudBookUi.kt#L71)）。
+
+删除弹窗对服务器书分三种文案：仅本地 / 本地+服务器 / 混合删除提示；无写令牌时只给"仅本地"并提示只读。
+
+### 4.4 下载
+
+`MyBooksSyncManager.downloadBook()`（[L744](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksSyncManager.kt#L744)）：
+
+1. 反解 remoteId → 拉详情取最新 `files` → 选首选格式；
+2. 从 `/books-files/{path}` 流式下载到 `.part`，每 64KB 更新 `downloadStates`（复用上游 `BookDownloadState`）；
+3. 成功 `renameTo` 正式文件 → 写 `markBookDownloaded`（`isCloudOnly` 置 0）；
+4. 失败清 `.part`，状态 `Failed`。
+
+下载入口有两条：
+
+- **详情页右上角「更多」菜单 →「下载」**（[BookDetailsActivity.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/BookDetailsActivity.kt#L388-L450)）：`isCloudOnly` 且服务器存在可读格式时显示该项；下载中副标题显示 `book_download_progress`（百分比），完成后该书 `isCloudOnly` 置 0、入口消失。调用 [HomeViewModel.downloadCloudBook](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/HomeViewModel.kt#L519-L524) 按 `isMyBooks` 分流；文件卡的「存储位置」行同步显示下载进度，完成/失败用 Toast 提示。
+- **详情页底部「阅读」按钮** → 未下载时走上游 `CloudBookDownloadDialog` 确认 → 确认后下载并自动进阅读器（[NavGraph.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/navigation/NavGraph.kt#L580-L617)）。
+
+书架长按封面弹窗不再提供下载项（保持上游形态，避免两处入口语义重叠）。
+
+### 4.5 读书心得
+
+服务器侧正文存 `notes-files/{id}.md`，接口是 `GET/PUT /api/books/:id/notes`（[routes.notes.js](file:///C:/littleBIngbing/my-books/src/http/routes.notes.js)）。
+
+App 侧：
+
+- 本地阅读副本存 `filesDir/mybooks/notes/{remoteId}.md` + 同名 `.json` 元数据（[MyBooksNotesStore.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksNotesStore.kt#L17-L68)）；
+- **阅读页只渲染本地副本**，不直接渲染网络内容（[MyBooksNotesActivity.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/MyBooksNotesActivity.kt#L280-L328)，WebView 禁 JS、禁文件访问）；
+- 详情页右上「更多」菜单：上传/更新 `.md`（限 UTF-8、≤5MB）、「同步并阅读」；
+- `PUT` 带 `expected_updated_at`，409 → 提示"服务器心得已更新，请先同步再上传"。
+
+---
+
+## 五、服务端接口（App 实际调用）
+
+| 方法 | 路径 | 鉴权 | 用途 |
+|---|---|---|---|
+| GET | `/api/books` | 免 | 全量列表（不含 files） |
+| GET | `/api/books/:id` | 免 | 单本详情（含 `files` / `identifier_list` / `series_label` / `custom_display`） |
+| PATCH | `/api/books/:id` | Bearer | 局部更新，带 `expected_updated_at` |
+| DELETE | `/api/books/:id` | Bearer | 软删除（进回收站，保留 14 天） |
+| POST | `/api/books` | Bearer | 新建书 |
+| POST | `/api/books/:id/file` | Bearer | 上传正文文件 |
+| GET | `/api/books/:id/notes` | 免 | 读心得元信息与正文 |
+| PUT | `/api/books/:id/notes` | Bearer | 写心得 |
+| GET | `/api/custom-fields` | 免 | 自定义字段定义（编辑页动态渲染） |
+| GET | `/api/isbn/lookup?isbn=` | 免 | 豆瓣填充（ISBN 优先） |
+| GET | `/api/metadata/search?q=` | 免 | 豆瓣填充（书名候选） |
+| POST | `/api/upload` | Bearer | 上传封面（data URL） |
+| GET | `/uploads/xxx` | 免 | 封面静态托管 |
+| GET | `/books-files/{path}` | 免 | 正文静态托管 |
+
+鉴权规则：GET/HEAD/OPTIONS 免令牌，其余需 `Authorization: Bearer <admin-token>`。Nginx 层已关闭 Basic 认证，否则会拦截 App 的 Bearer 请求。
+
+---
+
+## 六、详情页呈现（现状）
+
+复用现有 [BookDetailsActivity.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/BookDetailsActivity.kt)，**没有新建"图书信息卡"**，服务器字段分两处插入既有卡片：
+
+### 6.1 内容卡（ContentInfoCard）
+
+原有行：书名、作者、文件夹、标签（本地标签表，服务器标签已由 `applyTags` 合并进本地）。
+
+服务器追加行（[MyBooksContentRows](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/MyBooksBookInfoCard.kt#L111-L145)）：
+
+| 展示 | 数据源 |
+|---|---|
+| 简介（4 行折叠，可展开/收起） | `summary` |
+| 阅读状态 | `status` → 想读/在读/已读 |
+| 评分 | `rating` → `x.x / 10`（**服务端 v8 起为 10 分制**） |
+| 系列 | `series_label` 或 `series #series_index` |
+| 出版 | `publisher · pub_year` |
+| ISBN | `isbn` 或 identifiers 中的 isbn |
+| 其他识别号 | `identifier_list`，有 `url` 时可点开浏览器 |
+| 自定义字段 | `custom_display`，动态渲染，跳过保留字 |
+| 阅读记录 | `read_logs` → chips；有日志时额外显示「共 N 次」 |
+| 阅读日期 | `start_date` / `finish_date`（无日志时） |
+| 阅读次数 | `read_count`（无日志无日期时） |
+| 读书心得 | 本地副本与服务器元信息对比（不同步/已同步/仅本地/服务器缺失） |
+| 同步状态 | 待同步项数 / 上次失败 |
+
+**不展示**：服务器地址、来源标识、`created_at` / `updated_at` 时间戳、域名。
+
+### 6.2 文件卡（FileInfoCard）
+
+服务器书追加「电子书文件」行（`files[]` 去重按格式优先序，格式 + 体积，如 `EPUB 12.4 MB`）；无文件时显示"暂无电子书文件"或"暂无可阅读格式"。云端书不显示文件名/导入时间/最后阅读/路径。
+
+### 6.3 编辑
+
+详情页底部「编辑」对服务器书打开 [MyBooksEditSheet.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/MyBooksEditSheet.kt#L94)（底部 Sheet，62% 高），分区：基本信息 / 标识符 / 自定义字段 / 阅读记录。
+
+- 豆瓣填充：ISBN 优先（`/api/isbn/lookup`），未命中再按书名检索（`/api/metadata/search`）；豆瓣被拒（blocked）时不再自动转书名检索，只提示用户手动重试。只回填文字字段，不自动改标签/封面、不自动保存。
+- 保存（编辑既有书）：写 override → `replaceLocalEdits` → `schedulePush()` 推送；书名/作者只写被改动的字段（整行回写会覆盖同期同步进来的新值）；豆瓣带回的标签写成本地标签，封面落到本地封面目录并 `recordCoverChange` 标记待上传。
+- 保存（新建书，走导入 Sheet）：先 `POST /api/books` 建书，再 `POST /api/books/:id/file` 传正文；正文上传失败会回滚删除刚建的书，不在服务器留空壳。
+
+### 6.4 导入到服务器书库
+
+导入 Sheet（[ImportBooksSheet.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/home/ImportBooksSheet.kt#L351-L368)）提供三个动作：从文件导入 / 从授权文件夹导入 / 授权一个书籍文件夹。
+
+选完文件后（[NavGraph.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/navigation/NavGraph.kt#L384-L395)）：
+
+- **有写令牌** → 逐本打开 `MyBooksEditSheet`（`createSource` 模式）补信息 → 建书 + 传正文 → 全部完成后 `syncMyBooksNow()` 刷新书架；
+- **无写令牌（只读构建）** → 退回本地导入，不上传服务器。
+
+建书成功后，本地正文副本（`importLocalCopyOfServerBook`）必须沿用**服务端归一化后的书名/作者**（`MyBooksCreatedBook`，由建书接口响应带回），不能退回文件名/未知作者：本地行是同步的三方合并输入，用文件来源的值会与服务器基线冲突，被当成「本地编辑」推回服务器，把豆瓣填好的书名作者覆盖掉。
+
+书架菜单的「刷新授权文件夹」已移除，扫描只在授权文件夹页执行。
+
+---
+
+## 七、数据库、令牌与发布
+
+### 7.1 Room
+
+版本 **20**（[AppDatabase.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/local/database/AppDatabase.kt#L50)），迁移 [MIGRATION_19_20](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/local/database/DatabaseMigrations.kt#L273-L300) 新增两表：
+
+- `mybooks_sync_state`：三方合并基线（`baseJson` / `overridesJson` / `editedAtJson` / `baseTagsJson` / `coverDirty` / `coverEditedAt` / `lastError`）；
+- `mybooks_pending_delete`：待推送的服务器软删除队列。
+
+DAO 由 [AppModule.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/di/AppModule.kt#L133) 提供。
+
+### 7.2 令牌
+
+`local.properties` 的 `MYBOOKS_ADMIN_TOKEN` 编译进 `BuildConfig.MYBOOKS_ADMIN_TOKEN`（读取见 [app/build.gradle.kts](file:///C:/littleBIngbing/mybooks/app/build.gradle.kts#L31-L36)，注入见 [L56](file:///C:/littleBIngbing/mybooks/app/build.gradle.kts#L56)），不做前端输入/显示。**为空时 App 自动只读**：只拉不推，编辑/上传/删除入口隐藏或提示只读。
+
+### 7.3 品牌与更新
+
+- `applicationId = top.helloac.mybooks`，`namespace` 保持 `com.huangder.lumibooks`；
+- 8 个语言目录 `app_name` 均为 `Mybooks`；
+- 在线更新走 [UpdateChecker.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/util/UpdateChecker.kt#L24-L25) → `https://raw.githubusercontent.com/shyshineinn/Mybooks/main/docs/app-config.json`；
+- 仓库内 `docs/app-config.json` 与服务器 `public/app-config.json` **两份并存**，需要手动保持 `latest_version_code` 同步，否则不会弹更新提示。
+
+---
+
+## 八、验证清单
+
+```powershell
+# 接口预检
+(Invoke-RestMethod https://helloac.top/api/books).Count
+Invoke-RestMethod https://helloac.top/api/books/1 | Select-Object id,title,files
+# 本地构建
+.\gradlew.bat :app:assembleRelease -PabiFilter=arm64-v8a
+```
+
+手工验收：
+
+- 首次启动 → 书架出现服务器书（云端角标 + 封面），与本地书混排；
+- 点服务器书 → 进详情页：简介/状态/评分/系列/出版/ISBN/识别号/自定义字段/阅读记录均可见，**无域名/时间戳**；
+- 详情页右上角「更多」→ 「下载」→ 菜单项副标题显示百分比进度、文件卡「存储位置」行同步显示进度 → 完成后入口消失、云端角标消失、可直接阅读；
+- 详情页底部「阅读」（未下载时）→ 弹下载确认 → 确认后下载并自动进阅读器；
+- 断网进详情页 → 简介等缓存内容仍可见，"重试"可用；
+- 编辑 → 豆瓣填充 → 保存 → 刷新后服务端与本地一致；
+- 详情页「更多」→ 上传 `.md` → 「同步并阅读」→ 心得页渲染正常；
+- 本地删服务器书（本地+服务器）→ 下次同步服务端也消失；
+- 服务器删书 → 下次同步本地该书消失（含已下载的正文与封面）；
+- 关闭网络启动 → 书架正常、同步静默失败、已有书可读；
+- 重复同步不产生重复书（`sourceUri` 去重）；
+- 配置 WebDAV 时两侧书互不干扰。
+
+---
+
+## 九、已知偏差与待办
+
+以下为 2026-10-24 对照 `devdocs/` 规范（`style.md`、`ui-design-spec.md`、`design-spec.md`、`technical-spec.md`、`lumi-ui-motion-design-system.md`）核出的问题，按优先级排列。
+
+### P0
+
+1. **详情页「下载」入口仍偏弱**
+   已把下载入口从书架长按弹窗迁到详情页右上角「更多」菜单（见 §4.4），但方案想要的是页面主按钮「下载 EPUB · 12.4 MB」+ 独立进度条；现状是菜单项 + 文件卡「存储位置」行显示进度，没有独立主按钮与文件大小文案。
+
+2. **包结构与既定约束冲突**
+   方案与项目约定均要求魔改代码放独立 `com.helloac.mybooks` 包、"零上游代码改动"。现状 14 个新文件在上游包内（§2），与项目硬约束冲突，上游合并冲突面也更大。
+   另：`git status` 显示旧路径 `com/helloac/mybooks/remote/*.kt` 处于 `D`（已删未提交）、新文件为 `??`（未跟踪），迁移处于半完成状态。
+
+3. **国际化缺口**
+   - `strings.xml` 新增 121 条 `mybooks_*` **只加在 `values/`**，其余 7 个语言目录（en/ja/ko/zh-rCN/zh-rHK/zh-rMO/zh-rTW）全为 0 条；
+   - [ServerMetaDisplay.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/ServerMetaDisplay.kt) 有 40 处硬编码中文（想读/在读/已读、阅读状态、评分、系列、出版、简介、阅读记录、共 N 次、暂无电子书文件…），[MyBooksBookInfoCard.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/MyBooksBookInfoCard.kt#L194-L304) 另有 8 处。
+   上游 UI 文件几乎零硬编码中文（全走 `stringResource`），这两处是例外；英文/日文用户会看到混杂的中文界面。
+
+### P1
+
+4. **上游侵入面超出方案预估**
+   方案预估"7 个文件、9 处，均为追加式"、冲突点 6 处。现状未提交工作区改了 35 个上游文件、+1247/−229 行；[BookDetailsActivity.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/BookDetailsActivity.kt) +301/−36 且**重构了上游 `InfoCard`**（拆成 ContentInfoCard / FileInfoCard）。这与"最小侵入式改动以降低后续合并冲突"的既定偏好相反。
+   （注：其中 `SplashScreen` / `AppIconStyle` / `LauncherComponentSelection` / `AppIconStyleScreen` / `LaunchThemeController` / `EBookReaderApp` / `third_party` 属 BOOK_LINE 图标特性，与本方案无关。）
+
+5. **方案文档表格已过时**（代码是对的，文档错）
+   - `rating`：服务端 v8 起为 10 分制，代码显示 `x.x / 10` 正确，方案写"5 分制 ★4.5"错；
+   - `read_count` / `read_logs`：现按用户后续要求展示，方案表格仍写"不显示"；
+   - `notes_url`：已解析进 [MyBooksMetaCache.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksMetaCache.kt#L43) 但详情页无对应行，被 v3 的心得流程取代；
+   - 手动同步入口：v3 表格同时保留"首页头部云图标"和"设置页入口已移除"两行，现状是设置页入口已移除、改为书架下拉刷新。
+
+6. **标签 / 状态未用 chips**
+   方案要求"标签 chips（水平流式换行）"、"状态 chips"。现状服务器标签被合并进本地标签表（[applyTags](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/data/sync/MyBooksSyncManager.kt#L632)）后以普通文本行展示，状态也是文本行；`AnnotationTagChips` 反倒用在了"阅读记录"上。
+
+7. **展示逻辑无单测**
+   [ServerMetaDisplay.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/ServerMetaDisplay.kt) 的 `statusDisplay` / `ratingDisplay` / `seriesDisplay` / `publicationDisplay` / `hasMeaningfulSummary` / `customRows` / `identifierRows` 全是纯函数却零覆盖；上游同类（`shouldStackDetailRow` → `BookDetailsLayoutTest`）都配了测试。
+
+### P2
+
+8. [MyBooksEditSheet.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/MyBooksEditSheet.kt#L37-L39) 残留未使用的 `ModalBottomSheet` / `rememberModalBottomSheetState` import（已改用 `LiquidGlassBottomSheetScaffold`）。
+9. [MyBooksBookInfoCard.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/MyBooksBookInfoCard.kt#L42) 同包自引用 `import ...ui.bookshelf.DetailRow`。
+10. [MyBooksEditSheet.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/ui/bookshelf/MyBooksEditSheet.kt#L1097) `AppRoundedCornerShape(18.dp)` 应为 `AppRadius.lg`。
+11. **更新源分裂且与项目约定不符**
+    项目约定"在线更新地址固定为 `https://helloac.top/app-config.json`"，但 [UpdateChecker.kt](file:///C:/littleBIngbing/mybooks/app/src/main/java/com/huangder/lumibooks/util/UpdateChecker.kt#L24-L25) 实际读的是 GitHub raw 的 `docs/app-config.json`。
+    且两份配置都落后于当前版本：仓库 `docs/app-config.json` 是 2210、服务器 `public/app-config.json` 是 1601，都 < 2210，**永远不会弹更新提示**。发版时需手动同步这两份文件。
+12. 方案示意图里的顶部 `[服务器书]` 标签未实现（现靠封面云端角标表达来源）。
+
+---
+
+## 十、跟版约定
+
+- 仓库只有一条 `main` 分支，直接对应 `origin`（`shyshineinn/Mybooks`），魔改全部在此分支；`upstream`（`huangder/Lumi_Books`）作为上游参照。
+- 上游合并冲突面见 §9 第 4 条：优先靠"新文件 + 少改上游行"控制，`BookDetailsActivity` 的 `InfoCard` 拆分是最大冲突点。
+- `versionCode` 规则：`主版本 × 1000 + 次版本 × 100 + 补丁号`（2.2.10 → 2210），与 `versionName` 一一对应且单调递增。
+- CI（`.github/workflows/build-release.yml`）手动下载 cmdline-tools、装 `platforms;android-37.0` + `build-tools;36.0.0`（与本地 `buildToolsVersion` 一致），签名用同一套 keystore secrets。
+- 正式发布使用统一签名密钥（`local.properties` 的 `MYBOOKS_KEYSTORE_*` 四项），本地与 CI 同一套配置，避免签名不一致导致无法覆盖安装。
+- GPLv3，需继续开源。

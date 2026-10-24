@@ -39,7 +39,8 @@ import com.huangder.lumibooks.util.AuthorizedFolderSnapshotStore
 import com.huangder.lumibooks.util.AuthorizedStorageManager
 import com.huangder.lumibooks.util.toSnapshot
 import com.huangder.lumibooks.util.parser.BookParserFactory
-import com.helloac.mybooks.remote.MyBooksConfig
+import com.huangder.lumibooks.data.sync.MyBooksConfig
+import com.huangder.lumibooks.data.sync.normalizeRemoteAuthor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -63,6 +64,9 @@ import javax.inject.Inject
 
 /** 每日阅读数据 */
 data class DailyReading(val date: String, val duration: Long, val dayLabel: String)
+
+/** 导入前用户在弹窗里补充的书名/作者；按 uri 关联到具体文件。 */
+data class BookImportOverride(val title: String? = null, val author: String? = null)
 
 data class BookImportCandidate(
     val uri: Uri,
@@ -164,7 +168,7 @@ class HomeViewModel @Inject constructor(
     private val dataStoreManager: DataStoreManager,
     private val application: Application,
     private val webdavSyncManager: com.huangder.lumibooks.data.sync.WebdavSyncManager,
-    private val myBooksSyncManager: com.helloac.mybooks.remote.MyBooksSyncManager,
+    private val myBooksSyncManager: com.huangder.lumibooks.data.sync.MyBooksSyncManager,
     private val authorizedStorageManager: AuthorizedStorageManager,
     private val authorizedFolderSnapshotStore: AuthorizedFolderSnapshotStore,
     private val database: AppDatabase
@@ -601,22 +605,69 @@ class HomeViewModel @Inject constructor(
         importBooks(context, listOf(uri), targetFolderId)
     }
 
-    fun importBooks(context: Context, uris: List<Uri>, targetFolderId: String? = null) {
+    fun importBooks(
+        context: Context,
+        uris: List<Uri>,
+        targetFolderId: String? = null,
+        overrides: Map<String, BookImportOverride> = emptyMap()
+    ) {
         importDocumentsAsync(
             context = context,
             documents = uris.mapNotNull { uri ->
                 val name = FileUtils.getFileNameFromUri(context, uri) ?: return@mapNotNull null
+                val override = overrides[uri.toString()]
                 BookDocument(
                     uri = uri,
                     name = name,
                     sourceDocumentKey = authorizedStorageManager.documentKey(uri),
                     sourceLastModified = authorizedStorageManager.queryLastModified(context, uri),
-                    sourceSize = runCatching { com.huangder.lumibooks.util.BookFileAccess.size(context, uri.toString()) }.getOrDefault(0L)
+                    sourceSize = runCatching { com.huangder.lumibooks.util.BookFileAccess.size(context, uri.toString()) }.getOrDefault(0L),
+                    titleOverride = override?.title,
+                    authorOverride = override?.author
                 )
             },
             copyIntoApp = true,
             targetFolderId = targetFolderId,
             groupByAuthorizedSource = false
+        )
+    }
+
+    /**
+     * 服务器上刚建的书在本地留一份正文副本：沿用同一个 id 关联本地文件，
+     * 这样它不会被当成"仅在云端"，也就不必再从服务器重新下载。
+     *
+     * [title]/[author] 必须是服务器上那份（豆瓣填充后的值）：本地副本若退回文件名/未知作者，
+     * 下一轮同步会把它当成"本地编辑"推回服务器，把刚填好的书名作者覆盖掉。
+     */
+    fun importLocalCopyOfServerBook(
+        context: Context,
+        uri: Uri,
+        fileName: String,
+        remoteId: Long,
+        title: String,
+        author: String,
+        onDone: () -> Unit = {}
+    ) {
+        importDocumentsAsync(
+            context = context,
+            documents = listOf(
+                BookDocument(
+                    uri = uri,
+                    name = fileName,
+                    sourceDocumentKey = authorizedStorageManager.documentKey(uri),
+                    sourceLastModified = authorizedStorageManager.queryLastModified(context, uri),
+                    sourceSize = runCatching {
+                        com.huangder.lumibooks.util.BookFileAccess.size(context, uri.toString())
+                    }.getOrDefault(0L),
+                    idOverride = "mybooks-$remoteId",
+                    titleOverride = title,
+                    authorOverride = author
+                )
+            ),
+            copyIntoApp = true,
+            targetFolderId = null,
+            groupByAuthorizedSource = false,
+            onDone = onDone
         )
     }
 
@@ -652,7 +703,8 @@ class HomeViewModel @Inject constructor(
         documents: List<BookDocument>,
         copyIntoApp: Boolean,
         targetFolderId: String?,
-        groupByAuthorizedSource: Boolean
+        groupByAuthorizedSource: Boolean,
+        onDone: () -> Unit = {}
     ) {
         if (documents.isEmpty()) return
         folderPreviewInitializationSuspended = true
@@ -687,6 +739,7 @@ class HomeViewModel @Inject constructor(
                 links = links
             )
             _uiState.value = _uiState.value.copy(importMessage = result.toMessage(context))
+            onDone()
         }
     }
 
@@ -1297,7 +1350,7 @@ class HomeViewModel @Inject constructor(
             var extractedCoverPath: String? = null
             var insertedBook: Book? = null
             runCatching {
-                val bookId = FileUtils.generateBookId()
+                val bookId = document.idOverride ?: FileUtils.generateBookId()
                 val format = extension.toBookFormat()
                 if (format == BookFormat.MARKDOWN) {
                     runCatching { context.contentResolver.takePersistableUriPermission(document.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -1324,8 +1377,14 @@ class HomeViewModel @Inject constructor(
                 val markdownMetadata = if (format == BookFormat.MARKDOWN) com.huangder.lumibooks.util.markdown.MarkdownSnapshotStore.manifest(File(location)) else null
                 val book = Book(
                         id = bookId,
-                        title = markdownMetadata?.optString("title")?.takeIf { it.isNotBlank() } ?: document.name.substringBeforeLast('.'),
-                        author = markdownMetadata?.optString("author")?.takeIf { it.isNotBlank() } ?: context.getString(R.string.book_author_unknown),
+                        title = document.titleOverride?.takeIf { it.isNotBlank() }
+                            ?: markdownMetadata?.optString("title")?.takeIf { it.isNotBlank() }
+                            ?: document.name.substringBeforeLast('.'),
+                        // 作者兜底要与同步侧同一套归一化：两边不一致时，
+                        // 本地行会被当成"本地编辑"推回服务器。
+                        author = document.authorOverride?.takeIf { it.isNotBlank() }
+                            ?: markdownMetadata?.optString("author")?.takeIf { it.isNotBlank() }
+                            ?: normalizeRemoteAuthor(""),
                         filePath = location,
                         coverPath = coverPath,
                         format = format,
@@ -1385,7 +1444,11 @@ class HomeViewModel @Inject constructor(
         val sourceDocumentKey: String? = null,
         val sourceLastModified: Long = 0L,
         val sourceSize: Long = 0L,
-        val sourceDirectoryBindings: List<FolderRepository.StorageBinding> = emptyList()
+        val sourceDirectoryBindings: List<FolderRepository.StorageBinding> = emptyList(),
+        val titleOverride: String? = null,
+        val authorOverride: String? = null,
+        /** 指定本地书 id：服务器建好的书要沿用同一个 id，才能共用本地正文副本。 */
+        val idOverride: String? = null
     ) {
         fun toCandidate() = BookImportCandidate(
             uri = uri,
@@ -1439,8 +1502,16 @@ class HomeViewModel @Inject constructor(
     ) {
         fun toMessage(context: Context): String = when {
             noAuthorizedDirectories -> context.getString(R.string.import_no_authorized_directory)
+            failed > 0 && skipped > 0 -> context.getString(
+                R.string.import_summary_with_failures_and_skipped,
+                imported,
+                skipped,
+                failed
+            )
             failed > 0 -> context.getString(R.string.import_summary_with_failures, imported, failed)
+            imported > 0 && skipped > 0 -> context.getString(R.string.import_summary_with_skipped, imported, skipped)
             imported > 0 -> context.getString(R.string.import_summary, imported)
+            skipped > 0 -> context.getString(R.string.import_no_new_skipped, skipped)
             inaccessibleDirectories > 0 -> context.getString(R.string.import_directory_permission_lost)
             else -> context.getString(R.string.import_no_new_books)
         }
@@ -1464,7 +1535,11 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { tagRepository.createAndAssignTag(bookId, rawName, parentId) }
                 .onSuccess { tag ->
-                    if (tag == null) showTagMessage(application.getString(R.string.tag_name_exists))
+                    if (tag == null) {
+                        showTagMessage(application.getString(R.string.tag_name_exists))
+                    } else {
+                        scheduleMyBooksPushFor(listOf(bookId))
+                    }
                 }
                 .onFailure { showTagMessage(it.message ?: application.getString(R.string.error)) }
         }
@@ -1478,7 +1553,15 @@ class HomeViewModel @Inject constructor(
                 } else {
                     tagRepository.removeTagFromBook(bookId, tagId)
                 }
+            }.onSuccess {
+                scheduleMyBooksPushFor(listOf(bookId))
             }.onFailure { showTagMessage(it.message ?: application.getString(R.string.error)) }
+        }
+    }
+
+    private fun scheduleMyBooksPushFor(bookIds: Collection<String>) {
+        if (bookIds.any { it.startsWith(MyBooksConfig.BOOK_ID_PREFIX) }) {
+            myBooksSyncManager.schedulePush()
         }
     }
 
@@ -1487,6 +1570,8 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 bookIds.forEach { bookId -> tagRepository.assignTag(bookId, tagId) }
+            }.onSuccess {
+                scheduleMyBooksPushFor(bookIds)
             }.onFailure { showTagMessage(it.message ?: application.getString(R.string.error)) }
         }
     }
@@ -1501,6 +1586,8 @@ class HomeViewModel @Inject constructor(
                 bookIds.asSequence()
                     .filterNot { it == firstBookId }
                     .forEach { bookId -> tagRepository.assignTag(bookId, tag.id) }
+            }.onSuccess {
+                scheduleMyBooksPushFor(bookIds)
             }.onFailure { showTagMessage(it.message ?: application.getString(R.string.error)) }
         }
     }
@@ -2035,6 +2122,9 @@ class HomeViewModel @Inject constructor(
                 } ?: error("Unable to copy the selected cover image")
 
                 bookRepository.updateBookMetadata(book.copy(coverPath = newCoverPath))
+                if (MyBooksConfig.isMyBooks(book)) {
+                    myBooksSyncManager.recordCoverChange(book.id)
+                }
                 withContext(Dispatchers.IO) {
                     FileUtils.deleteOtherCustomCovers(application, book.id, newCoverPath)
                 }
@@ -2056,6 +2146,9 @@ class HomeViewModel @Inject constructor(
                 bookRepository.updateBookMetadata(book.copy(coverPath = originalCover))
                 withContext(Dispatchers.IO) {
                     FileUtils.deleteCustomCover(application, book.id)
+                }
+                if (MyBooksConfig.isMyBooks(book)) {
+                    myBooksSyncManager.restoreServerCover(book.id)
                 }
             } catch (error: Exception) {
                 _uiState.value = _uiState.value.copy(error = error.message)
@@ -2158,10 +2251,12 @@ class HomeViewModel @Inject constructor(
             .toSet()
         val deletedIds = mutableSetOf<String>()
         val failures = mutableListOf<String>()
+        var queuedServerDelete = false
 
         books.forEach { book ->
             val keepCloudPlaceholder = mode == BookDeleteMode.LOCAL_ONLY &&
-                book.remoteFileName != null
+                book.remoteFileName != null &&
+                !MyBooksConfig.isMyBooks(book)
             if (keepCloudPlaceholder && book.isCloudOnly) return@forEach
             try {
                 val shouldDeletePhysicalFile = book.filePath.isNotBlank() &&
@@ -2196,7 +2291,16 @@ class HomeViewModel @Inject constructor(
                         FileUtils.deleteTxtIndexCache(application, book.filePath)
                     }
                 } else {
+                    if (MyBooksConfig.isMyBooks(book) &&
+                        mode != BookDeleteMode.LOCAL_ONLY &&
+                        MyBooksConfig.hasWriteToken()
+                    ) {
+                        queuedServerDelete = myBooksSyncManager.queuePendingDelete(book.id) || queuedServerDelete
+                    }
                     bookRepository.deleteBook(book)
+                    if (MyBooksConfig.isMyBooks(book)) {
+                        myBooksSyncManager.clearLocalBookData(book.id)
+                    }
                     deletedIds += book.id
                 }
             } catch (error: Exception) {
@@ -2225,18 +2329,35 @@ class HomeViewModel @Inject constructor(
 
         }
 
+        if (queuedServerDelete) myBooksSyncManager.schedulePush()
         return failures
     }
 
     fun updateBook(book: Book) {
         viewModelScope.launch {
             try {
+                val previous = bookRepository.getBookById(book.id)
                 bookRepository.updateBookMetadata(book)
+                if (MyBooksConfig.isMyBooks(book)) {
+                    val fields = buildMap<String, Any> {
+                        if (previous?.title != book.title) put("title", book.title)
+                        if (previous?.author != book.author) put("author", book.author)
+                    }
+                    if (fields.isNotEmpty()) {
+                        myBooksSyncManager.recordLocalEdit(book.id, fields)
+                    }
+                }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(error = e.message)
             }
         }
     }
+
+    suspend fun syncMyBooksNow(): com.huangder.lumibooks.data.sync.MyBooksSyncResult =
+        myBooksSyncManager.syncNow()
+
+    val myBooksSyncing: kotlinx.coroutines.flow.StateFlow<Boolean>
+        get() = myBooksSyncManager.isSyncing
 
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
