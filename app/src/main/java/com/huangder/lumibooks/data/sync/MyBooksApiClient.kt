@@ -115,14 +115,49 @@ class MyBooksApiClient(
     }.build()
     private val jsonMediaType: MediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun fetchSyncSnapshot(): MyBooksSyncSnapshot = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("$SERVER_URL/api/sync/books").header("Accept", "application/json").build()
+    suspend fun fetchSyncSnapshot(cursor: String? = null): MyBooksSyncSnapshot = withContext(Dispatchers.IO) {
+        val url = SERVER_URL.toHttpUrl().newBuilder().addPathSegments("api/sync/changes")
+            .apply { if (!cursor.isNullOrBlank()) addQueryParameter("cursor", cursor) }.build()
+        val request = Request.Builder().url(url).header("Accept", "application/json").build()
         client.newCall(request).execute().use { response ->
-            // 旧后端仍可同步元数据；没有明确删除协议时不向它发送排队删除。
-            if (response.code == 404) return@withContext MyBooksSyncSnapshot(fetchBooks())
+            if (response.code == 410 && !cursor.isNullOrBlank()) return@withContext fetchSyncSnapshot(null)
+            if (response.code == 404) return@withContext fetchLegacySyncSnapshot()
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            parseMyBooksSyncSnapshot(body, SERVER_URL)
+            parseMyBooksChanges(body, SERVER_URL)
+        }
+    }
+
+    private suspend fun fetchLegacySyncSnapshot(): MyBooksSyncSnapshot {
+        val request = Request.Builder().url("$SERVER_URL/api/sync/books").header("Accept", "application/json").build()
+        client.newCall(request).execute().use { response ->
+            if (response.code == 404) return MyBooksSyncSnapshot(fetchBooks())
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
+            return parseMyBooksSyncSnapshot(body, SERVER_URL)
+        }
+    }
+
+    suspend fun fetchReadingState(id: Long, timeoutMs: Long = 0): JSONObject = withContext(Dispatchers.IO) {
+        val call = client.newCall(Request.Builder().url("$SERVER_URL/api/sync/reading/$id").build())
+        if (timeoutMs > 0) call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
+        call.execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
+            JSONObject(body)
+        }
+    }
+
+    suspend fun putReadingState(id: Long, libraryId: String, uuid: String, revision: Long, data: JSONObject, timeoutMs: Long = 0): JSONObject = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("library_id", libraryId).put("expected_uuid", uuid)
+            .put("expected_revision", revision).put("data", data)
+        val request = Request.Builder().url("$SERVER_URL/api/sync/reading/$id").put(jsonBody(body.toString())).build()
+        val call = client.newCall(request)
+        if (timeoutMs > 0) call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
+        call.execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, responseBody)
+            JSONObject(responseBody)
         }
     }
 
@@ -133,7 +168,7 @@ class MyBooksApiClient(
             .header("Accept", "application/json")
             .build()
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error(serverError(response.code))
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
             val body = response.body?.string().orEmpty()
             if (body.isBlank()) error("返回了空数据")
             try {
@@ -151,7 +186,7 @@ class MyBooksApiClient(
             .header("Accept", "application/json")
             .build()
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error(serverError(response.code))
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
             val body = response.body?.string().orEmpty()
             if (body.isBlank()) error("返回了空数据")
             body
@@ -334,34 +369,10 @@ class MyBooksApiClient(
     suspend fun downloadFile(
         url: String,
         destination: File,
+        expectedSize: Long = -1L,
         onProgress: (bytesRead: Long, totalBytes: Long) -> Unit
-    ) = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url(url).build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error(serverError(response.code))
-            val body = response.body ?: error("下载响应为空")
-            val total = body.contentLength()
-            destination.parentFile?.mkdirs()
-            body.byteStream().use { input ->
-                FileOutputStream(destination).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var written = 0L
-                    var lastReported = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        output.write(buffer, 0, read)
-                        written += read
-                        if (written - lastReported >= 64 * 1024) {
-                            lastReported = written
-                            onProgress(written, total)
-                        }
-                    }
-                    output.flush()
-                    onProgress(written, total)
-                }
-            }
-        }
+    ): MyBooksDownloadReceipt = withContext(Dispatchers.IO) {
+        MyBooksResumableDownload(client).download(url, destination, expectedSize, onProgress)
     }
 
     private suspend fun getRaw(path: String): String = withContext(Dispatchers.IO) {

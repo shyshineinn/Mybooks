@@ -318,8 +318,9 @@ fun ThirdPartyServicesDetail(viewModel: SettingsViewModel) {
         SettingsGroupDivider()
         CategoryItem(
             label = stringResource(R.string.mybooks_server_title),
-            supportingText = if (myBooksConnection.loggedIn) myBooksConnection.serverUrl
-                else stringResource(R.string.mybooks_server_login_required),
+            supportingText = stringResource(
+                if (myBooksConnection.loggedIn) R.string.mybooks_server_connected else R.string.mybooks_server_disconnected
+            ),
             grouped = true
         ) {
             context.startActivity(Intent(context, DetailActivity::class.java).putExtra("category", "mybooks"))

@@ -19,7 +19,7 @@ class MyBooksAuthClient(serverUrl: String) {
     suspend fun testConnection() {
         val status = request("status")
         check(status.optString("service") == "my-books" && status.optInt("auth_version") == 1) {
-            "该地址不是支持账号登录的 My books 服务器，请检查地址或升级服务端"
+            "该地址不是支持账号登录的 Mybooks 服务器，请检查地址或升级服务端"
         }
         check(status.optBoolean("initialized")) { "服务器尚未初始化，请在服务器运行 npm run setup" }
     }

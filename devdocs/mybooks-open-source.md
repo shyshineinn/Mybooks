@@ -1,4 +1,4 @@
-# My books 安卓改版：部署、构建与发布
+# Mybooks 安卓改版：部署、构建与发布
 
 本仓库：[shyshineinn/Mybooks](https://github.com/shyshineinn/Mybooks)。
 上游：[Huangder/Lumi_Books](https://github.com/huangder/Lumi_Books)。
@@ -7,13 +7,13 @@
 ## 连接服务器
 
 先按后端的 docs/SELF_HOSTING.md 部署并在终端初始化管理员。
-在「设置 → 服务 → My books 服务器」配置你自己的地址、用户名和密码。
+在「设置 → 服务 → Mybooks 服务器」配置你自己的地址、用户名和密码。
 新安装不预填维护者的线上地址；升级保留已保存的服务器配置。
 应用不内置管理令牌，密码不落盘，设备会话使用 Android Keystore 加密保存。
 个人自部署采用单管理员、多设备；不提供多人账户隔离。
 
 书目同步支持版本检查、明确删除记录和冲突选择，见 [同步协议](mybooks-sync-protocol.md)。
-自建后端尚未同步阅读位置、书签和标注；WebDAV 同步仍为独立功能。
+自建后端支持安卓多设备的阅读进度、时长、书签与标注同步，以及增量同步和正文续传；WebDAV 为独立能力。
 改版以前的上游文档可能描述不同版本，以本文件及当前代码为准。
 
 ## 构建环境

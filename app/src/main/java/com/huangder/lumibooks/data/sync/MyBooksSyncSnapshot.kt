@@ -8,7 +8,11 @@ data class MyBooksSyncSnapshot(
     val books: List<RemoteBook>,
     val deleted: List<MyBooksDeletion> = emptyList(),
     val libraryId: String? = null,
-    val syncVersion: Int = 1
+    val syncVersion: Int = 1,
+    val cursor: String? = null,
+    val isFull: Boolean = true,
+    val supportsReadingSync: Boolean = false,
+    val reading: List<MyBooksReadingHead> = emptyList()
 )
 
 /** A malformed or filtered response must never become deletion authority. */
@@ -56,3 +60,33 @@ internal fun matchesMyBooksDeletion(baseJson: String, event: MyBooksDeletion): B
     base.optString("uuid").isNotBlank() && base.optString("uuid") == event.uuid &&
         base.optLong("revision", 0L) <= event.revision
 }.getOrDefault(false)
+
+
+data class MyBooksReadingHead(val id: Long, val uuid: String, val revision: Long)
+
+internal fun parseMyBooksChanges(json: String, baseUrl: String): MyBooksSyncSnapshot {
+    val root = JSONObject(json)
+    if (root.optInt("sync_version") == 2) return parseMyBooksSyncSnapshot(json, baseUrl)
+    require((root.opt("sync_version") as? Number)?.toDouble() == 3.0)
+    val complete = root.get("complete") as? Boolean ?: error("Invalid complete flag")
+    val cursor = root.get("cursor") as? String
+    require(!cursor.isNullOrBlank() && cursor.length <= 4096)
+    val legacy = JSONObject(json).put("sync_version", 2).put("complete", true)
+    val parsed = parseMyBooksSyncSnapshot(legacy.toString(), baseUrl)
+    val heads = root.getJSONArray("reading")
+    val ids = mutableSetOf<Long>()
+    val deletedIds = parsed.deleted.mapTo(mutableSetOf()) { it.id }
+    val active = parsed.books.associateBy { it.id }
+    val reading = (0 until heads.length()).map { i ->
+        val row = heads.getJSONObject(i)
+        val id = positiveSyncInteger(row.get("id"))
+        val uuid = row.get("uuid") as? String
+        val revision = row.get("revision") as? Number ?: error("Invalid reading revision")
+        require(revision.toLong() >= 0 && revision.toDouble() == revision.toLong().toDouble())
+        require(!uuid.isNullOrBlank() && ids.add(id) && id !in deletedIds)
+        require(active[id] == null || active[id]?.uuid == uuid)
+        MyBooksReadingHead(id, uuid, revision.toLong())
+    }
+    return parsed.copy(syncVersion = 3, cursor = cursor, isFull = complete,
+        supportsReadingSync = root.optBoolean("reading_sync"), reading = reading)
+}

@@ -55,6 +55,9 @@ class DetailActivity : ComponentActivity() {
     @Inject
     lateinit var webdavAutoSyncScheduler: WebdavAutoSyncScheduler
 
+    @Inject
+    lateinit var myBooksSyncScheduler: com.huangder.lumibooks.data.sync.MyBooksSyncScheduler
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -107,7 +110,10 @@ class DetailActivity : ComponentActivity() {
             ) {
                 val requestLocalNetworkPermission = rememberLocalNetworkPermissionGate(
                     accessManager = localNetworkAccessManager,
-                    onPermissionGranted = webdavAutoSyncScheduler::onLocalNetworkPermissionGranted
+                    onPermissionGranted = {
+                        webdavAutoSyncScheduler.onLocalNetworkPermissionGranted()
+                        myBooksSyncScheduler.scheduleImmediate()
+                    }
                 )
                 com.huangder.lumibooks.ui.components.ConfigurableActivityBack(
                     predictiveBackEnabled = predictiveBackEnabled,

@@ -199,6 +199,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var webdavAutoSyncScheduler: WebdavAutoSyncScheduler
 
+    @Inject
+    lateinit var myBooksSyncScheduler: com.huangder.lumibooks.data.sync.MyBooksSyncScheduler
+
     /**
      * 当 ReaderScreen 处于前台时置为 true，
      * 确保 ActionMode 拦截只在阅读页生效，不影响其他页面。
@@ -805,7 +808,10 @@ class MainActivity : ComponentActivity() {
             ) {
                 val requestLocalNetworkPermission = rememberLocalNetworkPermissionGate(
                     accessManager = localNetworkAccessManager,
-                    onPermissionGranted = webdavAutoSyncScheduler::onLocalNetworkPermissionGranted
+                    onPermissionGranted = {
+                        webdavAutoSyncScheduler.onLocalNetworkPermissionGranted()
+                        myBooksSyncScheduler.scheduleImmediate()
+                    }
                 )
                 LaunchedEffect(Unit) {
                     val config = dataStoreManager.webdavConfig.first()

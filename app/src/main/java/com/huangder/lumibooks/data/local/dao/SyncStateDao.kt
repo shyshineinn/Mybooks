@@ -3,6 +3,7 @@ package com.huangder.lumibooks.data.local.dao
 import androidx.room.Dao
 import androidx.room.Query
 import androidx.room.Upsert
+import kotlinx.coroutines.flow.Flow
 import com.huangder.lumibooks.data.local.entity.BookFolderCrossRefEntity
 import com.huangder.lumibooks.data.local.entity.BookTagCrossRefEntity
 import com.huangder.lumibooks.data.local.entity.BookmarkEntity
@@ -18,8 +19,31 @@ interface SyncStateDao {
     @Query("SELECT value FROM sync_state WHERE `key` = :key LIMIT 1")
     suspend fun getValue(key: String): String?
 
+    @Query("SELECT value FROM sync_state WHERE `key` = :key LIMIT 1")
+    fun observeValue(key: String): Flow<String?>
+
     @Upsert
     suspend fun putState(state: SyncStateEntity)
+
+    @Upsert
+    suspend fun putStates(states: List<SyncStateEntity>)
+
+    @Query("SELECT * FROM sync_state WHERE substr(`key`,1,length(:prefix))=:prefix")
+    fun observePrefix(prefix: String): Flow<List<SyncStateEntity>>
+
+    @Query("SELECT * FROM sync_state WHERE substr(`key`,1,length(:prefix))=:prefix")
+    suspend fun getPrefix(prefix: String): List<SyncStateEntity>
+
+    @Query("DELETE FROM sync_state WHERE `key`=:key")
+    suspend fun deleteState(key: String)
+
+    @Query("DELETE FROM sync_tombstones WHERE namespace=:namespace AND itemId IN (:ids)")
+    suspend fun deleteTombstones(namespace: String, ids: List<String>)
+
+    @Query("SELECT (SELECT COUNT(*) FROM books)+(SELECT COUNT(*) FROM bookmarks)+(SELECT COUNT(*) FROM notes)+" +
+        "(SELECT COUNT(*) FROM reading_records)+(SELECT COUNT(*) FROM sync_tombstones)+" +
+        "(SELECT COUNT(*) FROM mybooks_sync_state)+(SELECT COUNT(*) FROM sync_state)")
+    fun observeReadingChangeSignal(): Flow<Int>
 
     @Query("SELECT * FROM reading_records")
     suspend fun getAllReadingRecords(): List<ReadingRecordEntity>

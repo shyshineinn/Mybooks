@@ -211,19 +211,19 @@ private fun bookTagLinkFromJson(json: JSONObject) = BookTagCrossRefEntity(
     json.getString("bookId"), json.getString("tagId"), json.optLong("updatedAt")
 )
 
-private fun readingRecordToJson(item: ReadingRecordEntity) = JSONObject().apply {
+internal fun readingRecordToJson(item: ReadingRecordEntity) = JSONObject().apply {
     put("bookId", item.bookId); put("date", item.date); put("duration", item.duration)
     put("startTime", item.startTime); put("endTime", item.endTime)
     put("sourceDeviceId", item.sourceDeviceId); put("updatedAt", item.updatedAt)
 }
 
-private fun readingRecordFromJson(json: JSONObject) = ReadingRecordEntity(
+internal fun readingRecordFromJson(json: JSONObject) = ReadingRecordEntity(
     bookId = json.getString("bookId"), date = json.getString("date"), duration = json.optLong("duration"),
     startTime = json.optLong("startTime"), endTime = json.optLong("endTime"),
     sourceDeviceId = json.optString("sourceDeviceId"), updatedAt = json.optLong("updatedAt")
 )
 
-private fun bookmarkToJson(item: BookmarkEntity) = JSONObject().apply {
+internal fun bookmarkToJson(item: BookmarkEntity) = JSONObject().apply {
     put("bookId", item.bookId); put("chapterIndex", item.chapterIndex); put("position", item.position.toDouble())
     putNullable("locatorJson", item.locatorJson); put("title", item.title); put("createdAt", item.createdAt)
     put("syncId", item.syncId); put("updatedAt", item.updatedAt); put("remark", item.remark)
@@ -231,7 +231,7 @@ private fun bookmarkToJson(item: BookmarkEntity) = JSONObject().apply {
     put("isStale", item.isStale)
 }
 
-private fun bookmarkFromJson(json: JSONObject) = BookmarkEntity(
+internal fun bookmarkFromJson(json: JSONObject) = BookmarkEntity(
     bookId = json.getString("bookId"), chapterIndex = json.optInt("chapterIndex"),
     position = json.optDouble("position").toFloat(), locatorJson = json.nullableString("locatorJson"),
     title = json.optString("title"), createdAt = json.optLong("createdAt"), syncId = json.optString("syncId"),
@@ -241,7 +241,7 @@ private fun bookmarkFromJson(json: JSONObject) = BookmarkEntity(
     isStale = json.optBoolean("isStale", false)
 )
 
-private fun noteToJson(item: NoteEntity) = JSONObject().apply {
+internal fun noteToJson(item: NoteEntity) = JSONObject().apply {
     put("bookId", item.bookId); put("chapterIndex", item.chapterIndex)
     put("startPosition", item.startPosition); put("endPosition", item.endPosition)
     putNullable("startLocatorJson", item.startLocatorJson); putNullable("endLocatorJson", item.endLocatorJson)
@@ -257,7 +257,7 @@ private fun noteToJson(item: NoteEntity) = JSONObject().apply {
     put("isStale", item.isStale)
 }
 
-private fun noteFromJson(json: JSONObject) = NoteEntity(
+internal fun noteFromJson(json: JSONObject) = NoteEntity(
     bookId = json.getString("bookId"), chapterIndex = json.optInt("chapterIndex"),
     startPosition = json.optInt("startPosition"), endPosition = json.optInt("endPosition"),
     startLocatorJson = json.nullableString("startLocatorJson"),
@@ -318,12 +318,12 @@ private fun highlightRuleExclusionFromJson(json: JSONObject) = HighlightRuleExcl
     json.getString("bookId"), json.getString("ruleId"), json.getString("matchKey"), json.optLong("createdAt")
 )
 
-private fun tombstoneToJson(item: SyncTombstoneEntity) = JSONObject().apply {
+internal fun tombstoneToJson(item: SyncTombstoneEntity) = JSONObject().apply {
     put("namespace", item.namespace); put("itemId", item.itemId); put("deletedAt", item.deletedAt)
     put("deviceId", item.deviceId)
 }
 
-private fun tombstoneFromJson(json: JSONObject) = SyncTombstoneEntity(
+internal fun tombstoneFromJson(json: JSONObject) = SyncTombstoneEntity(
     json.getString("namespace"), json.getString("itemId"), json.optLong("deletedAt"),
     json.optString("deviceId")
 )

@@ -43,11 +43,13 @@ class MyBooksSyncSafetyTest {
         try {
             server.start()
             server.enqueue(MockResponse().setResponseCode(404))
+            server.enqueue(MockResponse().setResponseCode(404))
             server.enqueue(MockResponse().setBody("[]"))
             val client = MyBooksApiClient(serverUrlProvider = { server.url("/").toString().trimEnd('/') })
             val result = client.fetchSyncSnapshot()
             assertEquals(1, result.syncVersion)
             assertTrue(result.deleted.isEmpty())
+            assertEquals("/api/sync/changes", server.takeRequest().path)
             assertEquals("/api/sync/books", server.takeRequest().path)
             assertEquals("/api/books", server.takeRequest().path)
         } finally { server.shutdown() }

@@ -159,7 +159,8 @@ fun HomeScreen(
         }
     }
     val booksByLastRead = remember(uiState.books) {
-        uiState.books.sortedByDescending { it.lastReadTime }
+        // A newly discovered server book has no reading event (lastReadTime = 0).
+        uiState.books.filter { it.lastReadTime > 0L }.sortedByDescending { it.lastReadTime }
     }
     val lastReadBook = booksByLastRead.firstOrNull()
     val recentBooks = booksByLastRead.take(6)

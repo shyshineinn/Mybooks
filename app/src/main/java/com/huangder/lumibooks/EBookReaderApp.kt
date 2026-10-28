@@ -46,6 +46,9 @@ class EBookReaderApp : Application(), Application.ActivityLifecycleCallbacks, Co
     lateinit var webdavAutoSyncScheduler: WebdavAutoSyncScheduler
 
     @Inject
+    lateinit var myBooksSyncScheduler: com.huangder.lumibooks.data.sync.MyBooksSyncScheduler
+
+    @Inject
     lateinit var dictionaryRepository: com.huangder.lumibooks.dictionary.DictionaryRepository
 
     @Inject
@@ -85,6 +88,7 @@ class EBookReaderApp : Application(), Application.ActivityLifecycleCallbacks, Co
         registerActivityLifecycleCallbacks(this)
         floatingSubtitleOverlayController.start()
         webdavAutoSyncScheduler.start()
+        myBooksSyncScheduler.startReadingObserver()
         applicationScope.launch(Dispatchers.IO) {
             dataStoreManager.launchThemeSnapshot.collectLatest { snapshot ->
                 LaunchThemeController.updateThemeSnapshot(this@EBookReaderApp, snapshot)
@@ -109,7 +113,10 @@ class EBookReaderApp : Application(), Application.ActivityLifecycleCallbacks, Co
         StartupTrace.activity(activity, "activity_started")
         val wasInBackground = startedActivityCount == 0
         startedActivityCount++
-        if (wasInBackground) floatingSubtitleOverlayController.setAppInForeground(true)
+        if (wasInBackground) {
+            floatingSubtitleOverlayController.setAppInForeground(true)
+            myBooksSyncScheduler.scheduleIfNeeded()
+        }
         diagnosticLogger.log("app", "activity_started", screen = activity.javaClass.simpleName)
     }
 
@@ -120,6 +127,7 @@ class EBookReaderApp : Application(), Application.ActivityLifecycleCallbacks, Co
             floatingSubtitleOverlayController.setAppInForeground(false)
             LaunchThemeController.applyPendingSplashSetting(this)
             webdavAutoSyncScheduler.onAppBackgrounded()
+            myBooksSyncScheduler.scheduleIfNeeded()
             diagnosticLogger.log("app", "app_backgrounded", screen = activity.javaClass.simpleName)
         }
     }

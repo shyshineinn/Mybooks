@@ -83,11 +83,13 @@ fun WebdavSettingsDetail(
         verticalArrangement = Arrangement.spacedBy(AppSpace.md)
     ) {
         // Status card
-        WebdavStatusCard(
-            isEnabled = isEnabled,
-            lastSyncText = lastSyncText,
-            isSyncing = uiState.isWebdavSyncing,
-            onConfigure = onConfigure
+        SyncConnectionStatusCard(
+            isConnected = isEnabled,
+            statusText = stringResource(
+                if (isEnabled) R.string.webdav_enabled_status else R.string.webdav_not_configured
+            ),
+            details = listOf(lastSyncText),
+            isBusy = uiState.isWebdavSyncing
         )
 
         if (!isEnabled) {
@@ -340,11 +342,11 @@ internal fun WebdavSectionCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun WebdavStatusCard(
-    isEnabled: Boolean,
-    lastSyncText: String,
-    isSyncing: Boolean,
-    onConfigure: () -> Unit
+internal fun SyncConnectionStatusCard(
+    isConnected: Boolean,
+    statusText: String,
+    details: List<String>,
+    isBusy: Boolean
 ) {
     Column(
         modifier = Modifier
@@ -359,9 +361,9 @@ private fun WebdavStatusCard(
                 modifier = Modifier.align(Alignment.Center)
             ) {
                 Icon(
-                    imageVector = if (isEnabled) AppIcons.CheckCircle else AppIcons.CloudSlash,
+                    imageVector = if (isConnected) AppIcons.CheckCircle else AppIcons.CloudSlash,
                     contentDescription = null,
-                    tint = if (isEnabled) AppColors.Accent else AppColors.TextSecondary,
+                    tint = if (isConnected) AppColors.Accent else AppColors.TextSecondary,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(Modifier.width(AppSpace.sm))
@@ -372,7 +374,7 @@ private fun WebdavStatusCard(
                     color = AppColors.TextPrimary
                 )
             }
-            if (isSyncing) {
+            if (isBusy) {
                 CircularProgressIndicator(
                     color = AppColors.Accent,
                     strokeWidth = 2.dp,
@@ -384,18 +386,19 @@ private fun WebdavStatusCard(
         }
         Spacer(Modifier.height(AppSpace.sm))
         Text(
-            text = if (isEnabled) stringResource(R.string.webdav_enabled_status)
-                else stringResource(R.string.webdav_not_configured),
+            text = statusText,
             fontSize = AppType.BodySmall,
             color = AppColors.TextSecondary,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
-        Text(
-            text = lastSyncText,
-            fontSize = AppType.Caption,
-            color = AppColors.TextSecondary,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        )
+        details.filter { it.isNotBlank() }.forEach { detail ->
+            Text(
+                text = detail,
+                fontSize = AppType.Caption,
+                color = AppColors.TextSecondary,
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            )
+        }
     }
 }
 

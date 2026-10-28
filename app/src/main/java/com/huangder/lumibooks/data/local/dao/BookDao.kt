@@ -88,6 +88,12 @@ interface BookDao {
     @Query("UPDATE books SET filePath = '', isCloudOnly = 1 WHERE id = :bookId")
     suspend fun markBookCloudOnly(bookId: String)
 
+    @Query("UPDATE books SET readingProgress=:progress,locatorJson=:locator,lastReadTime=:readAt WHERE id=:bookId")
+    suspend fun applyServerReadingPosition(bookId: String, progress: Float, locator: String?, readAt: Long)
+
+    @Query("UPDATE books SET filePath=:filePath,isCloudOnly=0,format=:format,remoteFileSha256=:sha256,sourceSha256=:sha256 WHERE id=:bookId")
+    suspend fun markServerBookDownloaded(bookId: String, filePath: String, format: String, sha256: String)
+
     @Query("UPDATE books SET filePath = :filePath, isCloudOnly = 0 WHERE id = :bookId")
     suspend fun markBookDownloaded(bookId: String, filePath: String)
 

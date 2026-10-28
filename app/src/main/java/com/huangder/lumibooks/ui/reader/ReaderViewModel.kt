@@ -973,6 +973,7 @@ class ReaderViewModel @Inject constructor(
             coroutineScope {
                 val bookDeferred = async {
                     ReaderOpenPerformance.traceStageSuspend(bookId, ReaderOpenStage.BOOK_RECORD) {
+                        if (bookId.startsWith(MyBooksConfig.BOOK_ID_PREFIX)) myBooksSyncManager.prepareReading(bookId)
                         bookRepository.getBookById(bookId)
                     }
                 }

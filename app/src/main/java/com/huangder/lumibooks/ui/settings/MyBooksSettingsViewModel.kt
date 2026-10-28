@@ -27,6 +27,7 @@ data class MyBooksSettingsUiState(
 @HiltViewModel
 class MyBooksSettingsViewModel @Inject constructor(
     private val syncManager: MyBooksSyncManager,
+    private val syncScheduler: com.huangder.lumibooks.data.sync.MyBooksSyncScheduler,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val state = MutableStateFlow(MyBooksSettingsUiState())
@@ -34,9 +35,12 @@ class MyBooksSettingsViewModel @Inject constructor(
     val connection = MyBooksConfig.connection
     val isSyncing = syncManager.isSyncing
     val syncIssues = syncManager.syncIssues
+    val syncStatus = syncManager.syncStatus
+    val pendingSyncCount = syncManager.pendingSyncCount
+    val backgroundSync = syncScheduler.workState
 
-    fun resolveSyncIssue(bookId: String, useLocal: Boolean) = runOperation {
-        val result = syncManager.resolveConflict(bookId, useLocal)
+    fun resolveSyncIssue(bookId: String, useLocal: Boolean, reading: Boolean = false) = runOperation {
+        val result = if (reading) syncManager.resolveReadingConflict(bookId, useLocal) else syncManager.resolveConflict(bookId, useLocal)
         check(result.success) { result.message }
         result.message
     }

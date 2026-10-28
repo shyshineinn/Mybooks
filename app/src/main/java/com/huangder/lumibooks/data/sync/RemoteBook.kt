@@ -8,7 +8,8 @@ import java.util.Locale
 data class RemoteBookFile(
     val format: String,
     val path: String,
-    val size: Long
+    val size: Long,
+    val downloadUrl: String? = null
 )
 
 /**
@@ -120,7 +121,8 @@ internal fun parseRemoteFiles(obj: JSONObject): List<RemoteBookFile> =
                 val format = file.optString("format").uppercase()
                 val path = file.optString("path")
                 if (format.isBlank() || path.isBlank()) continue
-                add(RemoteBookFile(format = format, path = path, size = file.optLong("size", 0L)))
+                add(RemoteBookFile(format = format, path = path, size = file.optLong("size", 0L),
+                    downloadUrl = file.optTextOrNull("download_url")))
             }
         }
     }.orEmpty()
