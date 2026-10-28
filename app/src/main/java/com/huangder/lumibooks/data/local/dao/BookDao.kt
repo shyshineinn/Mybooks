@@ -61,6 +61,16 @@ interface BookDao {
     @Update
     suspend fun updateBook(book: BookEntity)
 
+    @Query("""UPDATE books SET
+        title=CASE WHEN title=:expectedTitle THEN :title ELSE title END,
+        author=CASE WHEN author=:expectedAuthor THEN :author ELSE author END,
+        coverPath=CASE WHEN coverPath IS :expectedCover THEN :coverPath ELSE coverPath END,
+        format=CASE WHEN isCloudOnly=1 THEN :format ELSE format END,
+        remoteFileSize=:remoteFileSize, metadataUpdatedAt=:metadataUpdatedAt WHERE id=:bookId""")
+    suspend fun applySyncedMetadata(bookId: String, title: String, author: String, coverPath: String?,
+        format: String, remoteFileSize: Long, metadataUpdatedAt: Long,
+        expectedTitle: String, expectedAuthor: String, expectedCover: String?)
+
     @Query("UPDATE books SET coverPath = :coverPath WHERE id = :bookId")
     suspend fun updateBookCoverPath(bookId: String, coverPath: String)
 

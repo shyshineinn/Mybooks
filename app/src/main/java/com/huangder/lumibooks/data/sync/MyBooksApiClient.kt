@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -58,7 +59,9 @@ internal class ContentUriRequestBody(
 data class MyBooksCreatedBook(
     val id: Long,
     val title: String,
-    val author: String
+    val author: String,
+    val uuid: String? = null,
+    val revision: Long? = null
 )
 
 data class MyBooksNotesPayload(
@@ -83,17 +86,45 @@ data class MyBooksNotesPayload(
 /**
  * my-books 服务端客户端。
  *
- * 读接口公开;写接口必须带 BuildConfig 中内置的管理令牌。
+ * 默认私有访问；设备会话来自服务器登录，APK 不内置管理令牌。
  * 不记录 token,不把它拼进 URL。
  */
 class MyBooksApiClient(
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .callTimeout(180, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val serverUrlProvider: () -> String = { MyBooksConfig.SERVER_URL }
 ) {
+    private val SERVER_URL: String get() = serverUrlProvider()
+    // 每次网络请求（包括重定向）都检查来源；设备凭据只发给当前服务器。
+    private val client = client.newBuilder().addNetworkInterceptor { chain ->
+        val request = chain.request()
+        val server = SERVER_URL.toHttpUrl()
+        val sameOrigin = request.url.scheme == server.scheme && request.url.host == server.host && request.url.port == server.port
+        val builder = request.newBuilder()
+        if (sameOrigin) {
+            if (request.header("Authorization") == null && MyBooksConfig.adminToken.isNotBlank()) {
+                builder.header("Authorization", "Bearer ${MyBooksConfig.adminToken}")
+            }
+        } else {
+            builder.removeHeader("Authorization").removeHeader("X-Admin-Token")
+        }
+        chain.proceed(builder.build())
+    }.build()
     private val jsonMediaType: MediaType = "application/json; charset=utf-8".toMediaType()
+
+    suspend fun fetchSyncSnapshot(): MyBooksSyncSnapshot = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$SERVER_URL/api/sync/books").header("Accept", "application/json").build()
+        client.newCall(request).execute().use { response ->
+            // 旧后端仍可同步元数据；没有明确删除协议时不向它发送排队删除。
+            if (response.code == 404) return@withContext MyBooksSyncSnapshot(fetchBooks())
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
+            parseMyBooksSyncSnapshot(body, SERVER_URL)
+        }
+    }
 
     /** 书架全量列表（不含 files）。 */
     suspend fun fetchBooks(): List<RemoteBook> = withContext(Dispatchers.IO) {
@@ -150,12 +181,12 @@ class MyBooksApiClient(
     }
 
     /** 软删除到服务器回收站;404 视为已删除。 */
-    suspend fun deleteBook(id: Long, token: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun deleteBook(id: Long, token: String, expected: JSONObject): Boolean = withContext(Dispatchers.IO) {
         require(token.isNotBlank()) { "只读模式：未配置写入令牌" }
         val request = Request.Builder()
             .url("$SERVER_URL/api/books/$id")
             .header("Authorization", "Bearer $token")
-            .delete()
+            .delete(jsonBody(expected.toString()))
             .build()
         client.newCall(request).execute().use { response ->
             if (response.code == 404) return@withContext true
@@ -202,7 +233,9 @@ class MyBooksApiClient(
             MyBooksCreatedBook(
                 id = id,
                 title = json.optTextOrEmpty("title"),
-                author = normalizeRemoteAuthor(json.optTextOrEmpty("author"))
+                author = normalizeRemoteAuthor(json.optTextOrEmpty("author")),
+                uuid = json.optTextOrNull("uuid"),
+                revision = json.optLong("revision", 0L).takeIf { it > 0 }
             )
         }
     }

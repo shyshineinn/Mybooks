@@ -12,6 +12,8 @@ interface BookRepository {
     suspend fun getBooksBySourceSha256(sha256: String): List<Book>
     suspend fun insertBook(book: Book)
     suspend fun updateBook(book: Book)
+    /** Apply server metadata without replacing local reading positions or downloaded file state. */
+    suspend fun applySyncedMetadata(book: Book, expected: Book) { updateBook(book) }
     suspend fun updateSourceSha256(bookId: String, sha256: String)
     suspend fun updateBookMetadata(book: Book)
     suspend fun updateBookTitleAuthor(bookId: String, title: String, author: String)

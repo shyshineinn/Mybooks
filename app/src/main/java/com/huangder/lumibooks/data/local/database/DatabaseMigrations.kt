@@ -5,6 +5,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.huangder.lumibooks.domain.model.AnnotationTags
 
 object DatabaseMigrations {
+    val MIGRATION_21_22 = object : Migration(21, 22) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE mybooks_sync_state ADD COLUMN remoteDeleted INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE mybooks_sync_state ADD COLUMN conflictFieldsJson TEXT NOT NULL DEFAULT '[]'")
+            db.execSQL("ALTER TABLE mybooks_pending_delete ADD COLUMN expectedRevision INTEGER")
+            db.execSQL("ALTER TABLE mybooks_pending_delete ADD COLUMN expectedUuid TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE mybooks_pending_delete ADD COLUMN expectedUpdatedAt TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE mybooks_pending_delete ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+        }
+    }
     val MIGRATION_20_21 = object : Migration(20, 21) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("CREATE TABLE IF NOT EXISTS annotation_tags (name TEXT NOT NULL PRIMARY KEY, updatedAt INTEGER NOT NULL, isDeleted INTEGER NOT NULL DEFAULT 0)")

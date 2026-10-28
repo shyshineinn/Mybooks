@@ -26,15 +26,6 @@ if (signingPropertiesFile.exists()) {
 val releaseKeystorePath = signingProperties.getProperty("MYBOOKS_KEYSTORE_FILE").orEmpty()
 val hasReleaseSigning = releaseKeystorePath.isNotBlank()
 
-// my-books 管理令牌:编译进 BuildConfig,不做任何前端输入/显示。
-// local.properties 已被 git 忽略;未配置时为空,App 自动只读。
-val myBooksAdminToken = signingProperties.getProperty("MYBOOKS_ADMIN_TOKEN").orEmpty()
-val escapedMyBooksAdminToken = myBooksAdminToken
-    .replace("\\", "\\\\")
-    .replace("\"", "\\\"")
-    .replace("\r", "")
-    .replace("\n", "")
-
 android {
     namespace = "com.huangder.lumibooks"
     buildToolsVersion = "36.0.0"
@@ -53,7 +44,6 @@ android {
 
         buildConfigField("boolean", "DIAGNOSTIC_BUILD", "false")
         buildConfigField("boolean", "STARTUP_TRACE_ENABLED", "false")
-        buildConfigField("String", "MYBOOKS_ADMIN_TOKEN", "\"$escapedMyBooksAdminToken\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

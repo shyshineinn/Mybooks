@@ -76,3 +76,18 @@ lumi-window.xml
 .DS_Store
 update_config.json
 test1.jpg
+
+# Private configuration, signing material and release artifacts
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.apk
+*.aab
+/dist/
+.trae/

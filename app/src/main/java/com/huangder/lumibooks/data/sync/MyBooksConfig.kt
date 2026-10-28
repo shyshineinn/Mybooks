@@ -1,17 +1,47 @@
 package com.huangder.lumibooks.data.sync
 
-import com.huangder.lumibooks.BuildConfig
+import android.content.Context
+import com.huangder.lumibooks.data.local.MyBooksConnectionStore
 import com.huangder.lumibooks.domain.model.Book
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+data class MyBooksConnection(
+    val serverUrl: String = "",
+    val username: String = "",
+    val loggedIn: Boolean = false
+)
 
 /** my-books 服务器接入常量与本地书判定工具。 */
 object MyBooksConfig {
-    const val SERVER_URL = "https://helloac.top"
-    const val LIBRARY_KEY = "mybooks:helloac.top"
+    private val state = MutableStateFlow(MyBooksConnection())
+    val connection: StateFlow<MyBooksConnection> = state.asStateFlow()
+    @Volatile private var deviceToken: String = ""
+    val SERVER_URL: String get() = state.value.serverUrl
+    val LIBRARY_KEY: String get() = "mybooks:" + SERVER_URL.substringAfter("://")
     const val BOOK_ID_PREFIX = "mybooks-"
     const val SOURCE_URI_PREFIX = "mybooks://book/"
 
-    /** 编译进 APK 的管理令牌；为空时只读。 */
-    val adminToken: String get() = BuildConfig.MYBOOKS_ADMIN_TOKEN.trim()
+    /** 保留调用接口名称；值来自加密保存的独立设备会话，APK 不内置管理令牌。 */
+    val adminToken: String get() = deviceToken
+
+    fun initialize(context: Context) {
+        val store = MyBooksConnectionStore(context)
+        deviceToken = store.token()
+        state.value = MyBooksConnection(store.serverUrl ?: "", store.username, deviceToken.isNotBlank())
+    }
+    fun save(context: Context, serverUrl: String, username: String, token: String) {
+        val normalized = MyBooksEndpoint.normalize(serverUrl)
+        MyBooksConnectionStore(context).save(normalized, username, token)
+        deviceToken = token
+        state.value = MyBooksConnection(normalized, username, true)
+    }
+    fun logout(context: Context) {
+        MyBooksConnectionStore(context).clearToken()
+        deviceToken = ""
+        state.value = state.value.copy(loggedIn = false)
+    }
 
     fun hasWriteToken(): Boolean = adminToken.isNotEmpty()
 

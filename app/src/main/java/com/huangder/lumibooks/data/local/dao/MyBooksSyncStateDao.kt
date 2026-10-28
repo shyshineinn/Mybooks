@@ -30,6 +30,9 @@ interface MyBooksSyncStateDao {
     @Query("SELECT * FROM mybooks_pending_delete")
     suspend fun getPendingDeletes(): List<MyBooksPendingDeleteEntity>
 
+    @Query("SELECT * FROM mybooks_pending_delete")
+    fun observePendingDeletes(): Flow<List<MyBooksPendingDeleteEntity>>
+
     @Query("SELECT * FROM mybooks_pending_delete WHERE remoteId = :remoteId")
     suspend fun getPendingDelete(remoteId: Long): MyBooksPendingDeleteEntity?
 

@@ -17,6 +17,10 @@ class BookRepositoryImpl @Inject constructor(
     private val syncStateDao: SyncStateDao,
     private val syncIdentityStore: SyncIdentityStore
 ) : BookRepository {
+    override suspend fun applySyncedMetadata(book: Book, expected: Book) {
+        bookDao.applySyncedMetadata(book.id, book.title, book.author, book.coverPath, book.format.name,
+            book.remoteFileSize, book.metadataUpdatedAt, expected.title, expected.author, expected.coverPath)
+    }
 
     override fun getAllBooks(): Flow<List<Book>> {
         return bookDao.getAllBooks().map { entities ->

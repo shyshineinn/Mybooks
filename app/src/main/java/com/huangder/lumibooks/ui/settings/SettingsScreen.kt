@@ -268,6 +268,7 @@ fun SettingsScreen(
 
 @Composable
 fun ThirdPartyServicesDetail(viewModel: SettingsViewModel) {
+    val myBooksConnection by com.huangder.lumibooks.data.sync.MyBooksConfig.connection.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
@@ -313,6 +314,15 @@ fun ThirdPartyServicesDetail(viewModel: SettingsViewModel) {
             grouped = true
         ) {
             context.startActivity(Intent(context, DetailActivity::class.java).putExtra("category", "external_tts"))
+        }
+        SettingsGroupDivider()
+        CategoryItem(
+            label = stringResource(R.string.mybooks_server_title),
+            supportingText = if (myBooksConnection.loggedIn) myBooksConnection.serverUrl
+                else stringResource(R.string.mybooks_server_login_required),
+            grouped = true
+        ) {
+            context.startActivity(Intent(context, DetailActivity::class.java).putExtra("category", "mybooks"))
         }
         SettingsGroupDivider()
         CategoryItem(

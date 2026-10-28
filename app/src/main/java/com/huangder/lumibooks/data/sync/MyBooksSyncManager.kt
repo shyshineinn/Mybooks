@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -42,9 +43,14 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class MyBooksSyncIssue(val bookId: String, val title: String, val message: String,
+    val canResolve: Boolean = false, val pendingDeletion: Boolean = false)
+private class MyBooksMetadataConflict(val fields: List<String>, message: String) : Exception(message)
+
 data class MyBooksSyncResult(
     val message: String,
-    val success: Boolean
+    val success: Boolean,
+    val failedCount: Int = 0
 )
 
 /**
@@ -75,6 +81,19 @@ class MyBooksSyncManager @Inject constructor(
     private val notesStore = MyBooksNotesStore(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    val syncIssues = combine(myBooksSyncStateDao.observeAll(), myBooksSyncStateDao.observePendingDeletes(),
+        bookRepository.getAllBooks()) { states, deletes, localBooks ->
+        val titles = localBooks.associate { it.id to it.title }
+        states.filter { it.lastError != null }.map { item ->
+            MyBooksSyncIssue(item.bookId, titles[item.bookId].orEmpty(), item.lastError.orEmpty(),
+                canResolve = item.conflictFieldsJson != "[]" && !item.remoteDeleted)
+        } + deletes.filter { it.lastError != null }.map { item ->
+            MyBooksSyncIssue(item.bookId, item.title.ifBlank { context.getString(R.string.mybooks_pending_delete_title) },
+                item.lastError.orEmpty(), pendingDeletion = true)
+        }
+    }
+
+    private val editMutex = Mutex()
     private val syncMutex = Mutex()
     private var pushJob: Job? = null
 
@@ -85,6 +104,7 @@ class MyBooksSyncManager @Inject constructor(
     val downloadStates: StateFlow<Map<String, BookDownloadState>> = _downloadStates.asStateFlow()
 
     suspend fun syncIfStale(maxAgeMs: Long = 10 * 60_000) {
+        if (!MyBooksConfig.hasWriteToken()) return
         val now = System.currentTimeMillis()
         val last = withContext(Dispatchers.IO) {
             syncStateDao.getValue(KEY_LAST_SYNC)?.toLongOrNull() ?: 0L
@@ -94,6 +114,9 @@ class MyBooksSyncManager @Inject constructor(
     }
 
     suspend fun syncNow(): MyBooksSyncResult = syncMutex.withLock {
+        if (!MyBooksConfig.hasWriteToken()) {
+            return@withLock MyBooksSyncResult(context.getString(R.string.mybooks_server_login_required), false)
+        }
         _isSyncing.value = true
         try {
             withContext(Dispatchers.IO) { runSyncNow() }
@@ -106,14 +129,58 @@ class MyBooksSyncManager @Inject constructor(
         }
     }
 
+    /** 当前使用单一活动服务器。已有书目时禁止换源，防止相同数字 id 混库。 */
+    suspend fun checkServerChange(serverUrl: String) = syncMutex.withLock {
+        checkServerChangeLocked(serverUrl)
+    }
+    private suspend fun checkServerChangeLocked(serverUrl: String) {
+        check(_downloadStates.value.values.none { it is BookDownloadState.Downloading }) {
+            context.getString(R.string.mybooks_server_wait_download)
+        }
+        val changed = MyBooksEndpoint.normalize(serverUrl) != MyBooksConfig.SERVER_URL
+        check(!changed || (bookRepository.getAllBooks().first().none(MyBooksConfig::isMyBooks) &&
+            myBooksSyncStateDao.getAll().isEmpty() && myBooksSyncStateDao.getPendingDeletes().isEmpty())) {
+            context.getString(R.string.mybooks_server_switch_blocked)
+        }
+    }
+    suspend fun saveConnection(serverUrl: String, username: String, token: String) = syncMutex.withLock {
+        checkServerChangeLocked(serverUrl)
+        withContext(Dispatchers.IO) { MyBooksConfig.save(context, serverUrl, username, token) }
+        syncStateDao.putState(SyncStateEntity(KEY_LAST_SYNC, "0"))
+    }
+    suspend fun logoutConnection(): Boolean = syncMutex.withLock {
+        check(_downloadStates.value.values.none { it is BookDownloadState.Downloading }) {
+            context.getString(R.string.mybooks_server_wait_download)
+        }
+        val auth = MyBooksAuthClient(MyBooksConfig.SERVER_URL)
+        val revoked = try {
+            auth.logout(MyBooksConfig.adminToken)
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            error is MyBooksHttpException && error.status in setOf(401, 403)
+        }
+        withContext(Dispatchers.IO) { MyBooksConfig.logout(context) }
+        revoked
+    }
+
     /** 本地删除前调用:把服务器软删除放进队列,随后由同步器推送。 */
     suspend fun queuePendingDelete(bookId: String): Boolean {
         val remoteId = MyBooksConfig.remoteIdOf(bookId) ?: return false
+        val previous = myBooksSyncStateDao.getPendingDelete(remoteId)
+        if (previous != null) return true // 不用空基线覆盖已经排队的删除条件。
+        val state = myBooksSyncStateDao.get(bookId)
+        val base = state?.baseJson?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
         myBooksSyncStateDao.upsertPendingDelete(
             MyBooksPendingDeleteEntity(
                 remoteId = remoteId,
                 bookId = bookId,
-                deletedAt = System.currentTimeMillis()
+                deletedAt = System.currentTimeMillis(),
+                expectedRevision = base.optLong("revision", 0L).takeIf { it > 0 },
+                expectedUuid = base.optTextOrEmpty("uuid"),
+                expectedUpdatedAt = state?.serverUpdatedAt.orEmpty(),
+                title = bookRepository.getBookById(bookId)?.title.orEmpty()
             )
         )
         return true
@@ -131,9 +198,9 @@ class MyBooksSyncManager @Inject constructor(
         bookId: String,
         fields: Map<String, Any?>,
         editedAt: Long = System.currentTimeMillis()
-    ) {
-        if (fields.isEmpty()) return
-        val state = myBooksSyncStateDao.get(bookId) ?: return
+    ) = editMutex.withLock {
+        if (fields.isEmpty()) return@withLock
+        val state = myBooksSyncStateDao.get(bookId) ?: return@withLock
         val overrides = runCatching { JSONObject(state.overridesJson) }.getOrDefault(JSONObject())
         val edits = runCatching { JSONObject(state.editedAtJson) }.getOrDefault(JSONObject())
         fields.forEach { (key, value) ->
@@ -181,13 +248,13 @@ class MyBooksSyncManager @Inject constructor(
     }
 
     fun recordCoverChange(bookId: String, editedAt: Long = System.currentTimeMillis()) {
-        scope.launch {
+        scope.launch { editMutex.withLock {
             val state = myBooksSyncStateDao.get(bookId) ?: return@launch
             myBooksSyncStateDao.upsert(
-                state.copy(coverDirty = true, coverEditedAt = editedAt, lastError = null)
+                state.copy(coverDirty = true, coverEditedAt = maxOf(editedAt, state.coverEditedAt + 1), lastError = null)
             )
             schedulePush()
-        }
+        } }
     }
 
     /**
@@ -199,8 +266,8 @@ class MyBooksSyncManager @Inject constructor(
         changed: Map<String, Any?>,
         managedKeys: Set<String>,
         editedAt: Long = System.currentTimeMillis()
-    ) {
-        val state = myBooksSyncStateDao.get(bookId) ?: return
+    ) = editMutex.withLock {
+        val state = myBooksSyncStateDao.get(bookId) ?: return@withLock
         val overrides = runCatching { JSONObject(state.overridesJson) }.getOrDefault(JSONObject())
         val edits = runCatching { JSONObject(state.editedAtJson) }.getOrDefault(JSONObject())
         managedKeys.forEach { key ->
@@ -301,62 +368,44 @@ class MyBooksSyncManager @Inject constructor(
 
     private suspend fun runSyncNow(): MyBooksSyncResult {
         val token = MyBooksConfig.adminToken
-        pushPendingDeletes(token)
-
-        val remoteBooks = try {
-            client.fetchBooks()
-        } catch (error: Exception) {
-            return MyBooksSyncResult(
-                error.message ?: context.getString(R.string.mybooks_connection_failed),
-                false
-            )
+        val snapshot = client.fetchSyncSnapshot()
+        if (snapshot.libraryId != null) {
+            val previousLibrary = syncStateDao.getValue(KEY_LIBRARY_ID).orEmpty()
+            val hasBindings = myBooksSyncStateDao.getAll().isNotEmpty() ||
+                myBooksSyncStateDao.getPendingDeletes().isNotEmpty() ||
+                bookRepository.getAllBooks().first().any(MyBooksConfig::isMyBooks)
+            check(previousLibrary.isBlank() || previousLibrary == snapshot.libraryId || !hasBindings) {
+                context.getString(R.string.mybooks_library_changed)
+            }
+            syncStateDao.putState(SyncStateEntity(KEY_LIBRARY_ID, snapshot.libraryId))
         }
-
-        val localBefore = bookRepository.getAllBooks().first().filter(MyBooksConfig::isMyBooks)
-        if (remoteBooks.isEmpty() && localBefore.isNotEmpty()) {
-            return MyBooksSyncResult(
-                context.getString(R.string.mybooks_empty_library_skip_delete),
-                true
-            )
-        }
-
+        val queued = myBooksSyncStateDao.getPendingDeletes().mapTo(mutableSetOf()) { it.remoteId }
+        var failed = pushPendingDeletes(token, snapshot)
         var added = 0
         var updated = 0
-        var skipped = 0
-        for (remote in remoteBooks) {
-            if (myBooksSyncStateDao.getPendingDelete(remote.id) != null) continue
+        for (remote in snapshot.books) {
+            if (remote.id in queued) continue
             try {
-                when (syncOneBook(remote, token)) {
-                    1 -> added++
-                    2 -> updated++
-                    else -> skipped++
-                }
+                when (syncOneBook(remote, token)) { 1 -> added++; 2 -> updated++ }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                skipped++
-                val bookId = MyBooksConfig.BOOK_ID_PREFIX + remote.id
-                runCatching {
-                    myBooksSyncStateDao.get(bookId)?.let { failedState ->
-                        myBooksSyncStateDao.upsert(
-                            failedState.copy(
-                                lastError = error.message
-                                    ?: context.getString(com.huangder.lumibooks.R.string.mybooks_sync_failed)
-                            )
-                        )
-                    }
-                }
+                failed++
+                editMutex.withLock { myBooksSyncStateDao.get(MyBooksConfig.BOOK_ID_PREFIX + remote.id)?.let { state ->
+                    myBooksSyncStateDao.upsert(state.copy(
+                        lastError = error.message ?: context.getString(R.string.mybooks_sync_failed),
+                        conflictFieldsJson = if (error is MyBooksMetadataConflict) JSONArray(error.fields).toString()
+                            else state.conflictFieldsJson
+                    ))
+                } }
             }
         }
-
-        val remoteIds = remoteBooks.mapTo(mutableSetOf()) { it.id }
-        val removed = pruneRemovedBooks(remoteIds)
-        val now = System.currentTimeMillis()
-        syncStateDao.putState(SyncStateEntity(KEY_LAST_SYNC, now.toString()))
+        val marked = applyServerDeletions(snapshot.deleted)
+        if (failed == 0) syncStateDao.putState(SyncStateEntity(KEY_LAST_SYNC, System.currentTimeMillis().toString()))
         return MyBooksSyncResult(
-            context.getString(R.string.mybooks_sync_summary, added, updated, removed),
-            true
-        )
+            if (failed == 0) context.getString(R.string.mybooks_sync_summary, added, updated, marked)
+            else context.getString(R.string.mybooks_sync_partial_failure, added, updated, failed),
+            failed == 0, failed)
     }
 
     private suspend fun syncOneBook(remote: RemoteBook, token: String): Int {
@@ -368,6 +417,10 @@ class MyBooksSyncManager @Inject constructor(
         if (existing == null) {
             val detailJson = client.fetchBookJson(remote.id)
             val detail = parseRemoteBook(detailJson, MyBooksConfig.SERVER_URL)
+        check(remote.uuid == null || remote.uuid == detail.uuid) { context.getString(R.string.mybooks_book_identity_changed) }
+        check(remote.revision == null || (detail.revision != null && remote.revision <= detail.revision)) {
+            context.getString(R.string.mybooks_revision_rollback)
+        }
             val now = System.currentTimeMillis()
             val file = RemoteBookFormats.preferredFile(detail.files)
             val format = file?.format?.toBookFormatOrNull() ?: BookFormat.EPUB
@@ -409,6 +462,10 @@ class MyBooksSyncManager @Inject constructor(
         if (state == null) {
             val detailJson = client.fetchBookJson(remote.id)
             val detail = parseRemoteBook(detailJson, MyBooksConfig.SERVER_URL)
+        check(remote.uuid == null || remote.uuid == detail.uuid) { context.getString(R.string.mybooks_book_identity_changed) }
+        check(remote.revision == null || (detail.revision != null && remote.revision <= detail.revision)) {
+            context.getString(R.string.mybooks_revision_rollback)
+        }
             state = createBaselineState(existing, detailJson, detail, remote.updatedAt)
             myBooksSyncStateDao.upsert(state)
             // 新建服务器书后本地副本还没有标签；先以服务器为准补齐，
@@ -419,14 +476,27 @@ class MyBooksSyncManager @Inject constructor(
             }
         }
         val currentState = state ?: return 0
+        check(currentState.conflictFieldsJson == "[]") { context.getString(R.string.mybooks_conflict_requires_choice) }
+        val base = JSONObject(currentState.baseJson)
+        check(base.optTextOrEmpty("uuid").isBlank() || remote.uuid == null || base.optString("uuid") == remote.uuid) {
+            context.getString(R.string.mybooks_book_identity_changed)
+        }
+        val baseRevision = base.optLong("revision", 0L)
+        check(remote.revision == null || baseRevision <= remote.revision) { context.getString(R.string.mybooks_revision_rollback) }
 
-        val remoteUnchanged = !remote.updatedAt.isNullOrBlank() &&
-            remote.updatedAt == currentState.serverUpdatedAt
+        val remoteUnchanged = if (remote.revision != null) baseRevision > 0L && remote.revision == baseRevision
+            else !remote.updatedAt.isNullOrBlank() && remote.updatedAt == currentState.serverUpdatedAt
         val pending = hasPendingChanges(currentState, localTags)
-        if (remoteUnchanged && !pending) return 0
+        val cachedDetail = parseRemoteBook(currentState.baseJson, MyBooksConfig.SERVER_URL)
+        val needsNote = cachedDetail.hasNotes && !notesStore.isCurrent(cachedDetail.id, cachedDetail.notesUpdatedAt, cachedDetail.notesSize)
+        if (remoteUnchanged && !pending && !currentState.remoteDeleted && !needsNote) return 0
 
         val detailJson = client.fetchBookJson(remote.id)
         val detail = parseRemoteBook(detailJson, MyBooksConfig.SERVER_URL)
+        check(remote.uuid == null || remote.uuid == detail.uuid) { context.getString(R.string.mybooks_book_identity_changed) }
+        check(remote.revision == null || (detail.revision != null && remote.revision <= detail.revision)) {
+            context.getString(R.string.mybooks_revision_rollback)
+        }
         val remoteUpdatedAt = detail.updatedAt ?: remote.updatedAt ?: currentState.serverUpdatedAt
         val merge = mergeState(existing, currentState, localTags, detailJson)
 
@@ -458,15 +528,16 @@ class MyBooksSyncManager @Inject constructor(
     ): Int {
         var remoteJson = detailJson
         var remoteDetail = detail
+        checkBookIdentity(state, remoteDetail)
         var expected = state.serverUpdatedAt
         var merge = mergeState(existing, state, localTags, remoteJson)
+        throwIfConflict(merge)
         var uploadedCoverUrl: String? = null
 
         if (merge.coverAction == MyBooksCoverAction.UPLOAD_LOCAL) {
             val coverFile = existing.coverPath?.let(::File)
-            if (coverFile != null && coverFile.isFile) {
-                uploadedCoverUrl = runCatching { coverUploader.upload(coverFile, token) }.getOrNull()
-            }
+            check(coverFile != null && coverFile.isFile) { context.getString(R.string.mybooks_cover_missing) }
+                uploadedCoverUrl = coverUploader.upload(coverFile, token)
         }
 
         repeat(2) { attempt ->
@@ -478,24 +549,22 @@ class MyBooksSyncManager @Inject constructor(
                     merge.localWonFields,
                     merge.coverAction == MyBooksCoverAction.DOWNLOAD_REMOTE
                 )
-                applyTags(existing.id, merge.mergedTags)
-                myBooksSyncStateDao.upsert(
+                val latestTags = tagDao.getTagsForBook(existing.id).map(TagEntity::name)
+                applyTags(existing.id, MyBooksMerge.mergeTags(localTags, latestTags, merge.mergedTags))
+                editMutex.withLock { myBooksSyncStateDao.upsert(
                     stateAfterRemoteOnly(state, remoteJson, remoteUpdatedAt, remoteDetail.tags, merge)
-                )
+                ) }
                 syncNoteForDetail(remoteDetail)
                 return 2
             }
-            if (expected.isNotBlank()) patch.put("expected_updated_at", expected)
+            val version = JSONObject(remoteJson).optLong("revision", 0L)
+            if (version > 0L) patch.put("expected_revision", version)
+            else if (expected.isNotBlank()) patch.put("expected_updated_at", expected)
+            JSONObject(remoteJson).optTextOrNull("uuid")?.let { patch.put("expected_uuid", it) }
             try {
                 val response = client.patchBook(state.remoteId, patch, token)
                 val responseDetail = parseRemoteBook(response, MyBooksConfig.SERVER_URL)
-                applyRemote(
-                    existing,
-                    responseDetail,
-                    emptySet(),
-                    downloadCover = false
-                )
-                applyTags(existing.id, responseDetail.tags)
+                editMutex.withLock {
                 val next = stateAfterPush(
                     state = state,
                     patch = patch,
@@ -505,7 +574,11 @@ class MyBooksSyncManager @Inject constructor(
                     clearCoverDirty = (merge.coverAction == MyBooksCoverAction.UPLOAD_LOCAL && uploadedCoverUrl != null) ||
                         merge.coverAction == MyBooksCoverAction.DOWNLOAD_REMOTE
                 )
+                applyRemote(existing, responseDetail, JSONObject(next.overridesJson).keys().asSequence().toSet(), false)
+                val currentTags = tagDao.getTagsForBook(existing.id).map(TagEntity::name)
+                applyTags(existing.id, MyBooksMerge.mergeTags(localTags, currentTags, responseDetail.tags))
                 myBooksSyncStateDao.upsert(next)
+                }
                 syncNoteForDetail(responseDetail)
                 return 2
             } catch (error: MyBooksHttpException) {
@@ -514,16 +587,17 @@ class MyBooksSyncManager @Inject constructor(
                     ?: throw error
                 remoteJson = current.toString()
                 remoteDetail = parseRemoteBook(remoteJson, MyBooksConfig.SERVER_URL)
+                checkBookIdentity(state, remoteDetail)
                 expected = current.optTextOrEmpty("updated_at")
                 merge = mergeState(existing, state, localTags, remoteJson)
+                throwIfConflict(merge)
                 if (merge.coverAction != MyBooksCoverAction.UPLOAD_LOCAL) {
                     uploadedCoverUrl = null
                 }
                 if (merge.coverAction == MyBooksCoverAction.UPLOAD_LOCAL && uploadedCoverUrl == null) {
                     val coverFile = existing.coverPath?.let(::File)
-                    if (coverFile != null && coverFile.isFile) {
-                        uploadedCoverUrl = runCatching { coverUploader.upload(coverFile, token) }.getOrNull()
-                    }
+                    check(coverFile != null && coverFile.isFile) { context.getString(R.string.mybooks_cover_missing) }
+                uploadedCoverUrl = coverUploader.upload(coverFile, token)
                 }
             }
         }
@@ -562,7 +636,7 @@ class MyBooksSyncManager @Inject constructor(
     ): MyBooksSyncStateEntity {
         val remoteEpoch = parseEpoch(detail.updatedAt ?: listUpdatedAt) ?: 0L
         val localEpoch = existing.metadataUpdatedAt
-        val localWinsBaseline = localEpoch > remoteEpoch
+        val localWinsBaseline = true
         val overrides = JSONObject()
         val edits = JSONObject()
         if (localWinsBaseline) {
@@ -589,6 +663,8 @@ class MyBooksSyncManager @Inject constructor(
             baseTagsJson = JSONArray(detail.tags).toString(),
             coverDirty = localWinsBaseline && customCover,
             coverEditedAt = if (localWinsBaseline && customCover) localEpoch else 0L,
+            conflictFieldsJson = if (overrides.length() > 0 || customCover) "[\"baseline\"]" else "[]",
+            lastError = if (overrides.length() > 0 || customCover) context.getString(R.string.mybooks_conflict_requires_choice) else null,
             lastSyncAt = System.currentTimeMillis()
         )
     }
@@ -596,6 +672,10 @@ class MyBooksSyncManager @Inject constructor(
     private suspend fun hasPendingChanges(state: MyBooksSyncStateEntity, localTags: List<String>): Boolean {
         val overrides = runCatching { JSONObject(state.overridesJson) }.getOrDefault(JSONObject())
         if (overrides.length() > 0 || state.coverDirty) return true
+        val local = bookRepository.getBookById(state.bookId)
+        val base = JSONObject(state.baseJson)
+        if (local != null && (isLocalTitleAuthorEdit(local.title, base.optTextOrEmpty("title")) ||
+            isLocalTitleAuthorEdit(local.author, normalizeRemoteAuthor(base.optTextOrEmpty("author"))))) return true
         return !tagSetEquals(localTags, parseTags(state.baseTagsJson))
     }
 
@@ -603,28 +683,35 @@ class MyBooksSyncManager @Inject constructor(
         existing: Book,
         detail: RemoteBook,
         localWonFields: Set<String>,
-        downloadCover: Boolean
+        downloadCover: Boolean,
+        respectPendingEdits: Boolean = true
     ) {
+        val current = bookRepository.getBookById(existing.id) ?: return
+        val protectedFields = if (respectPendingEdits) {
+            val latest = myBooksSyncStateDao.get(existing.id)
+            localWonFields + JSONObject(latest?.overridesJson ?: "{}").keys().asSequence().toSet()
+        } else localWonFields
         val preferred = RemoteBookFormats.preferredFile(detail.files)
-        val format = if (existing.isCloudOnly) {
-            preferred?.format?.toBookFormatOrNull() ?: existing.format
+        val format = if (current.isCloudOnly) {
+            preferred?.format?.toBookFormatOrNull() ?: current.format
         } else {
-            existing.format
+            current.format
         }
-        var coverPath = existing.coverPath
-        if (downloadCover && !detail.coverUrl.isNullOrBlank()) {
-            coverPath = cacheCover(detail.id, detail.coverUrl, force = true) ?: existing.coverPath
+        var coverPath = current.coverPath
+        if (downloadCover && "cover" !in protectedFields) {
+            coverPath = if (detail.coverUrl.isNullOrBlank()) null
+                else cacheCover(detail.id, detail.coverUrl, force = true) ?: current.coverPath
         }
         val remoteEpoch = parseEpoch(detail.updatedAt) ?: existing.metadataUpdatedAt
-        val updated = existing.copy(
-            title = if ("title" in localWonFields) existing.title else detail.title,
-            author = if ("author" in localWonFields) existing.author else detail.author,
+        val updated = current.copy(
+            title = if ("title" in protectedFields) current.title else detail.title,
+            author = if ("author" in protectedFields) current.author else detail.author,
             coverPath = coverPath,
             format = format,
-            remoteFileSize = preferred?.size ?: existing.remoteFileSize,
+            remoteFileSize = preferred?.size ?: current.remoteFileSize,
             metadataUpdatedAt = remoteEpoch
         )
-        bookRepository.updateBook(updated)
+        bookRepository.applySyncedMetadata(updated, current)
     }
 
     private suspend fun stateAfterRemoteOnly(
@@ -635,15 +722,18 @@ class MyBooksSyncManager @Inject constructor(
         merge: MyBooksMergeResult
     ): MyBooksSyncStateEntity {
         val latest = myBooksSyncStateDao.get(state.bookId) ?: state
-        val overrides = removeOverrides(latest.overridesJson, merge.dropOverrides)
-        val edits = removeEditedAt(latest.editedAtJson, merge.dropOverrides)
+        val acknowledged = acknowledgedMyBooksKeys(state, latest, merge.dropOverrides)
+        val overrides = removeOverrides(latest.overridesJson, acknowledged)
+        val edits = removeEditedAt(latest.editedAtJson, acknowledged)
         return latest.copy(
             serverUpdatedAt = remoteUpdatedAt,
             baseJson = remoteJson,
             overridesJson = overrides.toString(),
             editedAtJson = edits.toString(),
             baseTagsJson = JSONArray(remoteTags).toString(),
-            coverDirty = latest.coverDirty && merge.coverAction != MyBooksCoverAction.DOWNLOAD_REMOTE,
+            remoteDeleted = false,
+            conflictFieldsJson = "[]",
+            coverDirty = latest.coverDirty && (latest.coverEditedAt != state.coverEditedAt || merge.coverAction != MyBooksCoverAction.DOWNLOAD_REMOTE),
             lastSyncAt = System.currentTimeMillis(),
             lastError = null
         )
@@ -674,15 +764,18 @@ class MyBooksSyncManager @Inject constructor(
         pushedKeys += dropOverrides
         // 同步期间可能有新的本地编辑落库;以最新 overrides 为准,只移除本次已推送/丢弃的键。
         val latest = myBooksSyncStateDao.get(state.bookId) ?: state
-        val overrides = removeOverrides(latest.overridesJson, pushedKeys)
-        val edits = removeEditedAt(latest.editedAtJson, pushedKeys)
+        val acknowledged = acknowledgedMyBooksKeys(state, latest, pushedKeys)
+        val overrides = removeOverrides(latest.overridesJson, acknowledged)
+        val edits = removeEditedAt(latest.editedAtJson, acknowledged)
         return latest.copy(
             serverUpdatedAt = responseDetail.updatedAt ?: state.serverUpdatedAt,
             baseJson = responseJson,
             overridesJson = overrides.toString(),
             editedAtJson = edits.toString(),
             baseTagsJson = JSONArray(responseDetail.tags).toString(),
-            coverDirty = if (clearCoverDirty) false else latest.coverDirty,
+            remoteDeleted = false,
+            conflictFieldsJson = "[]",
+            coverDirty = if (clearCoverDirty && latest.coverEditedAt == state.coverEditedAt) false else latest.coverDirty,
             lastSyncAt = System.currentTimeMillis(),
             lastError = null
         )
@@ -735,57 +828,110 @@ class MyBooksSyncManager @Inject constructor(
             .forEach { tagDao.deleteBookTagLink(bookId, it.tagId) }
     }
 
-    private suspend fun pruneRemovedBooks(remoteIds: Set<Long>): Int {
-        val localBooks = bookRepository.getAllBooks().first()
-        var removed = 0
-        for (book in localBooks) {
-            if (!MyBooksConfig.isMyBooks(book)) continue
-            val remoteId = MyBooksConfig.remoteIdOf(book.id) ?: continue
-            if (remoteId in remoteIds) continue
-            val deleted = runCatching {
-                if (book.filePath.isNotBlank()) {
-                    FileUtils.deleteAppManagedBookFile(context, book.filePath)
-                }
-                FileUtils.deleteCustomCover(context, book.id)
-                book.coverPath?.let { path ->
-                    if (File(path).name.startsWith("mybooks_cover_")) {
-                        File(path).delete()
-                    }
-                }
-                FileUtils.deleteTxtIndexCache(context, book.filePath)
-                bookRepository.deleteBook(book)
-                myBooksSyncStateDao.delete(book.id)
-                myBooksSyncStateDao.deletePendingDelete(remoteId)
-                notesStore.delete(remoteId)
-                metaCache.delete(remoteId)
-            }.isSuccess
-            if (deleted) removed++
+    private suspend fun applyServerDeletions(events: List<MyBooksDeletion>): Int {
+        var marked = 0
+        for (event in events) editMutex.withLock {
+            val bookId = MyBooksConfig.BOOK_ID_PREFIX + event.id
+            val state = myBooksSyncStateDao.get(bookId) ?: return@withLock
+            if (!matchesMyBooksDeletion(state.baseJson, event)) return@withLock
+            val tags = tagDao.getTagsForBook(bookId).map(TagEntity::name)
+            val pending = hasPendingChanges(state, tags)
+            myBooksSyncStateDao.upsert(state.copy(remoteDeleted = true,
+                lastError = context.getString(if (pending) R.string.mybooks_deleted_pending else R.string.mybooks_deleted_retained)))
+            if (!state.remoteDeleted) marked++
         }
-        return removed
+        return marked
     }
 
-    private suspend fun pushPendingDeletes(token: String) {
-        if (token.isBlank()) return
+    private suspend fun pushPendingDeletes(token: String, snapshot: MyBooksSyncSnapshot): Int {
+        var failed = 0
         for (item in myBooksSyncStateDao.getPendingDeletes()) {
             try {
-                client.deleteBook(item.remoteId, token)
+                check(snapshot.syncVersion >= 2) { context.getString(R.string.mybooks_delete_upgrade_required) }
+                if (snapshot.deleted.any { it.id == item.remoteId && (item.expectedUuid.isBlank() || it.uuid == item.expectedUuid) }) {
+                    myBooksSyncStateDao.deletePendingDelete(item.remoteId)
+                    continue
+                }
+                check(item.expectedUuid.isNotBlank() && (item.expectedRevision != null || item.expectedUpdatedAt.isNotBlank())) {
+                    context.getString(R.string.mybooks_delete_missing_baseline)
+                }
+                val expected = JSONObject().put("expected_uuid", item.expectedUuid)
+                if (item.expectedRevision != null) expected.put("expected_revision", item.expectedRevision)
+                else expected.put("expected_updated_at", item.expectedUpdatedAt)
+                client.deleteBook(item.remoteId, token, expected)
                 myBooksSyncStateDao.deletePendingDelete(item.remoteId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
-                myBooksSyncStateDao.upsertPendingDelete(
-                    item.copy(
-                        lastAttemptAt = System.currentTimeMillis(),
-                        lastError = error.message
-                    )
-                )
+                failed++
+                myBooksSyncStateDao.upsertPendingDelete(item.copy(lastAttemptAt = System.currentTimeMillis(),
+                    lastError = error.message ?: context.getString(R.string.mybooks_sync_failed)))
             }
         }
+        return failed
+    }
+
+    private fun throwIfConflict(merge: MyBooksMergeResult) {
+        if (merge.conflicts.isNotEmpty()) throw MyBooksMetadataConflict(merge.conflicts,
+            context.getString(R.string.mybooks_conflict_requires_choice))
+    }
+
+    private fun checkBookIdentity(state: MyBooksSyncStateEntity, detail: RemoteBook) {
+        val base = JSONObject(state.baseJson)
+        check(base.optTextOrEmpty("uuid").isBlank() || base.optString("uuid") == detail.uuid) {
+            context.getString(R.string.mybooks_book_identity_changed)
+        }
+        check(detail.revision == null || base.optLong("revision", 0L) <= detail.revision) {
+            context.getString(R.string.mybooks_revision_rollback)
+        }
+    }
+
+    suspend fun cancelPendingDelete(bookId: String): MyBooksSyncResult {
+        syncMutex.withLock {
+            MyBooksConfig.remoteIdOf(bookId)?.let { myBooksSyncStateDao.deletePendingDelete(it) }
+        }
+        return syncNow()
+    }
+
+    suspend fun resolveConflict(bookId: String, useLocal: Boolean): MyBooksSyncResult {
+        syncMutex.withLock {
+            check(MyBooksConfig.hasWriteToken()) { context.getString(R.string.mybooks_server_login_required) }
+            val state = myBooksSyncStateDao.get(bookId) ?: error(context.getString(R.string.mybooks_sync_failed))
+            check(!state.remoteDeleted) { context.getString(R.string.mybooks_deleted_pending) }
+            val raw = client.fetchBookJson(state.remoteId)
+            val remote = parseRemoteBook(raw, MyBooksConfig.SERVER_URL)
+            editMutex.withLock {
+            val latest = myBooksSyncStateDao.get(bookId) ?: state
+            val current = bookRepository.getBookById(bookId) ?: error(context.getString(R.string.mybooks_sync_failed))
+            val oldBase = JSONObject(latest.baseJson)
+            checkBookIdentity(latest, remote)
+            check(oldBase.optTextOrEmpty("uuid").isBlank() || oldBase.optString("uuid") == remote.uuid) {
+                context.getString(R.string.mybooks_book_identity_changed)
+            }
+            val tags = tagDao.getTagsForBook(bookId).map(TagEntity::name)
+            val merge = mergeState(current, latest, tags, raw)
+            val overrides = if (useLocal) JSONObject(latest.overridesJson) else JSONObject()
+            if (useLocal) {
+                if (isLocalTitleAuthorEdit(current.title, oldBase.optTextOrEmpty("title"))) overrides.put("title", current.title)
+                if (isLocalTitleAuthorEdit(current.author, normalizeRemoteAuthor(oldBase.optTextOrEmpty("author")))) overrides.put("author", current.author)
+            }
+            applyRemote(current, remote, if (useLocal) merge.localWonFields else emptySet(),
+                !useLocal || merge.coverAction == MyBooksCoverAction.DOWNLOAD_REMOTE, respectPendingEdits = useLocal)
+            applyTags(bookId, if (useLocal) merge.mergedTags else remote.tags)
+            myBooksSyncStateDao.upsert(latest.copy(baseJson = raw, serverUpdatedAt = remote.updatedAt.orEmpty(),
+                overridesJson = overrides.toString(), editedAtJson = if (useLocal) latest.editedAtJson else "{}",
+                baseTagsJson = JSONArray(remote.tags).toString(), coverDirty = useLocal && latest.coverDirty,
+                conflictFieldsJson = "[]", lastError = null, remoteDeleted = false))
+            }
+        }
+        return syncNow()
     }
 
     private suspend fun syncNoteForDetail(detail: RemoteBook) {
         if (!detail.hasNotes) return
         fun current(): Boolean = notesStore.isCurrent(detail.id, detail.notesUpdatedAt, detail.notesSize)
         if (withContext(Dispatchers.IO) { current() }) return
-        runCatching {
+        run {
             val payload = client.fetchNotes(detail.id)
             if (payload.hasNotes) {
                 withContext(Dispatchers.IO) {
@@ -934,6 +1080,7 @@ class MyBooksSyncManager @Inject constructor(
 
     private companion object {
         const val KEY_LAST_SYNC = "mybooks_last_sync_at"
+        const val KEY_LIBRARY_ID = "mybooks_library_id"
         const val PUSH_DEBOUNCE_MS = 1_500L
     }
 }

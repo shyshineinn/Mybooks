@@ -79,44 +79,31 @@ class MyBooksMergeTest {
     }
 
     @Test
-    fun laterRemoteEditWinsSameFieldConflict() {
+    fun remoteClockAheadStillRequiresManualResolution() {
         val base = baseJson()
-        val remote = JSONObject(base.toString())
-            .put("title", "Remote Title")
-            .put("updated_at", "2026-10-22T00:00:00.000Z")
-        val result = MyBooksMerge.merge(
-            book = book("Local Title"),
-            baseJson = base.toString(),
-            remoteJson = remote.toString(),
-            overridesJson = "{}",
-            editedAtJson = JSONObject().put("title", 1_000L).toString(),
-            baseTags = emptyList(),
-            localTags = emptyList(),
-            coverDirty = false,
-            coverEditedAt = 0L
-        )
-        assertFalse(result.patch.has("title"))
+        val remote = JSONObject(base.toString()).put("title", "Remote Title").put("updated_at", "2026-10-22T00:00:00.000Z")
+        val result = MyBooksMerge.merge(book("Local Title"), base.toString(), remote.toString(),
+            JSONObject().put("title", "Local Title").toString(),
+            JSONObject().put("title", 0L).toString(),
+            emptyList(), emptyList(), false, 0L)
         assertTrue(result.conflicts.contains("title"))
+        assertFalse(result.patch.has("title"))
+        assertFalse(result.dropOverrides.contains("title"))
+        assertTrue(result.localWonFields.contains("title"))
     }
 
     @Test
-    fun laterLocalEditWinsSameFieldConflict() {
+    fun localClockAheadStillRequiresManualResolution() {
         val base = baseJson()
-        val remote = JSONObject(base.toString())
-            .put("title", "Remote Title")
-            .put("updated_at", "2026-10-22T00:00:00.000Z")
-        val result = MyBooksMerge.merge(
-            book = book("Local Title"),
-            baseJson = base.toString(),
-            remoteJson = remote.toString(),
-            overridesJson = "{}",
-            editedAtJson = JSONObject().put("title", 2_000_000_000_000L).toString(),
-            baseTags = emptyList(),
-            localTags = emptyList(),
-            coverDirty = false,
-            coverEditedAt = 0L
-        )
-        assertEquals("Local Title", result.patch.optString("title"))
+        val remote = JSONObject(base.toString()).put("title", "Remote Title").put("updated_at", "2026-10-22T00:00:00.000Z")
+        val result = MyBooksMerge.merge(book("Local Title"), base.toString(), remote.toString(),
+            JSONObject().put("title", "Local Title").toString(),
+            JSONObject().put("title", Long.MAX_VALUE).toString(),
+            emptyList(), emptyList(), false, 0L)
+        assertTrue(result.conflicts.contains("title"))
+        assertFalse(result.patch.has("title"))
+        assertFalse(result.dropOverrides.contains("title"))
+        assertTrue(result.localWonFields.contains("title"))
     }
 
     @Test

@@ -339,7 +339,11 @@ class MyBooksEditViewModel @Inject constructor(
                     )
                 } catch (error: Exception) {
                     // 正文没传上去就把刚建的书删掉，别在服务器留一个没有正文的空壳。
-                    runCatching { api.deleteBook(remoteId, token) }
+                    // 只回收仍是原版本的新书，避免上传失败后误删另一端已修改的书。
+                    if (created.revision != null && !created.uuid.isNullOrBlank()) runCatching {
+                        api.deleteBook(remoteId, token, JSONObject().put("expected_revision", created.revision)
+                            .put("expected_uuid", created.uuid))
+                    }
                     throw error
                 }
                 createSource = null

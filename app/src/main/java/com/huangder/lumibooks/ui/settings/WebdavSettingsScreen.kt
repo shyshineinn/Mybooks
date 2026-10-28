@@ -327,7 +327,7 @@ fun WebdavConfigurationDetail(
 // ─── Shared components ──────────────────────────────────────────────
 
 @Composable
-private fun WebdavSectionCard(content: @Composable ColumnScope.() -> Unit) {
+internal fun WebdavSectionCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -400,7 +400,7 @@ private fun WebdavStatusCard(
 }
 
 @Composable
-private fun WebdavPrimaryButton(
+internal fun WebdavPrimaryButton(
     label: String,
     enabled: Boolean = true,
     onClick: () -> Unit
@@ -427,7 +427,7 @@ private fun WebdavPrimaryButton(
 }
 
 @Composable
-private fun WebdavSecondaryButton(
+internal fun WebdavSecondaryButton(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     destructive: Boolean = false,

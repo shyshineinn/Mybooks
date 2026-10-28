@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         感谢你花时间提交 bug 报告！填写前请确认：
-        - 已更新到[最新版本](https://github.com/huangder/Lumi_Books/releases)
+        - 已更新到[最新版本](https://github.com/shyshineinn/Mybooks/releases)
         - 搜索过已有 issue，确认不是重复问题
 
   - type: input

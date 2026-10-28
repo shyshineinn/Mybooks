@@ -66,6 +66,7 @@ class EBookReaderApp : Application(), Application.ActivityLifecycleCallbacks, Co
 
     override fun onCreate() {
         super.onCreate()
+        com.huangder.lumibooks.data.sync.MyBooksConfig.initialize(this)
         dictionaryRepository.start()
         installDiagnosticExceptionHandler()
         ErrorHandler.installDiagnosticLogger(diagnosticLogger)

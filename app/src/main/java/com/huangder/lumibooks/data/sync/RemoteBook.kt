@@ -30,7 +30,9 @@ data class RemoteBook(
     val createdAt: String? = null,
     val hasNotes: Boolean = false,
     val notesSize: Long = 0L,
-    val notesUpdatedAt: String? = null
+    val notesUpdatedAt: String? = null,
+    val uuid: String? = null,
+    val revision: Long? = null
 ) {
     fun fileFor(format: String): RemoteBookFile? =
         files.firstOrNull { it.format.equals(format, ignoreCase = true) }
@@ -104,7 +106,9 @@ private fun JSONObject.toRemoteBook(baseUrl: String): RemoteBook {
         createdAt = optTextOrNull("created_at"),
         hasNotes = optBoolean("has_notes", false),
         notesSize = optLong("notes_size", 0L),
-        notesUpdatedAt = optTextOrNull("notes_updated_at")
+        notesUpdatedAt = optTextOrNull("notes_updated_at"),
+        uuid = optTextOrNull("uuid"),
+        revision = optLong("revision", 0L).takeIf { it > 0 }
     )
 }
 

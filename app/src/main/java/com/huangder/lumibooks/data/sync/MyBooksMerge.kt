@@ -36,7 +36,7 @@ data class MyBooksMergeResult(
  * local  = 本地当前值(Book / overrides / 标签表)
  * remote = 本次服务器详情
  *
- * 同一字段双方都改时按 editedAt 与服务器 updated_at 取较晚者;
+ * 同一字段双方都改时保留本地修改并报告冲突，由用户明确选择;
  * 本地未编辑过的字段直接采用服务器值。
  */
 object MyBooksMerge {
@@ -98,18 +98,12 @@ object MyBooksMerge {
                 continue
             }
             conflicts += field
-            val localEpoch = editedAt.optLong(field, 0L)
-            if (localEpoch > remoteEpoch) {
-                patch.put(field, localValue)
-                localWon += field
-            } else {
-                drop += field
-            }
+            localWon += field
         }
 
-        mergeIdentifiers(base, remote, overrides, editedAt, remoteEpoch, patch, drop)
-        mergeCustom(base, remote, overrides, editedAt, remoteEpoch, patch, drop)
-        val readLogsOverride = mergeReadLogs(base, remote, overrides, editedAt, remoteEpoch, patch, drop)
+        mergeIdentifiers(base, remote, overrides, editedAt, remoteEpoch, patch, drop, conflicts)
+        mergeCustom(base, remote, overrides, editedAt, remoteEpoch, patch, drop, conflicts)
+        val readLogsOverride = mergeReadLogs(base, remote, overrides, editedAt, remoteEpoch, patch, drop, conflicts)
 
         val remoteTags = parseRemoteTags(remote.opt("tags"))
         val mergedTags = mergeTags(baseTags, localTags, remoteTags)
@@ -121,11 +115,10 @@ object MyBooksMerge {
         val coverAction = when {
             coverDirty && !remoteCoverChanged -> MyBooksCoverAction.UPLOAD_LOCAL
             coverDirty && remoteCoverChanged -> {
-                if (coverEditedAt > remoteEpoch) MyBooksCoverAction.UPLOAD_LOCAL
-                else if (remoteCover != null) MyBooksCoverAction.DOWNLOAD_REMOTE
-                else MyBooksCoverAction.NONE
+                conflicts += "cover"
+                MyBooksCoverAction.NONE
             }
-            remoteCoverChanged && remoteCover != null -> MyBooksCoverAction.DOWNLOAD_REMOTE
+            remoteCoverChanged -> MyBooksCoverAction.DOWNLOAD_REMOTE
             else -> MyBooksCoverAction.NONE
         }
 
@@ -151,7 +144,8 @@ object MyBooksMerge {
         editedAt: JSONObject,
         remoteEpoch: Long,
         patch: JSONObject,
-        drop: MutableSet<String>
+        drop: MutableSet<String>,
+        conflicts: MutableList<String>
     ) {
         val baseMap = base.optJSONObject("identifiers").orEmptyMap()
         val remoteMap = remote.optJSONObject("identifiers").orEmptyMap()
@@ -184,8 +178,7 @@ object MyBooksMerge {
                 drop += key
                 continue
             }
-            if (editedAt.optLong(key, 0L) > remoteEpoch) patchIds.put(type, localValue)
-            else drop += key
+            conflicts += key
         }
         if (patchIds.length() > 0) patch.put("identifiers", patchIds)
     }
@@ -197,7 +190,8 @@ object MyBooksMerge {
         editedAt: JSONObject,
         remoteEpoch: Long,
         patch: JSONObject,
-        drop: MutableSet<String>
+        drop: MutableSet<String>,
+        conflicts: MutableList<String>
     ) {
         val baseMap = base.optJSONObject("custom").orEmptyAnyMap()
         val remoteMap = remote.optJSONObject("custom").orEmptyAnyMap()
@@ -228,8 +222,7 @@ object MyBooksMerge {
                 drop += key
                 continue
             }
-            if (editedAt.optLong(key, 0L) > remoteEpoch) patchCustom.put(label, localValue ?: "")
-            else drop += key
+            conflicts += key
         }
         if (patchCustom.length() > 0) patch.put("custom", patchCustom)
     }
@@ -242,7 +235,8 @@ object MyBooksMerge {
         editedAt: JSONObject,
         remoteEpoch: Long,
         patch: JSONObject,
-        drop: MutableSet<String>
+        drop: MutableSet<String>,
+        conflicts: MutableList<String>
     ): Boolean? {
         if (!overrides.has("read_logs")) return null
         val baseLogs = canonicalLogs(base.opt("read_logs"))
@@ -269,16 +263,8 @@ object MyBooksMerge {
             drop += "read_logs"
             return null
         }
-        return if (editedAt.optLong("read_logs", 0L) > remoteEpoch) {
-            patch.put("read_logs", logsToJson(localLogs))
-            patch.put("start_date", "")
-            patch.put("finish_date", "")
-            patch.put("read_count", 0)
-            true
-        } else {
-            drop += "read_logs"
-            null
-        }
+        conflicts += "read_logs"
+        return false
     }
 
     private fun JSONObject?.orEmptyMap(): Map<String, String> {
@@ -359,7 +345,7 @@ object MyBooksMerge {
         return array
     }
 
-    private fun mergeTags(base: List<String>, local: List<String>, remote: List<String>): List<String> {
+    internal fun mergeTags(base: List<String>, local: List<String>, remote: List<String>): List<String> {
         val baseKeys = base.map { it.lowercase(Locale.ROOT) }.toSet()
         val localKeys = local.map { it.lowercase(Locale.ROOT) }.toSet()
         val localRemoved = baseKeys - localKeys

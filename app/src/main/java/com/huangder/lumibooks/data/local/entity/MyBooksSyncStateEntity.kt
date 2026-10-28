@@ -2,6 +2,7 @@ package com.huangder.lumibooks.data.local.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 /**
  * 单本服务器书的三方同步基线:
@@ -20,7 +21,9 @@ data class MyBooksSyncStateEntity(
     val coverDirty: Boolean = false,
     val coverEditedAt: Long = 0L,
     val lastSyncAt: Long = 0L,
-    val lastError: String? = null
+    val lastError: String? = null,
+    @ColumnInfo(defaultValue = "0") val remoteDeleted: Boolean = false,
+    @ColumnInfo(defaultValue = "'[]'") val conflictFieldsJson: String = "[]"
 )
 
 @Entity(tableName = "mybooks_pending_delete")
@@ -29,5 +32,9 @@ data class MyBooksPendingDeleteEntity(
     val bookId: String,
     val deletedAt: Long,
     val lastAttemptAt: Long = 0L,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val expectedRevision: Long? = null,
+    @ColumnInfo(defaultValue = "''") val expectedUuid: String = "",
+    @ColumnInfo(defaultValue = "''") val expectedUpdatedAt: String = "",
+    @ColumnInfo(defaultValue = "''") val title: String = ""
 )

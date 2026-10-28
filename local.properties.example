@@ -1,0 +1,8 @@
+# Copy to local.properties; this example contains no signing credentials.
+# Let Android Studio set sdk.dir, or set your own SDK path.
+# sdk.dir=/absolute/path/to/Android/Sdk
+# Release signing is optional. Without it assembleRelease produces unsigned APKs.
+# MYBOOKS_KEYSTORE_FILE=/absolute/path/to/private-release.jks
+# MYBOOKS_KEYSTORE_PASSWORD=
+# MYBOOKS_KEY_ALIAS=
+# MYBOOKS_KEY_PASSWORD=

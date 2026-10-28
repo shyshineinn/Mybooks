@@ -165,6 +165,15 @@ class DetailActivity : ComponentActivity() {
                         "external_tts_config" -> DetailPage(stringResource(R.string.title_external_tts_configuration), onBack) {
                             ExternalTtsConfigurationDetail(viewModel, onSaved = onBack)
                         }
+                        "mybooks" -> DetailPage(stringResource(R.string.mybooks_server_title), onBack) {
+                            MyBooksSettingsDetail(requestLocalNetworkPermission, onConfigure = {
+                                startActivity(Intent(this@DetailActivity, DetailActivity::class.java)
+                                    .putExtra("category", "mybooks_config"))
+                            })
+                        }
+                        "mybooks_config" -> DetailPage(stringResource(R.string.mybooks_server_configure), onBack) {
+                            MyBooksConfigurationDetail(requestLocalNetworkPermission, onSaved = onBack)
+                        }
                         "webdav" -> DetailPage(stringResource(R.string.title_webdav), onBack) {
                             WebdavSettingsDetail(viewModel, requestLocalNetworkPermission) {
                                 startActivity(
