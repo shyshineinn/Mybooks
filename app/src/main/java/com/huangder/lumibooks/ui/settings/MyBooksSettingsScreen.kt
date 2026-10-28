@@ -1,5 +1,16 @@
 package com.huangder.lumibooks.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.Checkbox
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import com.huangder.lumibooks.data.sync.MyBooksConfig
+import com.huangder.lumibooks.data.sync.MyBooksSyncPreferences
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -41,7 +52,7 @@ import com.huangder.lumibooks.ui.theme.AppRoundedCornerShape
 import com.huangder.lumibooks.ui.theme.AppSpace
 import com.huangder.lumibooks.ui.theme.AppType
 
-/** 与 WebDAV 共用状态页/配置页、分组卡片和按钮，主题材质由公共组件处理。 */
+/** Same status, content, mode and action layout as WebDAV; backend operations remain separate. */
 @Composable
 fun MyBooksSettingsDetail(
     requestLocalNetworkPermission: RequestLocalNetworkPermission,
@@ -52,73 +63,69 @@ fun MyBooksSettingsDetail(
     val connection by viewModel.connection.collectAsState()
     val syncing by viewModel.isSyncing.collectAsState()
     val issues by viewModel.syncIssues.collectAsState(initial = emptyList())
-    val syncStatus by viewModel.syncStatus.collectAsState(initial = MyBooksSyncStatus())
-    val pendingCount by viewModel.pendingSyncCount.collectAsState(initial = 0)
-    val backgroundSync by viewModel.backgroundSync.collectAsState(initial = MyBooksSyncWorkState())
-    val busy = state.busy || syncing
+    val status by viewModel.syncStatus.collectAsState(initial = MyBooksSyncStatus())
+    val pending by viewModel.pendingSyncCount.collectAsState(initial = 0)
+    val preferences by viewModel.preferences.collectAsState()
+    val enabled = connection.loggedIn && preferences.enabled
+    val hasToken = MyBooksConfig.hasWriteToken()
+    val lastSync = if (status.lastSuccessAt > 0) stringResource(R.string.webdav_last_sync_time,
+        remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }.format(Date(status.lastSuccessAt)))
+        else stringResource(R.string.webdav_not_configured)
     Column(Modifier.fillMaxWidth().padding(horizontal = AppSpace.md, vertical = AppSpace.sm),
         verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
-        SyncConnectionStatusCard(
-            isConnected = connection.loggedIn && syncStatus.failure != MyBooksSyncFailure.AUTH,
-            statusText = stringResource(
-                when {
-                    !connection.loggedIn -> R.string.mybooks_server_disconnected
-                    syncStatus.failure == MyBooksSyncFailure.AUTH -> R.string.mybooks_sync_auth_required
-                    else -> R.string.mybooks_server_connected
+        SyncConnectionStatusCard(enabled, stringResource(if (enabled) R.string.mybooks_server_connected else R.string.mybooks_server_disconnected),
+            listOf(lastSync), syncing)
+        if (!enabled) SyncPrimaryButton(stringResource(R.string.mybooks_server_configure), onClick = onConfigure)
+        if (enabled && hasToken) {
+            SyncSectionCard {
+                SyncModeSelector(if (preferences.automatic) "auto" else "manual", viewModel::setSyncMode)
+                androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(1.dp).background(AppColors.Divider))
+                SyncContentSelector(preferences.content, viewModel::setSyncContent)
+            }
+        }
+        if (enabled) {
+            SyncSectionCard {
+                if (hasToken) {
+                    SyncActionButton(stringResource(if (state.testing) R.string.webdav_test_running else R.string.webdav_test_connection),
+                        AppIcons.Pulse, enabled = !state.testing) {
+                        requestLocalNetworkPermission(connection.serverUrl, { viewModel.testConnection(connection.serverUrl) }, viewModel::showLocalNetworkPermissionRequired)
+                    }
+                    if (state.testMessage.isNotBlank()) Text(state.testMessage, fontSize = AppType.Caption,
+                        color = if (state.testSucceeded) AppColors.TextSecondary else MaterialTheme.colorScheme.error)
+                    SyncActionButton(stringResource(R.string.webdav_sync_now), AppIcons.ArrowsClockwise) {
+                        if (!syncing && !state.busy) requestLocalNetworkPermission(connection.serverUrl, viewModel::syncNow, viewModel::showLocalNetworkPermissionRequired)
+                    }
+                    val result = state.message.ifBlank { status.message }
+                    if (result.isNotBlank()) Text(result, fontSize = AppType.Caption,
+                        color = if (state.message.isNotBlank() && !state.succeeded || state.message.isBlank() && status.failure != null) MaterialTheme.colorScheme.error else AppColors.TextSecondary)
+                    if (pending > 0) Text(stringResource(R.string.mybooks_sync_pending_count, pending), fontSize = AppType.Caption, color = AppColors.TextSecondary)
                 }
-            ),
-            details = listOf(connection.serverUrl, connection.username),
-            isBusy = busy
-        )
-        WebdavPrimaryButton(label = stringResource(
-            if (connection.loggedIn && syncStatus.failure == MyBooksSyncFailure.AUTH) R.string.mybooks_sync_relogin
-            else R.string.mybooks_server_configure
-        ), enabled = !busy, onClick = onConfigure)
-        if (connection.loggedIn) {
-            MyBooksSyncStatusSection(syncStatus, backgroundSync, syncing, pendingCount)
-            WebdavSectionCard {
-                WebdavSecondaryButton(stringResource(R.string.webdav_test_connection), AppIcons.Pulse, enabled = !busy) {
-                    requestLocalNetworkPermission(connection.serverUrl,
-                        { viewModel.testConnection(connection.serverUrl) }, viewModel::showLocalNetworkPermissionRequired)
+                SyncActionButton(stringResource(R.string.mybooks_disable), AppIcons.CloudSlash, onClick = viewModel::disable)
+                SyncActionButton(stringResource(R.string.webdav_clear_config), AppIcons.Trash, destructive = true, onClick = viewModel::clearConfiguration)
+            }
+        }
+        if (!enabled) MyBooksConnectionMessage(state)
+        if (issues.isNotEmpty()) SyncSectionCard {
+            Text(stringResource(R.string.mybooks_sync_issues_title), fontSize = AppType.Body, color = AppColors.TextPrimary)
+            issues.forEach { issue ->
+                Text(issue.title, fontSize = AppType.BodySmall, color = AppColors.TextPrimary)
+                Text(issue.message, fontSize = AppType.Caption, color = MaterialTheme.colorScheme.error)
+                if (issue.canResolve && enabled) {
+                    Text(stringResource(if (issue.readingConflict) R.string.mybooks_reading_conflict else R.string.mybooks_conflict_choice_notice), fontSize = AppType.Caption, color = AppColors.TextSecondary)
+                    SyncActionButton(stringResource(R.string.mybooks_conflict_keep_local), AppIcons.CheckCircle, enabled = !syncing) {
+                        requestLocalNetworkPermission(connection.serverUrl, { viewModel.resolveSyncIssue(issue.bookId, true, issue.readingConflict) }, viewModel::showLocalNetworkPermissionRequired)
+                    }
+                    SyncActionButton(stringResource(R.string.mybooks_conflict_use_server), AppIcons.Cloud, enabled = !syncing) {
+                        requestLocalNetworkPermission(connection.serverUrl, { viewModel.resolveSyncIssue(issue.bookId, false, issue.readingConflict) }, viewModel::showLocalNetworkPermissionRequired)
+                    }
                 }
-                WebdavSecondaryButton(stringResource(R.string.webdav_sync_now), AppIcons.ArrowsClockwise, enabled = !busy) {
-                    requestLocalNetworkPermission(connection.serverUrl, viewModel::syncNow, viewModel::showLocalNetworkPermissionRequired)
-                }
-                WebdavSecondaryButton(stringResource(R.string.mybooks_server_logout), AppIcons.CloudSlash, destructive = true, enabled = !busy) {
-                    viewModel.logout()
+                if (issue.pendingDeletion && enabled) SyncActionButton(stringResource(R.string.mybooks_cancel_pending_delete), AppIcons.ArrowsClockwise, enabled = !syncing) {
+                    requestLocalNetworkPermission(connection.serverUrl, { viewModel.cancelPendingDelete(issue.bookId) }, viewModel::showLocalNetworkPermissionRequired)
                 }
             }
         }
-        MyBooksConnectionMessage(state)
-        if (issues.isNotEmpty()) {
-            WebdavSectionCard {
-                Text(stringResource(R.string.mybooks_sync_issues_title), fontSize = AppType.Body, color = AppColors.TextPrimary)
-                for (issue in issues) {
-                    Text(issue.title, fontSize = AppType.BodySmall, color = AppColors.TextPrimary)
-                    Text(issue.message, fontSize = AppType.Caption, color = MaterialTheme.colorScheme.error)
-                    if (issue.canResolve && connection.loggedIn) {
-                        Text(stringResource(R.string.mybooks_conflict_choice_notice), fontSize = AppType.Caption, color = AppColors.TextSecondary)
-                        WebdavSecondaryButton(stringResource(R.string.mybooks_conflict_keep_local), AppIcons.CheckCircle, enabled = !busy) {
-                            requestLocalNetworkPermission(connection.serverUrl,
-                                { viewModel.resolveSyncIssue(issue.bookId, true, issue.readingConflict) }, viewModel::showLocalNetworkPermissionRequired)
-                        }
-                        WebdavSecondaryButton(stringResource(R.string.mybooks_conflict_use_server), AppIcons.Cloud, enabled = !busy) {
-                            requestLocalNetworkPermission(connection.serverUrl,
-                                { viewModel.resolveSyncIssue(issue.bookId, false, issue.readingConflict) }, viewModel::showLocalNetworkPermissionRequired)
-                        }
-                    }
-                    if (issue.pendingDeletion && connection.loggedIn) {
-                        WebdavSecondaryButton(stringResource(R.string.mybooks_cancel_pending_delete), AppIcons.ArrowsClockwise, enabled = !busy) {
-                            requestLocalNetworkPermission(connection.serverUrl,
-                                { viewModel.cancelPendingDelete(issue.bookId) }, viewModel::showLocalNetworkPermissionRequired)
-                        }
-                    }
-                    Spacer(Modifier.height(AppSpace.sm))
-                }
-            }
-        }
-        Text(stringResource(R.string.mybooks_server_disclosure), fontSize = AppType.Caption, color = AppColors.TextSecondary)
-        Spacer(Modifier.height(AppSpace.xl))
+        SyncDisclosureCard(stringResource(R.string.mybooks_server_title), stringResource(R.string.mybooks_server_disclosure))
+        Spacer(Modifier.height(32.dp))
     }
 }
 
@@ -142,7 +149,7 @@ fun MyBooksConfigurationDetail(
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = AppSpace.md, vertical = AppSpace.sm),
         verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
-        WebdavSectionCard {
+        SyncSectionCard {
             OutlinedTextField(serverUrl, { serverUrl = it }, enabled = !busy,
                 label = { Text(stringResource(R.string.webdav_server_url_label)) },
                 placeholder = { Text("https://books.example.com") },
@@ -164,15 +171,16 @@ fun MyBooksConfigurationDetail(
                 }, singleLine = true, shape = AppRoundedCornerShape(AppRadius.md), modifier = Modifier.fillMaxWidth())
             Text(stringResource(R.string.mybooks_server_credential_notice), fontSize = AppType.Caption, color = AppColors.TextSecondary)
         }
-        WebdavPrimaryButton(stringResource(if (state.busy) R.string.mybooks_server_connecting else R.string.mybooks_server_login),
-            enabled = !busy && serverUrl.isNotBlank() && username.isNotBlank() && password.isNotEmpty()) {
+        SyncPrimaryButton(stringResource(if (state.busy) R.string.mybooks_server_connecting else R.string.mybooks_enable),
+            enabled = !busy && serverUrl.isNotBlank() && username.isNotBlank() && (password.isNotEmpty() || connection.loggedIn && serverUrl.trim().trimEnd('/') == connection.serverUrl && username.trim() == connection.username)) {
             requestLocalNetworkPermission(serverUrl, { viewModel.login(serverUrl, username, password) }, viewModel::showLocalNetworkPermissionRequired)
         }
-        WebdavSectionCard {
-            WebdavSecondaryButton(stringResource(R.string.webdav_test_connection), AppIcons.Pulse, enabled = !busy && serverUrl.isNotBlank()) {
+        SyncSectionCard {
+            SyncActionButton(stringResource(R.string.webdav_test_connection), AppIcons.Pulse, enabled = !busy && serverUrl.isNotBlank()) {
                 requestLocalNetworkPermission(serverUrl, { viewModel.testConnection(serverUrl) }, viewModel::showLocalNetworkPermissionRequired)
             }
         }
+        if (state.testMessage.isNotBlank()) Text(state.testMessage, fontSize = AppType.Caption, color = if (state.testSucceeded) AppColors.TextSecondary else MaterialTheme.colorScheme.error)
         MyBooksConnectionMessage(state)
         Spacer(Modifier.height(AppSpace.xl))
     }
@@ -183,43 +191,4 @@ private fun MyBooksConnectionMessage(state: MyBooksSettingsUiState) {
     if (state.message.isNotBlank()) Text(state.message, fontSize = AppType.Caption,
         color = if (state.succeeded) AppColors.TextSecondary else MaterialTheme.colorScheme.error,
         modifier = Modifier.fillMaxWidth())
-}
-
-@Composable
-private fun MyBooksSyncStatusSection(
-    status: MyBooksSyncStatus,
-    work: MyBooksSyncWorkState,
-    syncing: Boolean,
-    pendingCount: Int
-) {
-    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
-    val stateLabel = when {
-        syncing -> R.string.mybooks_sync_running
-        status.failure == MyBooksSyncFailure.AUTH -> R.string.mybooks_sync_auth_required
-        status.failure == MyBooksSyncFailure.PERMISSION -> R.string.mybooks_server_local_network_required
-        work.retrying -> R.string.mybooks_sync_retry_waiting
-        work.queued -> R.string.mybooks_sync_waiting
-        status.retryStopped -> R.string.mybooks_sync_retry_stopped
-        status.failure != null -> R.string.mybooks_sync_failed
-        status.lastAttemptAt > status.lastFinishedAt -> R.string.mybooks_sync_interrupted
-        status.lastSuccessAt > 0L -> R.string.mybooks_sync_up_to_date
-        else -> R.string.mybooks_sync_not_yet
-    }
-    WebdavSectionCard {
-        Text(stringResource(R.string.mybooks_sync_status_title), fontSize = AppType.Body, color = AppColors.TextPrimary)
-        Text(stringResource(stateLabel), fontSize = AppType.BodySmall, color =
-            if (status.failure != null && !work.queued && !syncing) MaterialTheme.colorScheme.error
-            else AppColors.TextSecondary)
-        Text(
-            if (status.lastSuccessAt > 0L) stringResource(R.string.mybooks_sync_last_success,
-                dateFormat.format(Date(status.lastSuccessAt))) else stringResource(R.string.mybooks_sync_no_success),
-            fontSize = AppType.Caption, color = AppColors.TextSecondary
-        )
-        if (status.lastAttemptAt > 0L) Text(stringResource(R.string.mybooks_sync_last_attempt,
-            dateFormat.format(Date(status.lastAttemptAt))), fontSize = AppType.Caption, color = AppColors.TextSecondary)
-        Text(stringResource(R.string.mybooks_sync_pending_count, pendingCount),
-            fontSize = AppType.Caption, color = AppColors.TextSecondary)
-        if (status.message.isNotBlank()) Text(status.message, fontSize = AppType.Caption,
-            color = if (status.failure != null) MaterialTheme.colorScheme.error else AppColors.TextSecondary)
-    }
 }

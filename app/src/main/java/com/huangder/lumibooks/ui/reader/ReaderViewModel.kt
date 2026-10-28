@@ -597,6 +597,7 @@ class ReaderViewModel @Inject constructor(
     private val webdavSyncManager: com.huangder.lumibooks.data.sync.WebdavSyncManager,
     private val webdavAutoSyncScheduler: com.huangder.lumibooks.data.sync.WebdavAutoSyncScheduler,
     private val myBooksSyncManager: MyBooksSyncManager,
+    private val myBooksRealtimeSync: com.huangder.lumibooks.data.sync.MyBooksRealtimeSync,
     private val fontDownloadManager: com.huangder.lumibooks.util.FontDownloadManager,
     private val highlightRuleRepository: HighlightRuleRepository,
     private val highlightRuleMaterializer: HighlightRuleMaterializer,
@@ -888,8 +889,7 @@ class ReaderViewModel @Inject constructor(
             pausedTime = System.currentTimeMillis()
             isPaused = true
             // 保存当前会话，防止进程被杀丢失数据
-            saveProgress()
-            saveReadingSession()
+            saveReadingCheckpoint()
             android.util.Log.e("READING", "App backgrounded, session saved")
         }
     }
@@ -973,7 +973,6 @@ class ReaderViewModel @Inject constructor(
             coroutineScope {
                 val bookDeferred = async {
                     ReaderOpenPerformance.traceStageSuspend(bookId, ReaderOpenStage.BOOK_RECORD) {
-                        if (bookId.startsWith(MyBooksConfig.BOOK_ID_PREFIX)) myBooksSyncManager.prepareReading(bookId)
                         bookRepository.getBookById(bookId)
                     }
                 }
@@ -3799,8 +3798,7 @@ class ReaderViewModel @Inject constructor(
     fun saveAndPause() {
         flushNativePageIndex()
         continuousProgressJob?.cancel()
-        saveProgress()
-        saveReadingSession()
+        saveReadingCheckpoint()
         webdavAutoSyncScheduler.onReaderExited()
     }
 
@@ -6555,6 +6553,25 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
+    private var exitProgressSave: Job? = null
+
+    private fun saveReadingCheckpoint() {
+        if (!_uiState.value.book.let { it != null && MyBooksConfig.isMyBooks(it) }) {
+            saveProgress()
+            saveReadingSession()
+            return
+        }
+        // Capture the session before dispatch so pause + disposal never count it twice.
+        saveReadingSession()
+        val state = _uiState.value
+        val writeVersion = ++progressWriteVersion
+        exitProgressSave = myBooksRealtimeSync.saveReaderState {
+            progressWriteMutex.withLock {
+                if (writeVersion == progressWriteVersion) saveProgressFor(state)
+            }
+        }
+    }
+
     private fun saveProgress() {
         val state = _uiState.value
         val writeVersion = ++progressWriteVersion
@@ -6847,8 +6864,16 @@ class ReaderViewModel @Inject constructor(
         cancelOpenDeferredWork()
         cacheRecoveryJob?.cancel()
         largeTxtIndexJob?.cancel()
-        parser?.close()
-        runCatching { renderSession?.close() }
+        val closingParser = parser
+        val closingSession = renderSession
+        val closeResources = {
+            runCatching { closingParser?.close() }
+            runCatching { closingSession?.close() }
+            Unit
+        }
+        val pendingSave = exitProgressSave
+        if (pendingSave != null && !pendingSave.isCompleted) pendingSave.invokeOnCompletion { closeResources() }
+        else closeResources()
         renderSession = null
         preloadCache.clear()
         super.onCleared()

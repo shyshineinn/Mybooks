@@ -19,7 +19,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,9 +49,11 @@ class MyBooksSyncWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
     private val syncManager: MyBooksSyncManager,
-    private val stateStore: MyBooksSyncStateStore
+    private val stateStore: MyBooksSyncStateStore,
+    private val preferences: MyBooksSyncPreferencesStore
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
+        if (!preferences.automatic()) return Result.success()
         if (!MyBooksConfig.hasWriteToken() || inputData.getString(MyBooksSyncScheduler.SERVER_KEY) != MyBooksConfig.SERVER_URL) {
             return Result.success()
         }
@@ -78,19 +79,11 @@ internal fun canEnqueueMyBooksSync(unfinished: List<WorkInfo.State>, followUpIfR
 @Singleton
 class MyBooksSyncScheduler @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val stateStore: MyBooksSyncStateStore
+    private val stateStore: MyBooksSyncStateStore,
+    private val preferences: MyBooksSyncPreferencesStore
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val enqueueMutex = Mutex()
-    private val observerStarted = java.util.concurrent.atomic.AtomicBoolean(false)
-
-    @OptIn(kotlinx.coroutines.FlowPreview::class)
-    fun startReadingObserver() {
-        if (!observerStarted.compareAndSet(false, true)) return
-        scope.launch { stateStore.automaticReadingChanges.debounce(1_500).collect { pending ->
-            if (pending.isNotEmpty()) schedulePush()
-        } }
-    }
     val workState get() = WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK_NAME).map { infos ->
         val pending = infos.filter { !it.state.isFinished }
         MyBooksSyncWorkState(
@@ -101,14 +94,15 @@ class MyBooksSyncScheduler @Inject constructor(
 
     fun scheduleIfNeeded(maxAgeMs: Long = 10 * 60_000L) {
         scope.launch {
-            if (!MyBooksConfig.hasWriteToken()) return@launch
+            if (!preferences.automatic() || !MyBooksConfig.hasWriteToken()) return@launch
             val status = stateStore.status.first()
             if (shouldScheduleMyBooksSync(status, stateStore.pendingCount.first(),
                     System.currentTimeMillis(), maxAgeMs)) enqueue(0)
         }
     }
 
-    fun schedulePush() { scope.launch { enqueue(1_500, followUpIfRunning = true) } }
+    fun schedulePush() { scope.launch { enqueue(5_000, followUpIfRunning = true) } }
+    fun scheduleImportedBooks() { scope.launch { enqueue(0, followUpIfRunning = true) } }
     fun scheduleImmediate() { scope.launch { enqueue(0) } }
     fun scheduleRetry() { scope.launch { enqueue(30_000) } }
     suspend fun cancel() = withContext(Dispatchers.IO) {
@@ -117,7 +111,7 @@ class MyBooksSyncScheduler @Inject constructor(
     }
 
     private suspend fun enqueue(delayMs: Long, followUpIfRunning: Boolean = false) = enqueueMutex.withLock {
-        if (!MyBooksConfig.hasWriteToken() || stateStore.status.first().failure == MyBooksSyncFailure.AUTH) return@withLock
+        if (!preferences.automatic() || !MyBooksConfig.hasWriteToken() || stateStore.status.first().failure == MyBooksSyncFailure.AUTH) return@withLock
         val manager = WorkManager.getInstance(context)
         val unfinished = manager.getWorkInfosForUniqueWork(WORK_NAME).get().filter { !it.state.isFinished }
         // An enqueued/backing-off successor will read all current edits when it starts.

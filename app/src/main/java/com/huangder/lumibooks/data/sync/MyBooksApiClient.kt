@@ -1,6 +1,7 @@
 package com.huangder.lumibooks.data.sync
 
 import com.huangder.lumibooks.data.sync.MyBooksConfig.SERVER_URL
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType
@@ -272,6 +273,43 @@ class MyBooksApiClient(
                 uuid = json.optTextOrNull("uuid"),
                 revision = json.optLong("revision", 0L).takeIf { it > 0 }
             )
+        }
+    }
+
+    suspend fun fetchPortableState(): JSONObject = JSONObject(getRaw("/api/sync/state"))
+    suspend fun putPortableState(libraryId: String, revision: Long, data: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$SERVER_URL/api/sync/state")
+            .put(jsonBody(JSONObject().put("library_id", libraryId).put("expected_revision", revision).put("data", data).toString())).build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
+            JSONObject(body)
+        }
+    }
+    suspend fun uploadPortableAsset(file: File, name: String) = withContext(Dispatchers.IO) {
+        require(name.matches(Regex("[a-f0-9]{64}[.][a-z0-9]{1,10}")))
+        val coroutine = kotlinx.coroutines.currentCoroutineContext()
+        val body = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength() = file.length()
+            override fun writeTo(sink: okio.BufferedSink) {
+                file.inputStream().use { input -> val buffer = ByteArray(64 * 1024); while (true) {
+                    coroutine.ensureActive()
+                    val count = input.read(buffer); if (count < 0) break; sink.write(buffer, 0, count)
+                } }
+            }
+        }
+        client.newCall(Request.Builder().url("$SERVER_URL/api/sync/state/assets/$name").put(body).build()).execute().use { response ->
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
+        }
+    }
+    suspend fun downloadPortableAsset(name: String, target: File, size: Long) =
+        downloadFile("$SERVER_URL/api/sync/state/assets/$name", target, size) { _, _ -> }
+
+    suspend fun fileSha256(url: String): String? = withContext(Dispatchers.IO) {
+        client.newCall(Request.Builder().url(url).head().build()).execute().use { response ->
+            if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
+            response.header("X-Content-SHA256")?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
         }
     }
 

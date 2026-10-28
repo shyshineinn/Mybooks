@@ -76,7 +76,7 @@ fun CloudAwareBookDeleteDialog(
     onDismiss: () -> Unit,
     onDelete: (BookDeleteMode) -> Unit
 ) {
-    val myBooksOnly = hasMyBooksBooks && !hasRemoteBooks
+    val hasCloudBooks = hasRemoteBooks || hasMyBooksBooks
     LiquidGlassAlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -91,33 +91,10 @@ fun CloudAwareBookDeleteDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    when {
-                        myBooksOnly -> stringResource(R.string.mybooks_delete_message)
-                        hasRemoteBooks -> stringResource(R.string.delete_cloud_book_choice, bookCount)
-                        else -> stringResource(R.string.delete_selected_books_confirm, bookCount)
-                    }
+                    if (hasCloudBooks) stringResource(R.string.delete_cloud_book_choice, bookCount)
+                    else stringResource(R.string.delete_selected_books_confirm, bookCount)
                 )
-                if (hasMyBooksBooks && hasRemoteBooks) {
-                    Text(
-                        text = stringResource(R.string.mybooks_delete_mixed_hint),
-                        color = AppColors.TextSecondary,
-                        fontSize = 13.sp
-                    )
-                }
-                if (myBooksOnly && !canWriteMyBooksServer) {
-                    Text(
-                        text = stringResource(R.string.mybooks_delete_readonly_hint),
-                        color = AppColors.TextSecondary,
-                        fontSize = 13.sp
-                    )
-                }
-                if (!myBooksOnly) {
-                    Text(
-                        text = stringResource(R.string.force_delete_hint),
-                        color = AppColors.TextSecondary,
-                        fontSize = 13.sp
-                    )
-                }
+                Text(text = stringResource(R.string.force_delete_hint), color = AppColors.TextSecondary, fontSize = 13.sp)
             }
         },
         confirmButton = {
@@ -125,22 +102,7 @@ fun CloudAwareBookDeleteDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (myBooksOnly) {
-                    LiquidGlassTextButton(
-                        text = stringResource(R.string.mybooks_delete_local_only),
-                        tintedColor = Color(0xFFD92D3A),
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { onDelete(BookDeleteMode.LOCAL_ONLY) }
-                    )
-                    if (canWriteMyBooksServer) {
-                        LiquidGlassTextButton(
-                            text = stringResource(R.string.mybooks_delete_local_and_server),
-                            tintedColor = Color(0xFFD92D3A),
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = { onDelete(BookDeleteMode.LOCAL_AND_CLOUD) }
-                        )
-                    }
-                } else if (hasRemoteBooks) {
+                if (hasCloudBooks) {
                     LiquidGlassTextButton(
                         text = stringResource(R.string.delete_local_only),
                         tintedColor = Color(0xFFD92D3A),
@@ -161,7 +123,7 @@ fun CloudAwareBookDeleteDialog(
                         onClick = { onDelete(BookDeleteMode.LOCAL_ONLY) }
                     )
                 }
-                if (!myBooksOnly) {
+                run {
                     LiquidGlassTextButton(
                         text = stringResource(R.string.force_delete),
                         tintedColor = Color(0xFFB42318),

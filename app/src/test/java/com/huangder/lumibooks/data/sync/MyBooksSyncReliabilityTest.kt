@@ -57,7 +57,10 @@ class MyBooksSyncReliabilityTest {
         reading = MyBooksReadingSync(db, SyncIdentityStore(db.syncStateDao()), context)
         store = MyBooksSyncStateStore(db.syncStateDao(), db.myBooksSyncStateDao(), repository, db.tagDao(), reading)
         manager = MyBooksSyncManager(repository, db.tagDao(), db.syncStateDao(), db.myBooksSyncStateDao(),
-            store, MyBooksSyncScheduler(context, store), LocalNetworkAccessManager(context), reading, context)
+            store, MyBooksSyncScheduler(context, store, MyBooksSyncPreferencesStore(db.syncStateDao())),
+            LocalNetworkAccessManager(context), reading, context, MyBooksSyncPreferencesStore(db.syncStateDao()),
+            javax.inject.Provider { error("portable capability not declared by this fixture") },
+            javax.inject.Provider { MyBooksBookTransfer(db, manager, context) }, db)
     }
 
     @After fun cleanup() {
@@ -276,4 +279,221 @@ class MyBooksSyncReliabilityTest {
         assertEquals(MyBooksSyncFailure.OTHER, classifyMyBooksSyncFailure(SSLHandshakeException("certificate")))
         assertEquals(MyBooksSyncFailure.CONFLICT, classifyMyBooksSyncFailure(MyBooksHttpException(409, "{}")))
     }
+
+    @Test fun downloadingServerUpdatesNeverUploadsLocalEditsAndDoesNotConsumeTheFullSyncCursor() = runBlocking {
+        localBook(title = "Offline title", readAt = 0)
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = remote().toString(),
+            overridesJson = "{\"title\":\"Offline title\"}"))
+        db.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity(MyBooksSyncManager.KEY_CURSOR, "before"))
+        val changed = remote(revision = 2).put("author", "Updated author")
+        server.enqueue(MockResponse().setBody(delta("after", false, changed)))
+        server.enqueue(MockResponse().setBody(changed.toString()))
+        val result = manager.syncNow(scheduleRetry = false, direction = MyBooksSyncDirection.DOWNLOAD)
+        assertTrue(result.message, result.success)
+        assertEquals("Offline title", db.bookDao().getBookById("mybooks-1")!!.title)
+        assertEquals("Updated author", db.bookDao().getBookById("mybooks-1")!!.author)
+        assertTrue(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson.contains("Offline title"))
+        assertEquals("before", db.syncStateDao().getValue(MyBooksSyncManager.KEY_CURSOR))
+        assertEquals(2, server.requestCount)
+        repeat(2) { assertEquals("GET", server.takeRequest().method) }
+    }
+
+    @Test fun selectedUploadsLeaveOtherBooksPending() = runBlocking {
+        for (id in 1..2) {
+            localBook("mybooks-" + id, "Local " + id, 0)
+            db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-" + id, id.toLong(),
+                baseJson = remote().put("id", id).put("uuid", "book-" + id).toString(),
+                overridesJson = JSONObject().put("title", "Local " + id).toString()))
+        }
+        server.enqueue(MockResponse().setBody(delta("not-consumed", true)))
+        server.enqueue(MockResponse().setBody(remote().put("uuid", "book-1").toString()))
+        server.enqueue(MockResponse().setBody(remote("Local 1", 2).put("uuid", "book-1").toString()))
+        assertTrue(manager.syncNow(false, MyBooksSyncDirection.UPLOAD, setOf("mybooks-1")).success)
+        assertEquals("{}", db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+        assertTrue(db.myBooksSyncStateDao().get("mybooks-2")!!.overridesJson.contains("Local 2"))
+        assertNull(db.syncStateDao().getValue(MyBooksSyncManager.KEY_CURSOR))
+        assertEquals(3, server.requestCount)
+        assertEquals("GET", server.takeRequest().method)
+        assertEquals("/api/books/1", server.takeRequest().path)
+        assertEquals("PATCH", server.takeRequest().method)
+    }
+
+    @Test fun serverManualModePersistsAndSkipsAutomaticReaderRefreshWithoutChangingWebdavState() = runBlocking {
+        val preferences = MyBooksSyncPreferencesStore(db.syncStateDao())
+        db.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity("webdav_keep", "unchanged"))
+        preferences.setAutomatic(false)
+        assertFalse(MyBooksSyncPreferencesStore(db.syncStateDao()).automatic())
+        db.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity(MyBooksSyncManager.KEY_LIBRARY_ID, "test-library"))
+        db.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity(MyBooksSyncManager.KEY_READING_CAPABILITY, "true"))
+        manager.syncReadingChanges()
+        assertEquals(0, server.requestCount)
+        assertEquals("unchanged", db.syncStateDao().getValue("webdav_keep"))
+        server.enqueue(MockResponse().setBody(snapshot()))
+        assertTrue(manager.syncNow(scheduleRetry = false).success)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test fun uploadedBookAssociationPreservesItsCopyAnnotationsStatisticsTagsAndFolder() = runBlocking {
+        localBook("local", "Edited during upload", 999)
+        val rows = db.syncStateDao()
+        rows.upsertBookmarks(listOf(com.huangder.lumibooks.data.local.entity.BookmarkEntity(bookId = "local", chapterIndex = 0,
+            position = .3f, title = "Saved", createdAt = 1, syncId = "mark")))
+        rows.upsertNotes(listOf(com.huangder.lumibooks.data.local.entity.NoteEntity(bookId = "local", chapterIndex = 0,
+            startPosition = 1, endPosition = 2, selectedText = "quote", note = "Kept", color = "yellow", createdAt = 1, syncId = "note")))
+        rows.upsertReadingRecords(listOf(com.huangder.lumibooks.data.local.entity.ReadingRecordEntity(bookId = "local", date = "2026-10-28",
+            duration = 123, startTime = 1, endTime = 124, sourceDeviceId = "device")))
+        db.tagDao().createAndAssignTag("local", TagEntity("tag", "Tag", "tag", 1))
+        db.folderDao().insertFolder(com.huangder.lumibooks.data.local.entity.FolderEntity("folder", "Folder", "folder", null, 1))
+        db.openHelper.writableDatabase.execSQL("INSERT INTO book_folder_cross_refs(bookId,folderId,updatedAt) VALUES('local','folder',1)")
+        val transfer = MyBooksBookTransfer(db, manager, ApplicationProvider.getApplicationContext())
+        val initial = JSONObject().put("title", "Original upload").put("author", "Author").put("tags", JSONArray().put("Tag"))
+        val id = transfer.adoptUploadedBook("local", remote("Original upload").put("tags", JSONArray().put("Tag")).toString(),
+            "a".repeat(64), 100, initial, "pending")
+        assertEquals("mybooks-1", id)
+        assertNull(db.bookDao().getBookById("local"))
+        val book = db.bookDao().getBookById(id)!!
+        assertEquals("/local/book.epub", book.filePath)
+        assertEquals("Edited during upload", book.title)
+        assertEquals("kept-position", book.locatorJson)
+        assertEquals(999L, book.lastReadTime)
+        assertEquals(id, rows.getAllBookmarks().single().bookId)
+        assertEquals(id, rows.getAllNotes().single().bookId)
+        assertEquals(123L, rows.getAllReadingRecords().single().duration)
+        assertEquals(id, rows.getAllReadingRecords().single().bookId)
+        assertEquals("Tag", db.tagDao().getTagsForBook(id).single().name)
+        db.openHelper.readableDatabase.query("SELECT bookId FROM book_folder_cross_refs").use { cursor ->
+            assertTrue(cursor.moveToFirst()); assertEquals(id, cursor.getString(0))
+        }
+        assertTrue(db.myBooksSyncStateDao().get(id)!!.overridesJson.contains("Edited during upload"))
+    }
+
+    @Test fun aTargetCollisionLeavesTheOriginalBookAndItsReadingDataIntact() = runBlocking {
+        localBook("local", "Original", 999); localBook("mybooks-1", "Existing", 0)
+        val transfer = MyBooksBookTransfer(db, manager, ApplicationProvider.getApplicationContext())
+        try {
+            transfer.adoptUploadedBook("local", remote().toString(), "a".repeat(64), 1,
+                JSONObject().put("title", "Original").put("author", "Author").put("tags", JSONArray()), "pending")
+            fail("must reject duplicate association")
+        } catch (_: IllegalStateException) { }
+        assertEquals("Original", db.bookDao().getBookById("local")!!.title)
+        assertEquals(999L, db.bookDao().getBookById("local")!!.lastReadTime)
+        assertEquals("Existing", db.bookDao().getBookById("mybooks-1")!!.title)
+    }
+
+    @Test fun retryingAnInterruptedLocalBookUploadReusesItsCreatedServerBook() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val body = "local book contents".toByteArray()
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(body).joinToString("") { "%02x".format(it) }
+        val file = java.io.File.createTempFile("mybooks-test-upload", ".txt", context.cacheDir).apply { writeBytes(body) }
+        db.bookDao().insertBook(BookEntity("local", "Local book", "Author", file.path, null, "TXT", 0, 0f, createdAt = 1))
+        db.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity("book_import_metadata:local",
+            JSONObject().put("fields", JSONObject().put("title", "Local book").put("author", "Author").put("isbn", "9781234567897").put("publisher", "Draft publisher").put("status", "reading")).toString()))
+        var creates = 0; var uploads = 0; var published = false
+        fun detail() = remote("Local book", if (published) 2 else 1).put("files", JSONArray().apply {
+            if (published) put(JSONObject().put("format", "TXT").put("path", "1/book.txt").put("size", body.size)
+                .put("download_url", server.url("/api/books/1/files/1/content?uuid=book-one").toString()))
+        })
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse = when {
+                request.path!!.startsWith("/api/sync/changes") -> MockResponse().setBody(delta("upload-cursor", true, detail()))
+                request.path == "/api/books" && request.method == "POST" -> {
+                    val payload = JSONObject(request.body.readUtf8())
+                    assertEquals("9781234567897", payload.getString("isbn")); assertEquals("Draft publisher", payload.getString("publisher")); assertEquals("reading", payload.getString("status"))
+                    creates++; MockResponse().setBody(detail().toString())
+                }
+                request.path == "/api/books/1" -> MockResponse().setBody(detail().toString())
+                request.path == "/api/books/1/file" -> {
+                    uploads++
+                    if (uploads == 1) MockResponse().setResponseCode(503).setBody("{}")
+                    else { published = true; MockResponse().setBody("{}") }
+                }
+                request.method == "HEAD" -> MockResponse().setHeader("X-Content-SHA256", hash)
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        try {
+            val transfer = MyBooksBookTransfer(db, manager, context)
+            val first = transfer.upload(setOf("local")) { }
+            assertEquals(1, first.errors.size)
+            assertEquals(1, store.pendingCount.first())
+            assertTrue(manager.syncIssues.first().any { it.pendingUpload })
+            assertNotNull(db.bookDao().getBookById("local"))
+            assertEquals(1, creates)
+            MyBooksSyncPreferencesStore(db.syncStateDao()).setContent(com.huangder.lumibooks.domain.model.SyncContent.BOOK_FILES, false)
+            assertTrue(manager.syncNow(scheduleRetry = false).success)
+            assertNull(db.bookDao().getBookById("mybooks-1"))
+            MyBooksSyncPreferencesStore(db.syncStateDao()).setContent(com.huangder.lumibooks.domain.model.SyncContent.BOOK_FILES, true)
+            val second = transfer.upload(setOf("local")) { }
+            assertTrue(second.errors.joinToString(), second.errors.isEmpty())
+            assertEquals(setOf("mybooks-1"), second.bookIds)
+            assertEquals(0, store.pendingCount.first())
+            assertTrue(manager.syncIssues.first().none { it.pendingUpload })
+            assertEquals(1, creates); assertEquals(2, uploads)
+            assertEquals(file.path, db.bookDao().getBookById("mybooks-1")!!.filePath)
+            assertNull(db.bookDao().getBookById("local"))
+            assertNull(db.syncStateDao().getValue("book_import_metadata:local"))
+        } finally { file.delete() }
+    }
+
+
+    @Test fun anActivePendingImportProtectsServerIdentityButADeletedLocalBookCannotTrapTheConnection() = runBlocking {
+        localBook("pending-local", "Pending", 0)
+        db.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity("mybooks_upload:library:pending-local",
+            JSONObject().put("id", 12).put("localBookId", "pending-local").toString()))
+        try { manager.checkServerChange("https://other.example"); fail("pending import must protect its server") }
+        catch (_: IllegalStateException) { }
+        db.bookDao().deleteBookById("pending-local")
+        manager.checkServerChange("https://other.example")
+    }
+
+    @Test fun cloudDeletionUsesTheOriginalUuidAndRevisionAndDoesNotDeleteLocalDataOnFailure() = runBlocking {
+        localBook()
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = remote(revision = 4).toString()))
+        server.enqueue(MockResponse().setResponseCode(409).setBody("{\"error\":\"changed on another device\"}"))
+        val result = manager.deleteRemoteBooks(setOf("mybooks-1"))
+        assertFalse(result.success)
+        val request = server.takeRequest(); assertEquals("DELETE", request.method)
+        val body = JSONObject(request.body.readUtf8())
+        assertEquals(4L, body.getLong("expected_revision")); assertEquals("book-one", body.getString("expected_uuid"))
+        assertNotNull(db.bookDao().getBookById("mybooks-1"))
+        assertEquals("kept-position", db.bookDao().getBookById("mybooks-1")!!.locatorJson)
+        assertNotNull(db.myBooksSyncStateDao().get("mybooks-1"))
+    }
+    @Test fun clearingOnlyTheDownloadedCopyKeepsServerAssociationAndReadingBaselines() = runBlocking {
+        localBook()
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = remote().toString()))
+        db.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity("mybooks_reading_base:book-one", "kept"))
+        manager.clearLocalBookData("mybooks-1", keepServerAssociation = true)
+        assertNotNull(db.myBooksSyncStateDao().get("mybooks-1"))
+        assertEquals("kept", db.syncStateDao().getValue("mybooks_reading_base:book-one"))
+        assertEquals("kept-position", db.bookDao().getBookById("mybooks-1")!!.locatorJson)
+        assertEquals(0, server.requestCount)
+    }
+    @Test fun disablingAllContentDoesNotMakeAnyNetworkRequest() = runBlocking {
+        val preferences = MyBooksSyncPreferencesStore(db.syncStateDao())
+        for (content in com.huangder.lumibooks.domain.model.SyncContent.entries) preferences.setContent(content, false)
+        val result = manager.syncNow(scheduleRetry = false)
+        assertFalse(result.success); assertEquals(0, server.requestCount)
+    }
+
+    @Test fun forcedCloudDeletionUsesItsQueueEvenWithNoLocalRowAndAllSyncContentDisabled() = runBlocking {
+        localBook()
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = remote(revision = 7).toString()))
+        assertTrue(manager.queuePendingDelete("mybooks-1"))
+        db.bookDao().deleteBookById("mybooks-1")
+        manager.clearLocalBookData("mybooks-1")
+        val preferences = MyBooksSyncPreferencesStore(db.syncStateDao())
+        for (content in com.huangder.lumibooks.domain.model.SyncContent.entries) preferences.setContent(content, false)
+        server.enqueue(MockResponse().setResponseCode(503).setBody("{}"))
+        assertFalse(manager.deleteRemoteBooks(setOf("mybooks-1")).success)
+        assertNotNull(db.myBooksSyncStateDao().getPendingDelete(1))
+        val failed = JSONObject(requireNotNull(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)) { "Expected cloud DELETE request" }.body.readUtf8())
+        assertEquals(7L, failed.getLong("expected_revision")); assertEquals("book-one", failed.getString("expected_uuid"))
+        server.enqueue(MockResponse().setBody("{}"))
+        assertTrue(manager.deleteRemoteBooks(setOf("mybooks-1")).success)
+        val retry = requireNotNull(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)) { "Expected cloud DELETE request" }; assertEquals("DELETE", retry.method); assertEquals("/api/books/1", retry.path)
+        assertNull(db.myBooksSyncStateDao().getPendingDelete(1))
+        assertNull(db.bookDao().getBookById("mybooks-1"))
+    }
+
 }

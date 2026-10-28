@@ -2,6 +2,10 @@
 
 package com.huangder.lumibooks.ui.navigation
 
+import com.huangder.lumibooks.ui.bookshelf.MyBooksCreateSource
+import com.huangder.lumibooks.ui.bookshelf.MyBooksEditSheet
+import org.json.JSONObject
+
 import com.huangder.lumibooks.ui.theme.LocalReduceTransparency
 import com.huangder.lumibooks.ui.theme.LumiBackgroundHost
 import com.huangder.lumibooks.ui.theme.LumiBackgroundScene
@@ -65,10 +69,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import com.huangder.lumibooks.R
-import com.huangder.lumibooks.data.sync.MyBooksConfig
 import com.huangder.lumibooks.ui.bookshelf.BookshelfScreen
-import com.huangder.lumibooks.ui.bookshelf.MyBooksCreateSource
-import com.huangder.lumibooks.ui.bookshelf.MyBooksEditSheet
 import com.huangder.lumibooks.ui.components.BookTransitionOverlay
 import com.huangder.lumibooks.ui.components.FloatingTabBar
 import com.huangder.lumibooks.ui.components.Material3BottomNavigationBar
@@ -347,16 +348,15 @@ fun MainNavGraph(
     var showImportActions by remember { mutableStateOf(false) }
     var showImportConfirmation by remember { mutableStateOf(false) }
     var showImportDestination by remember { mutableStateOf(false) }
+    var informationSources by remember { mutableStateOf(emptyList<MyBooksCreateSource>()) }
+    var informationIndex by remember { mutableIntStateOf(0) }
+    var informationDrafts by remember { mutableStateOf(emptyMap<String, String>()) }
     var selectedImportBooks by remember { mutableStateOf(emptyList<SelectedImportBook>()) }
     var selectedImportBookUris by remember { mutableStateOf(emptySet<String>()) }
     var importCopiesIntoApp by remember { mutableStateOf(true) }
     var importRequestFolderId by remember { mutableStateOf<String?>(null) }
     var isPreparingImport by remember { mutableStateOf(false) }
     var importPreparationGeneration by remember { mutableIntStateOf(0) }
-    // 选完文件后逐本补充信息并添加到服务器书库。
-    var importCreateSources by remember { mutableStateOf(emptyList<MyBooksCreateSource>()) }
-    var importCreateIndex by remember { mutableIntStateOf(0) }
-    var importToServer by rememberSaveable { mutableStateOf(false) }
     var transientMessage by remember { mutableStateOf<String?>(null) }
     var pendingCloudBook by remember { mutableStateOf<Book?>(null) }
     var autoOpenDownloadedBookId by remember { mutableStateOf<String?>(null) }
@@ -382,8 +382,6 @@ fun MainNavGraph(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (showImportActions) {
-            val toServer = importToServer
-            importToServer = false
             val candidates = uris.mapNotNull { uri ->
                 val name = FileUtils.getFileNameFromUri(context, uri) ?: return@mapNotNull null
                 if (FileUtils.getFileExtension(name) !in setOf("epub", "pdf", "txt", "mobi", "cbz", "md", "markdown")) {
@@ -400,32 +398,18 @@ fun MainNavGraph(
             if (candidates.isNotEmpty()) {
                 isPreparingImport = false
                 showImportActions = false
-                if (toServer && MyBooksConfig.hasWriteToken()) {
-                    // 添加到服务器：先补充信息，再建服务器书并留本地副本。
-                    importCreateSources = candidates.map {
-                        MyBooksCreateSource(fileName = it.name, uri = it.uri)
-                    }
-                    importCreateIndex = 0
-                } else {
-                    // 从文件导入/只读构建：保持原有本地导入。
-                    homeViewModel.importBooks(
-                        context = context,
-                        uris = candidates.map { it.uri },
-                        targetFolderId = importRequestFolderId
-                    )
-                    importRequestFolderId = null
-                }
+                informationSources = candidates.map { MyBooksCreateSource(it.name, it.uri) }
+                informationIndex = 0
+                informationDrafts = emptyMap()
             } else if (uris.isNotEmpty()) {
                 transientMessage = context.getString(R.string.import_no_supported_files)
             }
         }
     }
-    val launchImportPicker: (Boolean) -> Unit = { toServer ->
-        importToServer = toServer
+    val launchImportPicker: () -> Unit = {
         runCatching {
             importLauncher.launch(arrayOf("*/*"))
         }.onFailure { error ->
-            importToServer = false
             transientMessage = context.getString(
                 R.string.import_failed,
                 error.message.orEmpty()
@@ -1273,12 +1257,7 @@ fun MainNavGraph(
                     selectedImportBookUris = emptySet()
                     showImportActions = false
                 },
-                onSelectFiles = { launchImportPicker(false) },
-                onAddToServer = if (MyBooksConfig.hasWriteToken()) {
-                    { launchImportPicker(true) }
-                } else {
-                    null
-                },
+                onSelectFiles = launchImportPicker,
                 onAuthorizeDirectory = {
                     runCatching {
                         directoryLauncher.launch(null)
@@ -1455,43 +1434,23 @@ fun MainNavGraph(
             )
         }
 
-        // 选完文件后的书籍编辑弹窗：补充信息后添加到服务器书库。
-        importCreateSources.getOrNull(importCreateIndex)?.let { source ->
-            MyBooksEditSheet(
-                book = null,
-                meta = null,
-                createSource = source,
-                onDismiss = { created ->
-                    if (created != null) {
-                        // 服务器上已有这本书：本地留一份正文副本，同一个 id，不必再下载。
-                        // 副本落库后再同步，否则同步会先把它变成"仅在云端"的占位书。
-                        // 书名/作者用服务器上那份，否则副本会退回文件名/未知作者，
-                        // 随后的同步再把这份值推回服务器，覆盖刚填好的书名作者。
-                        homeViewModel.importLocalCopyOfServerBook(
-                            context = context,
-                            uri = source.uri,
-                            fileName = source.fileName,
-                            remoteId = created.id,
-                            title = created.title,
-                            author = created.author,
-                            targetFolderId = importRequestFolderId
-                        ) {
-                            readerNavigationScope.launch { homeViewModel.syncMyBooksNow() }
-                        }
-                        if (importCreateIndex + 1 < importCreateSources.size) {
-                            importCreateIndex += 1
-                        } else {
-                            importCreateSources = emptyList()
-                            importCreateIndex = 0
-                            importRequestFolderId = null
-                        }
-                    } else {
-                        importCreateSources = emptyList()
-                        importCreateIndex = 0
-                        importRequestFolderId = null
-                    }
-                }
-            )
+        fun commitConfirmedImports(drafts: Map<String, String>) {
+            val confirmed = informationSources.filter { it.uri.toString() in drafts }
+            if (confirmed.isNotEmpty()) homeViewModel.importBooks(context, confirmed.map { it.uri }, importRequestFolderId,
+                overrides = drafts.mapValues { (_, draft) ->
+                    val fields = JSONObject(draft).getJSONObject("fields")
+                    com.huangder.lumibooks.ui.home.BookImportOverride(fields.optString("title"), fields.optString("author"), draft)
+                })
+            informationSources = emptyList(); informationIndex = 0; informationDrafts = emptyMap(); importRequestFolderId = null
+        }
+        informationSources.getOrNull(informationIndex)?.let { source ->
+            MyBooksEditSheet(book = null, meta = null, createSource = source, localImport = true,
+                onDismiss = { commitConfirmedImports(informationDrafts) },
+                onLocalImportSaved = { draft ->
+                    val updated = informationDrafts + (source.uri.toString() to draft)
+                    informationDrafts = updated
+                    if (informationIndex + 1 < informationSources.size) informationIndex++ else commitConfirmedImports(updated)
+                })
         }
 
         ReadingGoalSheet(

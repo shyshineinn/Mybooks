@@ -37,6 +37,9 @@ class MyBooksConnectionStore(context: Context) {
     fun clearToken() {
         check(preferences.edit().remove("iv").remove("token").commit()) { "无法清除设备登录凭据" }
     }
+    fun clear() {
+        check(preferences.edit().clear().commit()) { "无法清除服务器配置" }
+    }
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }

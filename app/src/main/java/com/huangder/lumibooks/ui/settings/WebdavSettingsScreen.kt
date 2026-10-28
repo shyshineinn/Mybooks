@@ -93,30 +93,30 @@ fun WebdavSettingsDetail(
         )
 
         if (!isEnabled) {
-            WebdavPrimaryButton(
+            SyncPrimaryButton(
                 label = stringResource(R.string.webdav_configure),
                 onClick = onConfigure
             )
         }
 
         if (isEnabled && hasToken) {
-            WebdavSectionCard {
-                WebdavSyncModeSelector(
+            SyncSectionCard {
+                SyncModeSelector(
                     selectedMode = config.syncMode,
                     onModeChange = { viewModel.saveWebdavSyncMode(it) }
                 )
                 Box(Modifier.fillMaxWidth().height(1.dp).background(AppColors.Divider))
-                WebdavSyncContentSelector(
-                    config = config,
-                    onContentChange = viewModel::setWebdavSyncContent
+                SyncContentSelector(
+                    selection = com.huangder.lumibooks.domain.model.SyncContentSelection(config.syncBookFiles, config.syncProfileAndSettings, config.syncLibraryOrganization, config.syncReadingData),
+                    onContentChange = { content, checked -> viewModel.setWebdavSyncContent(WebdavSyncContent.valueOf(content.name), checked) }
                 )
             }
         }
 
         if (isEnabled) {
-            WebdavSectionCard {
+            SyncSectionCard {
                 if (hasToken) {
-                    WebdavSecondaryButton(
+                    SyncActionButton(
                         label = stringResource(
                             if (uiState.webdavTesting) R.string.webdav_test_running
                             else R.string.webdav_test_connection
@@ -140,7 +140,7 @@ fun WebdavSettingsDetail(
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-                    WebdavSecondaryButton(
+                    SyncActionButton(
                         label = stringResource(R.string.webdav_sync_now),
                         icon = AppIcons.ArrowsClockwise,
                         onClick = {
@@ -162,12 +162,12 @@ fun WebdavSettingsDetail(
                         )
                     }
                 }
-                WebdavSecondaryButton(
+                SyncActionButton(
                     label = stringResource(R.string.webdav_disable),
                     icon = AppIcons.CloudSlash,
                     onClick = { viewModel.disableWebdav(clearKey = false) }
                 )
-                WebdavSecondaryButton(
+                SyncActionButton(
                     label = stringResource(R.string.webdav_clear_config),
                     icon = AppIcons.Trash,
                     destructive = true,
@@ -176,7 +176,7 @@ fun WebdavSettingsDetail(
             }
         }
 
-        WebdavDisclosureCard()
+        SyncDisclosureCard(stringResource(R.string.webdav_third_party_title), stringResource(R.string.webdav_third_party_notice))
         Spacer(Modifier.height(32.dp))
     }
 }
@@ -246,7 +246,7 @@ fun WebdavConfigurationDetail(
             .padding(horizontal = AppSpace.md, vertical = AppSpace.sm),
         verticalArrangement = Arrangement.spacedBy(AppSpace.md)
     ) {
-        WebdavSectionCard {
+        SyncSectionCard {
         // Server URL
         OutlinedTextField(
             value = draftServerUrl,
@@ -319,366 +319,9 @@ fun WebdavConfigurationDetail(
         Spacer(Modifier.height(AppSpace.sm))
 
         // Save button — uses LiquidGlassButton matching ExternalTts pattern
-        WebdavPrimaryButton(
+        SyncPrimaryButton(
             label = stringResource(R.string.webdav_enable),
             onClick = ::validateAndSave
-        )
-    }
-}
-
-// ─── Shared components ──────────────────────────────────────────────
-
-@Composable
-internal fun WebdavSectionCard(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(AppRoundedCornerShape(AppRadius.md))
-            .lumiCardSurface(shape = AppRoundedCornerShape(AppRadius.md))
-            .padding(AppSpace.md),
-        verticalArrangement = Arrangement.spacedBy(AppSpace.sm),
-        content = content
-    )
-}
-
-@Composable
-internal fun SyncConnectionStatusCard(
-    isConnected: Boolean,
-    statusText: String,
-    details: List<String>,
-    isBusy: Boolean
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(AppRoundedCornerShape(AppRadius.md))
-            .lumiCardSurface(shape = AppRoundedCornerShape(AppRadius.md))
-            .padding(AppSpace.md)
-    ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.align(Alignment.Center)
-            ) {
-                Icon(
-                    imageVector = if (isConnected) AppIcons.CheckCircle else AppIcons.CloudSlash,
-                    contentDescription = null,
-                    tint = if (isConnected) AppColors.Accent else AppColors.TextSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(Modifier.width(AppSpace.sm))
-                Text(
-                    text = stringResource(R.string.webdav_status_card_title),
-                    fontSize = AppType.Body,
-                    fontWeight = FontWeight.Medium,
-                    color = AppColors.TextPrimary
-                )
-            }
-            if (isBusy) {
-                CircularProgressIndicator(
-                    color = AppColors.Accent,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .size(18.dp)
-                )
-            }
-        }
-        Spacer(Modifier.height(AppSpace.sm))
-        Text(
-            text = statusText,
-            fontSize = AppType.BodySmall,
-            color = AppColors.TextSecondary,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        )
-        details.filter { it.isNotBlank() }.forEach { detail ->
-            Text(
-                text = detail,
-                fontSize = AppType.Caption,
-                color = AppColors.TextSecondary,
-                modifier = Modifier.align(Alignment.CenterHorizontally)
-            )
-        }
-    }
-}
-
-@Composable
-internal fun WebdavPrimaryButton(
-    label: String,
-    enabled: Boolean = true,
-    onClick: () -> Unit
-) {
-    LiquidGlassButton(
-        onClick = onClick,
-        enabled = enabled,
-        tintedColor = AppColors.Accent,
-        shape = AppRoundedCornerShape(25.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 50.dp)
-    ) {
-        Text(
-            label,
-            fontSize = AppType.BodySmall,
-            fontWeight = FontWeight.SemiBold,
-            color = if (enabled) Color.White else AppColors.TextSecondary,
-            maxLines = 1,
-            softWrap = false,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-internal fun WebdavSecondaryButton(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    destructive: Boolean = false,
-    enabled: Boolean = true,
-    onClick: () -> Unit
-) {
-    val contentColor = when {
-        destructive -> MaterialTheme.colorScheme.error
-        enabled -> AppColors.TextPrimary
-        else -> AppColors.TextSecondary
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(
-                enabled = enabled,
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-            .padding(horizontal = AppSpace.md, vertical = AppSpace.md + 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (destructive) MaterialTheme.colorScheme.error else AppColors.TextSecondary,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(Modifier.width(AppSpace.md))
-        Text(
-            text = label,
-            fontSize = AppType.Body,
-            color = contentColor
-        )
-    }
-}
-
-@Composable
-private fun WebdavDisclosureCard() {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(AppRoundedCornerShape(AppRadius.md))
-            .background(AppColors.BgGray)
-            .padding(AppSpace.md),
-        verticalArrangement = Arrangement.spacedBy(AppSpace.sm)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(AppIcons.ArrowsClockwise, null, tint = AppColors.TextSecondary, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.size(AppSpace.sm))
-            Text(
-                stringResource(R.string.webdav_third_party_title),
-                fontSize = AppType.BodySmall,
-                color = AppColors.TextPrimary,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-        Text(
-            stringResource(R.string.webdav_third_party_notice),
-            fontSize = AppType.Caption,
-            color = AppColors.TextSecondary
-        )
-    }
-}
-
-// ─── Sync mode pill selector ────────────────────────────────────────
-
-@Composable
-private fun WebdavSyncModeSelector(
-    selectedMode: String,
-    onModeChange: (String) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = AppSpace.xs)
-    ) {
-        Text(
-            text = stringResource(R.string.webdav_sync_mode_label),
-            fontSize = AppType.BodySmall,
-            color = AppColors.TextSecondary
-        )
-        Spacer(Modifier.height(AppSpace.sm))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(AppSpace.sm)
-        ) {
-            WebdavModePill(
-                label = stringResource(R.string.webdav_sync_mode_auto),
-                selected = selectedMode == "auto",
-                onClick = { onModeChange("auto") },
-                modifier = Modifier.weight(1f)
-            )
-            WebdavModePill(
-                label = stringResource(R.string.webdav_sync_mode_manual),
-                selected = selectedMode == "manual",
-                onClick = { onModeChange("manual") },
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun WebdavSyncContentSelector(
-    config: WebdavConfig,
-    onContentChange: (WebdavSyncContent, Boolean) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = AppSpace.sm)
-    ) {
-        Text(
-            text = stringResource(R.string.webdav_sync_content_title),
-            fontSize = AppType.BodySmall,
-            fontWeight = FontWeight.SemiBold,
-            color = AppColors.TextPrimary,
-            modifier = Modifier.padding(horizontal = AppSpace.md, vertical = AppSpace.xs)
-        )
-        Text(
-            text = stringResource(R.string.webdav_sync_content_description),
-            fontSize = AppType.Caption,
-            color = AppColors.TextSecondary,
-            modifier = Modifier.padding(
-                start = AppSpace.md,
-                end = AppSpace.md,
-                bottom = AppSpace.sm
-            )
-        )
-        WebdavSyncContentRow(
-            title = stringResource(R.string.webdav_sync_content_books),
-            description = stringResource(R.string.webdav_sync_content_books_description),
-            checked = config.syncBookFiles,
-            onCheckedChange = { onContentChange(WebdavSyncContent.BOOK_FILES, it) }
-        )
-        WebdavSyncContentRow(
-            title = stringResource(R.string.webdav_sync_content_profile_settings),
-            description = stringResource(R.string.webdav_sync_content_profile_settings_description),
-            checked = config.syncProfileAndSettings,
-            onCheckedChange = { onContentChange(WebdavSyncContent.PROFILE_AND_SETTINGS, it) }
-        )
-        WebdavSyncContentRow(
-            title = stringResource(R.string.webdav_sync_content_library),
-            description = stringResource(R.string.webdav_sync_content_library_description),
-            checked = config.syncLibraryOrganization,
-            onCheckedChange = { onContentChange(WebdavSyncContent.LIBRARY_ORGANIZATION, it) }
-        )
-        WebdavSyncContentRow(
-            title = stringResource(R.string.webdav_sync_content_reading_data),
-            description = stringResource(R.string.webdav_sync_content_reading_data_description),
-            checked = config.syncReadingData,
-            onCheckedChange = { onContentChange(WebdavSyncContent.READING_DATA, it) }
-        )
-    }
-}
-
-@Composable
-private fun WebdavSyncContentRow(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .toggleable(
-                value = checked,
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                role = Role.Checkbox,
-                onValueChange = onCheckedChange
-            )
-            .padding(
-                start = AppSpace.md,
-                end = AppSpace.sm,
-                top = AppSpace.xs,
-                bottom = AppSpace.xs
-            ),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(CircleShape)
-                .background(if (checked) AppColors.Accent else Color.Transparent)
-                .then(
-                    if (checked) Modifier else Modifier.border(
-                        width = 1.5.dp,
-                        color = AppColors.TextSecondary,
-                        shape = CircleShape
-                    )
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (checked) {
-                Icon(
-                    imageVector = AppIcons.Check,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
-        Spacer(Modifier.width(AppSpace.lg))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = AppType.Body,
-                color = AppColors.TextPrimary
-            )
-            Text(
-                text = description,
-                fontSize = AppType.Caption,
-                color = AppColors.TextSecondary
-            )
-        }
-    }
-}
-
-@Composable
-private fun WebdavModePill(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .clip(AppRoundedCornerShape(25.dp))
-            .background(
-                if (selected) AppColors.Accent else AppColors.BgGray
-            )
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-            .padding(vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            fontSize = AppType.BodySmall,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) Color.White else AppColors.TextSecondary
         )
     }
 }

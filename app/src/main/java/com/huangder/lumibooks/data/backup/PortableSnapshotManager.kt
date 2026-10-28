@@ -150,7 +150,9 @@ class PortableSnapshotManager @Inject constructor(
         snapshot: PortableSnapshot,
         assetFiles: Map<String, File>,
         replace: Boolean,
-        replaceAssetDirectories: Boolean = replace
+        replaceAssetDirectories: Boolean = replace,
+        preserveLocalBookIdentity: Boolean = false,
+        preserveNewerRows: Boolean = false
     ) = withContext(Dispatchers.IO) {
         val deviceId = syncIdentityStore.deviceId()
         validateSnapshot(snapshot, assetFiles)
@@ -182,6 +184,9 @@ class PortableSnapshotManager @Inject constructor(
                 val syncDao = database.syncStateDao()
                 val existingBooks = bookDao.getAllBooksSnapshot().associateBy { it.id }
                 val existingFolders = syncDao.getAllFolders()
+                val existingTags = syncDao.getAllTags().associateBy { it.id }
+                val existingFolderLinks = syncDao.getAllBookFolderLinks().associateBy { it.bookId }
+                val existingTagLinks = syncDao.getAllBookTagLinks().associateBy { it.bookId + ":" + it.tagId }
                 val existingRecords = syncDao.getAllReadingRecords().associateBy {
                     "${it.bookId}\u0000${it.date}\u0000${it.sourceDeviceId}"
                 }
@@ -201,12 +206,19 @@ class PortableSnapshotManager @Inject constructor(
                         existingIsCloudOnly = existing?.isCloudOnly
                             ?.takeIf { !replaceAssetDirectories && book.bodyAssetId == null }
                     ).let { restored ->
-                        if (book.format == "MARKDOWN" && !replaceAssetDirectories && existing != null) {
+                        val withSource = if ((preserveLocalBookIdentity || book.format == "MARKDOWN") && !replaceAssetDirectories && existing != null) {
                             restored.copy(sourceUri = existing.sourceUri, sourceDocumentKey = existing.sourceDocumentKey,
                                 sourceParentUri = existing.sourceParentUri, sourceSha256 = existing.sourceSha256,
                                 sourceDisplayName = existing.sourceDisplayName, sourceLastModified = existing.sourceLastModified,
-                                isMissing = existing.isMissing)
+                                isMissing = existing.isMissing,
+                                lastReadTime = if (preserveLocalBookIdentity) existing.lastReadTime else restored.lastReadTime,
+                                readingProgress = if (preserveLocalBookIdentity) existing.readingProgress else restored.readingProgress,
+                                locatorJson = if (preserveLocalBookIdentity) existing.locatorJson else restored.locatorJson)
                         } else restored
+                        if (preserveNewerRows && !replace && existing != null && existing.metadataUpdatedAt > book.metadataUpdatedAt) {
+                            withSource.copy(title = existing.title, author = existing.author, isFavorite = existing.isFavorite,
+                                isPinned = existing.isPinned, coverPath = existing.coverPath, metadataUpdatedAt = existing.metadataUpdatedAt)
+                        } else withSource
                     }
                 }
                 if (replace) {
@@ -233,15 +245,22 @@ class PortableSnapshotManager @Inject constructor(
                         ?.takeIf { it.startsWith("asset://") }
                         ?.removePrefix("asset://")
                         ?.let(assetPaths::get)
-                    folder.copy(
+                    val existing = existingFoldersById[folder.id]
+                    if (preserveNewerRows && !replace && existing != null && existing.updatedAt > folder.updatedAt) existing else folder.copy(
                         coverPath = restoredCover
                             ?: existingFoldersById[folder.id]?.coverPath?.takeIf { !replaceAssetDirectories }
                     )
                 }
                 if (restoredFolders.isNotEmpty()) syncDao.upsertFolders(restoredFolders)
-                if (snapshot.tags.isNotEmpty()) syncDao.upsertTags(snapshot.tags)
-                if (snapshot.bookFolderLinks.isNotEmpty()) syncDao.upsertBookFolderLinks(snapshot.bookFolderLinks)
-                if (snapshot.bookTagLinks.isNotEmpty()) syncDao.upsertBookTagLinks(snapshot.bookTagLinks)
+                if (snapshot.tags.isNotEmpty()) syncDao.upsertTags(snapshot.tags.map { incoming ->
+                    existingTags[incoming.id]?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
+                })
+                if (snapshot.bookFolderLinks.isNotEmpty()) syncDao.upsertBookFolderLinks(snapshot.bookFolderLinks.map { incoming ->
+                    existingFolderLinks[incoming.bookId]?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
+                })
+                if (snapshot.bookTagLinks.isNotEmpty()) syncDao.upsertBookTagLinks(snapshot.bookTagLinks.map { incoming ->
+                    existingTagLinks[incoming.bookId + ":" + incoming.tagId]?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
+                })
                 if (snapshot.readingRecords.isNotEmpty()) syncDao.upsertReadingRecords(snapshot.readingRecords.map {
                     val key = "${it.bookId}\u0000${it.date}\u0000${it.sourceDeviceId}"
                     it.copy(id = if (replace) 0 else existingRecords[key]?.id ?: 0)
@@ -286,7 +305,11 @@ class PortableSnapshotManager @Inject constructor(
                 if (snapshot.highlightRuleExclusions.isNotEmpty()) {
                     database.highlightRuleDao().upsertExclusions(snapshot.highlightRuleExclusions)
                 }
-                applyTombstones(snapshot)
+                applyTombstones(if (preserveNewerRows && !replace) snapshot.copy(
+                    books = emptyList(), folders = syncDao.getAllFolders(), tags = syncDao.getAllTags(),
+                    bookFolderLinks = syncDao.getAllBookFolderLinks(), bookTagLinks = syncDao.getAllBookTagLinks(),
+                    bookmarks = syncDao.getAllBookmarks(), notes = syncDao.getAllNotes()
+                ) else snapshot)
             }
             preparedAssets.finish()
         } catch (error: Throwable) {

@@ -39,11 +39,16 @@ import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
+import javax.inject.Provider
+import com.huangder.lumibooks.data.local.database.AppDatabase
+import com.huangder.lumibooks.util.BookFileAccess
 import javax.inject.Inject
 import javax.inject.Singleton
 
+enum class MyBooksSyncDirection { BOTH, UPLOAD, DOWNLOAD }
+
 data class MyBooksSyncIssue(val bookId: String, val title: String, val message: String,
-    val canResolve: Boolean = false, val pendingDeletion: Boolean = false, val readingConflict: Boolean = false)
+    val canResolve: Boolean = false, val pendingDeletion: Boolean = false, val readingConflict: Boolean = false, val pendingUpload: Boolean = false)
 internal class MyBooksMetadataConflict(val fields: List<String>, message: String) : Exception(message)
 
 data class MyBooksSyncResult(
@@ -78,7 +83,11 @@ class MyBooksSyncManager @Inject constructor(
     private val scheduler: MyBooksSyncScheduler,
     private val localNetworkAccessManager: LocalNetworkAccessManager,
     private val readingSync: MyBooksReadingSync,
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val preferences: MyBooksSyncPreferencesStore,
+    private val portableState: Provider<MyBooksPortableStateSync>,
+    private val bookTransfer: Provider<MyBooksBookTransfer>,
+    private val database: AppDatabase
 ) {
     private val client = MyBooksApiClient()
     private val coverUploader = MyBooksCoverUploader(client)
@@ -98,7 +107,14 @@ class MyBooksSyncManager @Inject constructor(
         }
     }
 
-    val syncIssues = combine(metadataSyncIssues, readingSync.issues) { metadata, reading -> metadata + reading }
+    private val uploadIssues = combine(syncStateDao.observePrefix("mybooks_upload_error:"), bookRepository.getAllBooks()) { errors, books ->
+        val titles = books.associate { it.id to it.title }
+        errors.mapNotNull { row -> runCatching {
+            val root = JSONObject(row.value); val id = root.getString("bookId")
+            titles[id]?.let { MyBooksSyncIssue(id, it, root.getString("message"), pendingUpload = true) }
+        }.getOrNull() }
+    }
+    val syncIssues = combine(metadataSyncIssues, readingSync.issues, uploadIssues) { metadata, reading, upload -> metadata + reading + upload }
 
     private val editMutex = Mutex()
     private val syncMutex = Mutex()
@@ -111,12 +127,22 @@ class MyBooksSyncManager @Inject constructor(
     private val _downloadStates = MutableStateFlow<Map<String, BookDownloadState>>(emptyMap())
     val downloadStates: StateFlow<Map<String, BookDownloadState>> = _downloadStates.asStateFlow()
 
+    suspend fun <T> withBookTransfer(block: suspend () -> T): T = syncMutex.withLock {
+        check(MyBooksConfig.hasWriteToken()) { context.getString(R.string.mybooks_server_login_required) }
+        _isSyncing.value = true
+        try { block() } finally { _isSyncing.value = false }
+    }
+
+    fun onLocalBooksImported() { scheduler.scheduleImportedBooks() }
+    suspend fun cacheImportedCover(url: String, target: File) { client.downloadFile(url, target, 0) { _, _ -> } }
+
     suspend fun syncIfStale(maxAgeMs: Long = 10 * 60_000) {
         scheduler.scheduleIfNeeded(maxAgeMs)
     }
 
-    suspend fun syncNow(scheduleRetry: Boolean = true): MyBooksSyncResult = syncMutex.withLock {
-        if (!MyBooksConfig.hasWriteToken()) {
+    suspend fun syncNow(scheduleRetry: Boolean = true, direction: MyBooksSyncDirection = MyBooksSyncDirection.BOTH,
+        selectedBookIds: Set<String>? = null): MyBooksSyncResult = syncMutex.withLock {
+        if (!preferences.current().enabled || !MyBooksConfig.hasWriteToken()) {
             return@withLock MyBooksSyncResult(context.getString(R.string.mybooks_server_login_required), false,
                 failure = MyBooksSyncFailure.AUTH)
         }
@@ -129,7 +155,7 @@ class MyBooksSyncManager @Inject constructor(
                     if (!localNetworkAccessManager.hasPermission() && localNetworkAccessManager.stateFor(MyBooksConfig.SERVER_URL) == LocalNetworkAccessState.PERMISSION_REQUIRED) {
                         throw MyBooksPermissionRequired(context.getString(R.string.mybooks_server_local_network_required))
                     }
-                    runSyncNow()
+                    runSyncNow(direction, selectedBookIds)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -155,16 +181,24 @@ class MyBooksSyncManager @Inject constructor(
         }
         val changed = MyBooksEndpoint.normalize(serverUrl) != MyBooksConfig.SERVER_URL
         check(!changed || (bookRepository.getAllBooks().first().none(MyBooksConfig::isMyBooks) &&
-            myBooksSyncStateDao.getAll().isEmpty() && myBooksSyncStateDao.getPendingDeletes().isEmpty())) {
+            myBooksSyncStateDao.getAll().isEmpty() && myBooksSyncStateDao.getPendingDeletes().isEmpty() &&
+            !hasPendingBookImports())) {
             context.getString(R.string.mybooks_server_switch_blocked)
         }
     }
+    private suspend fun hasPendingBookImports(): Boolean = syncStateDao.getPrefix("mybooks_upload:").any { row ->
+        val id = runCatching { JSONObject(row.value).getString("localBookId") }.getOrNull()
+        id != null && bookRepository.getBookById(id) != null
+    }
     suspend fun saveConnection(serverUrl: String, username: String, token: String) = syncMutex.withLock {
         checkServerChangeLocked(serverUrl)
+        val changedServer = MyBooksEndpoint.normalize(serverUrl) != MyBooksConfig.SERVER_URL
         withContext(Dispatchers.IO) { MyBooksConfig.save(context, serverUrl, username, token) }
         scheduler.cancel()
+        preferences.setEnabled(true)
         stateStore.reset()
-        syncStateDao.putStates(listOf(SyncStateEntity(KEY_CURSOR, ""), SyncStateEntity(KEY_READING_CAPABILITY, "")))
+        if (changedServer) syncStateDao.putState(SyncStateEntity(KEY_LIBRARY_ID, ""))
+        syncStateDao.putStates(listOf(SyncStateEntity(KEY_CURSOR, ""), SyncStateEntity(KEY_READING_CAPABILITY, ""), SyncStateEntity(KEY_PORTABLE_CAPABILITY, "")))
         scheduler.scheduleImmediate()
     }
     suspend fun logoutConnection(): Boolean = syncMutex.withLock {
@@ -183,6 +217,32 @@ class MyBooksSyncManager @Inject constructor(
         withContext(Dispatchers.IO) { MyBooksConfig.logout(context) }
         scheduler.cancel()
         revoked
+    }
+
+    suspend fun clearConfiguration() = syncMutex.withLock {
+        check(_downloadStates.value.values.none { it is BookDownloadState.Downloading }) { context.getString(R.string.mybooks_server_wait_download) }
+        val token = MyBooksConfig.adminToken
+        if (token.isNotBlank()) runCatching { MyBooksAuthClient(MyBooksConfig.SERVER_URL).logout(token) }
+        for (book in bookRepository.getAllBooks().first().filter(MyBooksConfig::isMyBooks)) {
+            if (book.isCloudOnly) {
+                bookRepository.deleteBook(book)
+                clearLocalBookData(book.id)
+            } else {
+                val targetId = UUID.randomUUID().toString()
+                val note = MyBooksConfig.remoteIdOf(book.id)?.let(notesStore::read)
+                moveLocalBookIdentity(database, context, book.id, targetId) { original -> original.copy(
+                    remoteLibraryKey = null, remoteFileName = null, remoteFileSize = 0, remoteFileSha256 = null,
+                    sourceUri = original.sourceUri?.takeUnless { it.startsWith(MyBooksConfig.SOURCE_URI_PREFIX) }) }
+                myBooksSyncStateDao.delete(targetId)
+                if (note?.content?.isNotBlank() == true) com.huangder.lumibooks.data.local.saveDetachedBookReview(context, targetId, note.content)
+            }
+        }
+        myBooksSyncStateDao.getAll().forEach { myBooksSyncStateDao.delete(it.bookId) }
+        myBooksSyncStateDao.getPendingDeletes().forEach { myBooksSyncStateDao.deletePendingDelete(it.remoteId) }
+        withContext(Dispatchers.IO) { MyBooksConfig.clear(context) }
+        syncStateDao.getPrefix("mybooks_").filterNot { it.key == "mybooks_sync_preferences" }.forEach { syncStateDao.deleteState(it.key) }
+        preferences.clear()
+        stateStore.reset()
     }
 
     /** 本地删除前调用:把服务器软删除放进队列,随后由同步器推送。 */
@@ -209,7 +269,7 @@ class MyBooksSyncManager @Inject constructor(
     fun enqueuePendingDelete(bookId: String) {
         scope.launch {
             queuePendingDelete(bookId)
-            syncNow()
+            if (preferences.automatic()) syncNow()
         }
     }
 
@@ -355,16 +415,49 @@ class MyBooksSyncManager @Inject constructor(
     }
 
     /** 本地删书后清理同步状态/详情缓存/心得副本;待处理删除记录由同步器保留。 */
-    suspend fun clearLocalBookData(bookId: String) {
+    suspend fun deleteRemoteBooks(bookIds: Set<String>): MyBooksSyncResult {
+        if (!syncMutex.tryLock()) return MyBooksSyncResult(context.getString(R.string.webdav_operation_in_progress), false)
+        return try {
+            if (!preferences.current().enabled || !MyBooksConfig.hasWriteToken()) return MyBooksSyncResult(context.getString(R.string.mybooks_server_login_required), false)
+            withContext(Dispatchers.IO) {
+                for (id in bookIds) {
+                    val remoteId = requireNotNull(MyBooksConfig.remoteIdOf(id))
+                    val pending = myBooksSyncStateDao.getPendingDelete(remoteId)
+                    val base = myBooksSyncStateDao.get(id)?.baseJson?.let(::JSONObject)
+                    val uuid = pending?.expectedUuid ?: base?.optString("uuid").orEmpty()
+                    val revision = pending?.expectedRevision ?: base?.optLong("revision") ?: 0L
+                    check(uuid.isNotBlank() && revision > 0) { context.getString(R.string.mybooks_delete_missing_baseline) }
+                    client.deleteBook(remoteId, MyBooksConfig.adminToken, JSONObject().put("expected_uuid", uuid).put("expected_revision", revision))
+                    myBooksSyncStateDao.deletePendingDelete(remoteId)
+                }
+                MyBooksSyncResult(context.getString(R.string.mybooks_cloud_delete_done), true)
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            withContext(Dispatchers.IO) {
+                for (id in bookIds) MyBooksConfig.remoteIdOf(id)?.let { remoteId ->
+                    myBooksSyncStateDao.getPendingDelete(remoteId)?.let { pending ->
+                        myBooksSyncStateDao.upsertPendingDelete(pending.copy(lastAttemptAt = System.currentTimeMillis(), lastError = error.message.orEmpty()))
+                    }
+                }
+            }
+            MyBooksSyncResult(error.message.orEmpty(), false, failure = classifyMyBooksSyncFailure(error))
+        }
+        finally { syncMutex.unlock() }
+    }
+
+    suspend fun clearLocalBookData(bookId: String, keepServerAssociation: Boolean = false) {
         val remoteId = MyBooksConfig.remoteIdOf(bookId) ?: return
         val download = downloadJobs[bookId]
         if (download != null && download != kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]) {
             download.cancel(); download.join()
         }
         withContext(Dispatchers.IO) {
-            myBooksSyncStateDao.delete(bookId)
-            metaCache.delete(remoteId)
-            notesStore.delete(remoteId)
+            if (!keepServerAssociation) {
+                myBooksSyncStateDao.delete(bookId)
+                metaCache.delete(remoteId)
+                notesStore.delete(remoteId)
+            }
             FileUtils.getBooksDirectory(context).listFiles()?.filter {
                 it.name.startsWith("$bookId.") && (it.name.endsWith(".part") ||
                     it.name.endsWith(".part.resume.json") || it.name.endsWith(".part.resume.json.tmp"))
@@ -391,7 +484,15 @@ class MyBooksSyncManager @Inject constructor(
 
     // ────────────────────────── core sync ──────────────────────────
 
-    private suspend fun runSyncNow(): MyBooksSyncResult {
+    private suspend fun runSyncNow(direction: MyBooksSyncDirection, selectedBookIds: Set<String>?): MyBooksSyncResult {
+        val options = preferences.current().content
+        if (!options.hasSelectedContent) return MyBooksSyncResult(context.getString(R.string.webdav_select_content_required), false)
+        val automaticFileErrors = mutableListOf<String>()
+        if (options.bookFiles && direction != MyBooksSyncDirection.DOWNLOAD && selectedBookIds == null) {
+            val localIds = bookRepository.getAllBooks().first().filter { !MyBooksConfig.isMyBooks(it) && canUploadMyBooksBook(it) &&
+                runCatching { BookFileAccess.openInputStream(context, it.filePath).use { } }.isSuccess }.mapTo(mutableSetOf()) { it.id }
+            if (localIds.isNotEmpty()) automaticFileErrors += bookTransfer.get().uploadUnderSyncLock(localIds).errors
+        }
         val token = MyBooksConfig.adminToken
         val snapshot = client.fetchSyncSnapshot(syncStateDao.getValue(KEY_CURSOR)?.takeIf { it.isNotBlank() })
         if (snapshot.libraryId != null) {
@@ -404,19 +505,30 @@ class MyBooksSyncManager @Inject constructor(
             }
             syncStateDao.putState(SyncStateEntity(KEY_LIBRARY_ID, snapshot.libraryId))
         }
-        syncStateDao.putState(SyncStateEntity(KEY_READING_CAPABILITY, snapshot.supportsReadingSync.toString()))
+        syncStateDao.putStates(listOf(SyncStateEntity(KEY_READING_CAPABILITY, snapshot.supportsReadingSync.toString()),
+            SyncStateEntity(KEY_PORTABLE_CAPABILITY, snapshot.supportsPortableSync.toString())))
         val deletedIds = snapshot.deleted.mapTo(mutableSetOf()) { it.id }
         val queued = myBooksSyncStateDao.getPendingDeletes().mapTo(mutableSetOf()) { it.remoteId }
         val failures = mutableListOf<MyBooksSyncFailure>()
-        val failureDetails = mutableListOf<String>()
-        var failed = pushPendingDeletes(token, snapshot, failures, failureDetails)
+        val failureDetails = automaticFileErrors.toMutableList()
+        var failed = automaticFileErrors.size + if (direction != MyBooksSyncDirection.DOWNLOAD) pushPendingDeletes(token, snapshot, failures, failureDetails, selectedBookIds) else 0
         val failedBooks = mutableSetOf<String>()
         var added = 0
         var updated = 0
-        val changes = snapshot.books.associateBy { it.id }.toMutableMap()
+        // Pending imports keep their original local row until the verified file can be associated.
+        val importPrefix = "mybooks_upload:" + snapshot.libraryId + ":"
+        val reservedIds = mutableSetOf<Long>()
+        for (row in syncStateDao.getPrefix(importPrefix)) {
+            if (bookRepository.getBookById(row.key.removePrefix(importPrefix)) != null) {
+                runCatching { JSONObject(row.value).getLong("id") }.getOrNull()?.let { reservedIds += it }
+            }
+        }
+        val changes = (if (direction == MyBooksSyncDirection.UPLOAD) emptyList() else snapshot.books.filter { it.id !in reservedIds })
+            .associateBy { it.id }.toMutableMap()
         val details = mutableMapOf<Long, String>()
         // A local outbox entry must be pushed even when the server delta has no book changes.
         for (state in myBooksSyncStateDao.getAll()) {
+            if (!options.bookFiles || selectedBookIds != null && state.bookId !in selectedBookIds) continue
             if (state.remoteDeleted || state.remoteId in changes || state.remoteId in queued || state.remoteId in deletedIds) continue
             val tags = tagDao.getTagsForBook(state.bookId).map(TagEntity::name)
             if (hasPendingChanges(state, tags) || state.lastError != null) {
@@ -437,7 +549,7 @@ class MyBooksSyncManager @Inject constructor(
         for (remote in changes.values) {
             if (remote.id in queued) continue
             try {
-                when (syncOneBook(remote, token, details[remote.id])) { 1 -> added++; 2 -> updated++ }
+                when (syncOneBook(remote, token, details[remote.id], allowUpload = direction != MyBooksSyncDirection.DOWNLOAD && options.bookFiles, syncBookFiles = options.bookFiles)) { 1 -> added++; 2 -> updated++ }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -457,23 +569,28 @@ class MyBooksSyncManager @Inject constructor(
             }
         }
         val marked = applyServerDeletions(snapshot.deleted)
-        val readingErrors = readingSync.sync(snapshot, failedBooks + queued.map { MyBooksConfig.BOOK_ID_PREFIX + it })
+        val readingErrors = if (options.readingData) readingSync.sync(snapshot, failedBooks + queued.map { MyBooksConfig.BOOK_ID_PREFIX + it },
+            allowUpload = direction != MyBooksSyncDirection.DOWNLOAD, uploadOnly = direction == MyBooksSyncDirection.UPLOAD,
+            selectedBookIds = selectedBookIds) else emptyList()
         for ((bookId, error) in readingErrors) {
             failed++
             failures += classifyMyBooksSyncFailure(error)
             failureDetails += (bookRepository.getBookById(bookId)?.title.orEmpty() + ": " + error.message.orEmpty())
         }
-        if (failed == 0 && snapshot.cursor != null) syncStateDao.putState(SyncStateEntity(KEY_CURSOR, snapshot.cursor))
-        val readingNotice = if (!snapshot.supportsReadingSync && readingSync.pendingFingerprints.first().isNotEmpty())
+        if (failed == 0 && selectedBookIds == null && snapshot.supportsPortableSync) {
+            portableState.get().sync(requireNotNull(snapshot.libraryId), options, direction)
+        }
+        if (failed == 0 && snapshot.cursor != null && direction == MyBooksSyncDirection.BOTH) syncStateDao.putState(SyncStateEntity(KEY_CURSOR, snapshot.cursor))
+        val readingNotice = if (options.readingData && !snapshot.supportsReadingSync && readingSync.pendingFingerprints.first().isNotEmpty())
             "\n" + context.getString(R.string.mybooks_reading_upgrade_required) else ""
         return MyBooksSyncResult(
-            if (failed == 0) context.getString(R.string.mybooks_sync_summary, added, updated, marked) + readingNotice
+            if (failed == 0) context.getString(R.string.mybooks_sync_summary, added, updated, marked) + readingNotice + (if (!snapshot.supportsPortableSync && (options.profileAndSettings || options.libraryOrganization)) "\n" + context.getString(R.string.mybooks_portable_upgrade_required) else "")
             else context.getString(R.string.mybooks_sync_partial_failure, added, updated, failed) +
                 failureDetails.take(2).joinToString(separator = "\n", prefix = "\n"),
             failed == 0, failed, failures.firstOrNull())
     }
 
-    private suspend fun syncOneBook(remote: RemoteBook, token: String, detailHint: String? = null): Int {
+    private suspend fun syncOneBook(remote: RemoteBook, token: String, detailHint: String? = null, allowUpload: Boolean = true, syncBookFiles: Boolean = true): Int {
         val bookId = MyBooksConfig.BOOK_ID_PREFIX + remote.id
         val existing = bookRepository.getBookById(bookId)
         var state = myBooksSyncStateDao.get(bookId)
@@ -489,7 +606,7 @@ class MyBooksSyncManager @Inject constructor(
             val now = System.currentTimeMillis()
             val file = RemoteBookFormats.preferredFile(detail.files)
             val format = file?.format?.toBookFormatOrNull() ?: BookFormat.EPUB
-            val coverPath = cacheCover(remote.id, detail.coverUrl, force = true)
+            val coverPath = if (syncBookFiles) cacheCover(remote.id, detail.coverUrl, force = true) else null
             bookRepository.insertBook(
                 Book(
                     id = bookId,
@@ -540,6 +657,10 @@ class MyBooksSyncManager @Inject constructor(
                 localTags = detail.tags
             }
         }
+        if (!syncBookFiles) {
+            state?.let { checkBookIdentity(it, remote); myBooksSyncStateDao.upsert(it.copy(remoteDeleted = false, lastError = null)) }
+            return 0
+        }
         val currentState = state ?: return 0
         check(currentState.conflictFieldsJson == "[]") { context.getString(R.string.mybooks_conflict_requires_choice) }
         val base = JSONObject(currentState.baseJson)
@@ -565,7 +686,7 @@ class MyBooksSyncManager @Inject constructor(
         val remoteUpdatedAt = detail.updatedAt ?: remote.updatedAt ?: currentState.serverUpdatedAt
         val merge = mergeState(existing, currentState, localTags, detailJson)
 
-        if (token.isBlank()) {
+        if (token.isBlank() || !allowUpload) {
             applyRemote(
                 existing,
                 detail,
@@ -910,10 +1031,12 @@ class MyBooksSyncManager @Inject constructor(
 
     private suspend fun pushPendingDeletes(
         token: String, snapshot: MyBooksSyncSnapshot, failures: MutableList<MyBooksSyncFailure>,
-        failureDetails: MutableList<String>
+        failureDetails: MutableList<String>,
+        selectedBookIds: Set<String>? = null
     ): Int {
         var failed = 0
         for (item in myBooksSyncStateDao.getPendingDeletes()) {
+            if (selectedBookIds != null && item.bookId !in selectedBookIds) continue
             try {
                 check(snapshot.syncVersion >= 2) { context.getString(R.string.mybooks_delete_upgrade_required) }
                 if (snapshot.deleted.any { it.id == item.remoteId && (item.expectedUuid.isBlank() || it.uuid == item.expectedUuid) }) {
@@ -958,25 +1081,22 @@ class MyBooksSyncManager @Inject constructor(
         }
     }
 
-    /** Refresh only this book before the reader loads its position; offline reading stays available. */
-    suspend fun prepareReading(bookId: String) {
-        if (!MyBooksConfig.hasWriteToken() || syncStateDao.getValue(KEY_READING_CAPABILITY) != "true") return
-        val library = syncStateDao.getValue(KEY_LIBRARY_ID)?.takeIf { it.isNotBlank() } ?: return
-        if (stateStore.status.first().failure == MyBooksSyncFailure.AUTH) return
-        var acquired = false
+    suspend fun syncReadingChanges() {
+        val configuration = preferences.current()
+        if (!configuration.enabled || !configuration.automatic || !configuration.content.readingData || !MyBooksConfig.hasWriteToken()) return
+        if (localNetworkAccessManager.stateFor(MyBooksConfig.SERVER_URL) == LocalNetworkAccessState.PERMISSION_REQUIRED) return
+        if (syncStateDao.getValue(KEY_READING_CAPABILITY) != "true" || !syncMutex.tryLock()) return
         try {
-            kotlinx.coroutines.withTimeoutOrNull(1_000) { syncMutex.lock(); acquired = true }
-            if (!acquired) return
-            withContext(Dispatchers.IO) {
-                if (!localNetworkAccessManager.hasPermission() && localNetworkAccessManager.stateFor(MyBooksConfig.SERVER_URL) == LocalNetworkAccessState.PERMISSION_REQUIRED) return@withContext
-                readingSync.beforeOpen(bookId, library)
+            val library = syncStateDao.getValue(KEY_LIBRARY_ID)?.takeIf { it.isNotBlank() } ?: return
+            val snapshot = MyBooksSyncSnapshot(emptyList(), libraryId = library, syncVersion = 3, supportsReadingSync = true)
+            val errors = withContext(Dispatchers.IO) { readingSync.sync(snapshot, uploadOnly = true) }
+            errors.firstOrNull()?.second?.let { stateStore.readingFailure(it) }
+            if (errors.isEmpty() && syncStateDao.getValue(KEY_PORTABLE_CAPABILITY) == "true") {
+                withContext(Dispatchers.IO) { portableState.get().sync(library, configuration.content, MyBooksSyncDirection.BOTH) }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) {
-            stateStore.readingFailure(error)
-            if (classifyMyBooksSyncFailure(error) == MyBooksSyncFailure.TRANSIENT) scheduler.scheduleRetry()
-            else if (error is MyBooksHttpException && error.status == 409) scheduler.schedulePush()
-        } finally { if (acquired) syncMutex.unlock() }
+        catch (error: Exception) { stateStore.readingFailure(error) }
+        finally { syncMutex.unlock() }
     }
 
     suspend fun resolveReadingConflict(bookId: String, useLocal: Boolean): MyBooksSyncResult {
@@ -1193,6 +1313,7 @@ class MyBooksSyncManager @Inject constructor(
 
     internal companion object {
         const val KEY_READING_CAPABILITY = "mybooks_reading_supported"
+        const val KEY_PORTABLE_CAPABILITY = "mybooks_portable_supported"
         const val KEY_CURSOR = "mybooks_books_cursor"
         const val KEY_LAST_SYNC = "mybooks_last_sync_at"
         const val KEY_LIBRARY_ID = "mybooks_library_id"

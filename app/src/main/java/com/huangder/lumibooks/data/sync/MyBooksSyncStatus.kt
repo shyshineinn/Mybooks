@@ -110,7 +110,15 @@ class MyBooksSyncStateStore @Inject constructor(
     val automaticReadingChanges = combine(readingChanges, syncStateDao.observeValue(MyBooksSyncManager.KEY_READING_CAPABILITY)) { pending, supported ->
         if (supported == "false") emptyMap() else pending
     }.distinctUntilChanged()
-    val pendingCount = combine(metadataPending, readingChanges) { metadata, reading -> (metadata + reading.keys).size }
+    private val uploadPending = combine(syncStateDao.observePrefix("mybooks_upload:"),
+        syncStateDao.observePrefix("mybooks_upload_error:"), bookRepository.getAllBooks()) { transfers, errors, books ->
+        val ids = books.mapTo(mutableSetOf()) { it.id }
+        (transfers + errors).mapNotNull { row -> runCatching {
+            val root = JSONObject(row.value)
+            root.optString("localBookId").ifBlank { root.optString("bookId") }.takeIf { it in ids }
+        }.getOrNull() }.toSet()
+    }
+    val pendingCount = combine(metadataPending, readingChanges, uploadPending) { metadata, reading, uploads -> (metadata + reading.keys + uploads).size }
 
     suspend fun started(at: Long) {
         val old = status.first()

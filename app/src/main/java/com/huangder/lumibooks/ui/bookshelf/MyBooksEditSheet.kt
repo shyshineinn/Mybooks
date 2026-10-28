@@ -97,6 +97,8 @@ fun MyBooksEditSheet(
     meta: ServerBookMeta?,
     onDismiss: (MyBooksCreatedBook?) -> Unit,
     createSource: MyBooksCreateSource? = null,
+    localImport: Boolean = false,
+    onLocalImportSaved: ((String) -> Unit)? = null,
     viewModel: MyBooksEditViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -105,9 +107,10 @@ fun MyBooksEditSheet(
     var discardOpen by remember { mutableStateOf(false) }
     var saved = false
     val createMode = createSource != null
+    var localDraft by remember(createSource?.uri) { mutableStateOf<String?>(null) }
     LaunchedEffect(createSource?.uri, book?.id) {
         if (createSource != null) {
-            viewModel.beginCreate(createSource)
+            viewModel.beginCreate(createSource, localOnly = localImport)
         } else if (book != null) {
             viewModel.begin(book, meta)
         }
@@ -118,7 +121,10 @@ fun MyBooksEditSheet(
     LiquidGlassBottomSheetScaffold(
         // 同样要读实时值：新建成功后立刻关闭时，collectAsState 的 state 还是旧的，
         // created 会是 null，本地副本就建立不起来。
-        onDismiss = { onDismiss(viewModel.uiState.value.created) },
+        onDismiss = {
+            if (localImport && localDraft != null) onLocalImportSaved?.invoke(requireNotNull(localDraft))
+            else onDismiss(viewModel.uiState.value.created)
+        },
         maxHeightFraction = 0.62f,
         onRequestDismiss = {
             // 必须读 StateFlow 的实时值：collectAsState 的 state 要等下一次重组才更新，
@@ -146,10 +152,13 @@ fun MyBooksEditSheet(
             EditSheetContent(
                 state = state,
                 createMode = createMode,
+                localImport = localImport,
                 onClose = { requestDismiss() },
                 onCancel = { requestDismiss() },
                 onSave = {
-                    viewModel.save { message ->
+                    if (localImport) {
+                        viewModel.localImportDraft()?.let { localDraft = it; saved = true; requestDismiss() }
+                    } else viewModel.save { message ->
                         if (message != null) {
                             saved = true
                             toast.show(message)
@@ -203,6 +212,7 @@ private fun MyBooksDiscardConfirm(onKeep: () -> Unit, onDiscard: () -> Unit) {
 private fun ColumnScope.EditSheetContent(
     state: MyBooksEditUiState,
     createMode: Boolean,
+    localImport: Boolean = false,
     onClose: () -> Unit,
     onCancel: () -> Unit,
     onSave: () -> Unit,
@@ -214,7 +224,7 @@ private fun ColumnScope.EditSheetContent(
     ) {
         Text(
             text = stringResource(
-                if (createMode) R.string.mybooks_create_title else R.string.mybooks_edit_title
+                if (localImport) R.string.import_book_metadata_title else if (createMode) R.string.mybooks_create_title else R.string.mybooks_edit_title
             ),
             fontSize = AppType.Section,
             fontWeight = FontWeight.Bold,
@@ -318,7 +328,7 @@ private fun ColumnScope.EditSheetContent(
                     if (createMode) R.string.mybooks_create_saving else R.string.mybooks_edit_saving
                 )
             } else {
-                stringResource(if (createMode) R.string.mybooks_create_action else R.string.save)
+                stringResource(if (localImport) R.string.import_book_metadata_confirm else if (createMode) R.string.mybooks_create_action else R.string.save)
             },
             // 新建模式下草稿本身就是新内容，不看 dirty；标题为空时由保存校验拦下。
             enabled = (state.dirty || createMode) && !state.saving,

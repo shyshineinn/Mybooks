@@ -5,10 +5,6 @@ package com.huangder.lumibooks.ui.bookshelf
 import com.huangder.lumibooks.ui.theme.LocalReduceTransparency
 import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import com.huangder.lumibooks.ui.components.liquidGlassMenuAnchor
-import com.huangder.lumibooks.ui.components.PULL_TO_REFRESH_THRESHOLD_DP
-import com.huangder.lumibooks.ui.components.PullToRefreshHint
-import com.huangder.lumibooks.ui.components.pullToRefreshProgress
-import com.huangder.lumibooks.ui.components.shouldTriggerPullActionOnRelease
 import com.huangder.lumibooks.ui.icons.AppIcons
 
 import android.net.Uri
@@ -174,22 +170,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-@Composable
-private fun MyBooksPullHint(
-    bounceState: OverscrollBounceState,
-    headerHeight: Dp,
-    enabled: Boolean
-) {
-    if (!enabled) return
-    val thresholdPx = with(LocalDensity.current) { PULL_TO_REFRESH_THRESHOLD_DP.dp.toPx() }
-    PullToRefreshHint(
-        text = stringResource(R.string.mybooks_pull_sync_hint),
-        progress = pullToRefreshProgress(bounceState.offset, thresholdPx),
-        // 落在顶栏下方：顶栏两侧是按钮，提示压在上面会挡住它们。
-        topPadding = headerHeight + AppSpace.sm
-    )
-}
-
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun BookshelfScreen(
@@ -235,19 +215,15 @@ fun BookshelfScreen(
     val folderTransitionOffset = remember { Animatable(0f) }
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
-    var myBooksRefreshing by remember { mutableStateOf(false) }
-    val refreshScope = rememberCoroutineScope()
-    val refreshMyBooks = {
-        if (!myBooksRefreshing) {
-            myBooksRefreshing = true
-            refreshScope.launch {
-                val result = viewModel.syncMyBooksNow()
-                myBooksRefreshing = false
-                onMessage(result.message)
-            }
+    val syncBackends by viewModel.availableLibrarySyncBackends.collectAsState(initial = emptyList())
+    var chooseSyncBackend by remember { mutableStateOf(false) }
+    val requestLibrarySync: () -> Unit = {
+        when (syncBackends.size) {
+            0 -> onMessage(context.getString(R.string.library_sync_configure_hint))
+            1 -> viewModel.syncLibraryNow(syncBackends.single())
+            else -> chooseSyncBackend = true
         }
     }
-    val myBooksPullEnabled = effectiveLayoutMode != BookshelfLayout.CoverFlow
     val contextMenuState = rememberBookContextMenuState()
     var coverFlowMenuVisible by remember { mutableStateOf(false) }
     val folderContextMenuState = rememberFolderContextMenuState()
@@ -264,14 +240,6 @@ fun BookshelfScreen(
     val statusBarTopPadding = WindowInsets.statusBarsIgnoringVisibility
         .asPaddingValues()
         .calculateTopPadding()
-    val myBooksPullThresholdPx = with(density) { PULL_TO_REFRESH_THRESHOLD_DP.dp.toPx() }
-    val onTopPullRelease: (Float) -> Unit = { offsetPx ->
-        if (myBooksPullEnabled && !myBooksRefreshing &&
-            shouldTriggerPullActionOnRelease(offsetPx, myBooksPullThresholdPx)
-        ) {
-            refreshMyBooks()
-        }
-    }
     val bookshelfBackdrop = rememberLayerBackdrop()
     val bookshelfTopBlurBackdrop = rememberLayerBackdrop()
     var bookshelfHeaderHeightPx by remember { mutableStateOf(0) }
@@ -897,8 +865,7 @@ fun BookshelfScreen(
             if (isLiquidGlass) {
                 OverscrollBounce(
                     modifier = Modifier.fillMaxSize(),
-                    state = bounceState,
-                    onTopPullRelease = onTopPullRelease
+                    state = bounceState
                 ) {
                     BookshelfCollection(
                         layoutMode = effectiveLayoutMode,
@@ -967,8 +934,7 @@ fun BookshelfScreen(
             } else {
             OverscrollBounce(
                 modifier = Modifier.fillMaxSize(),
-                state = bounceState,
-                onTopPullRelease = onTopPullRelease
+                state = bounceState
             ) {
                 Column(
                     modifier = Modifier
@@ -1006,10 +972,10 @@ fun BookshelfScreen(
                             expandedSearchBookId = null
                             isSearchActive = true
                         },
-                        onSyncClick = { viewModel.syncWebdavNow() },
+                        onSyncClick = requestLibrarySync,
                         onRefreshClick = onRefreshAuthorizedDirectories,
                         layoutMode = effectiveLayoutMode,
-                        isWebdavSyncing = uiState.isWebdavSyncing,
+                        isLibrarySyncing = uiState.isLibrarySyncing,
                         onSelectAll = toggleSelectAll,
                         onLayoutModeChange = changeLayout,
                         sortBy = uiState.sortBy,
@@ -1133,10 +1099,10 @@ fun BookshelfScreen(
                         expandedSearchBookId = null
                         isSearchActive = true
                     },
-                    onSyncClick = { viewModel.syncWebdavNow() },
+                    onSyncClick = requestLibrarySync,
                     onRefreshClick = onRefreshAuthorizedDirectories,
                     layoutMode = effectiveLayoutMode,
-                    isWebdavSyncing = uiState.isWebdavSyncing,
+                    isLibrarySyncing = uiState.isLibrarySyncing,
                     onSelectAll = toggleSelectAll,
                     onLayoutModeChange = changeLayout,
                     sortBy = uiState.sortBy,
@@ -1331,11 +1297,22 @@ fun BookshelfScreen(
             )
         }
 
-        MyBooksPullHint(
-            bounceState = bounceState,
-            headerHeight = with(density) { bookshelfHeaderHeightPx.toDp() },
-            enabled = myBooksPullEnabled
-        )
+        if (chooseSyncBackend) {
+            com.huangder.lumibooks.ui.components.LiquidGlassAlertDialog(
+                onDismissRequest = { chooseSyncBackend = false },
+                title = { Text(stringResource(R.string.library_sync_choose)) },
+                text = { Column {
+                    syncBackends.forEach { backend ->
+                        com.huangder.lumibooks.ui.components.LiquidGlassTextButton(
+                            text = stringResource(if (backend == HomeViewModel.LibrarySyncBackend.MYBOOKS) R.string.mybooks_server_title else R.string.title_webdav),
+                            onClick = { chooseSyncBackend = false; viewModel.syncLibraryNow(backend) }
+                        )
+                    }
+                } },
+                confirmButton = {},
+                dismissButton = { com.huangder.lumibooks.ui.components.LiquidGlassTextButton(text = stringResource(R.string.cancel), onClick = { chooseSyncBackend = false }) }
+            )
+        }
 
         editingMyBooksBook?.let { book ->
             MyBooksEditSheet(
@@ -1987,7 +1964,7 @@ private fun BookshelfHeaderActions(
     val menuHost = LocalLiquidGlassMenuHost.current
     var menuExpanded by remember { mutableStateOf(false) }
     var menuAnchorBounds by remember { mutableStateOf(Rect.Zero) }
-    val syncLabel = stringResource(if (isSyncing) R.string.webdav_syncing else R.string.webdav_sync_now)
+    val syncLabel = stringResource(if (isSyncing) R.string.sync_running else R.string.sync_now)
     val standardGridLabel = stringResource(R.string.bookshelf_standard_grid)
     val compactGridLabel = stringResource(R.string.bookshelf_compact_grid)
     val listLayoutLabel = stringResource(R.string.bookshelf_list_layout)
@@ -2152,7 +2129,7 @@ private fun BookshelfCapsuleHeader(
     onRefreshClick: () -> Unit,
     onSelectAll: () -> Unit,
     layoutMode: Int,
-    isWebdavSyncing: Boolean,
+    isLibrarySyncing: Boolean,
     onLayoutModeChange: (Int) -> Unit,
     onSearchBoundsChanged: (Rect) -> Unit,
     sortBy: SortBy = SortBy.DATE_ADDED,
@@ -2185,7 +2162,7 @@ private fun BookshelfCapsuleHeader(
         Column(modifier.mainTabEntrance().fillMaxWidth().windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
             .padding(horizontal = 16.dp, vertical = 6.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                BookshelfHeaderActions(layoutMode, isWebdavSyncing, onSyncClick, onRefreshClick,
+                BookshelfHeaderActions(layoutMode, isLibrarySyncing, onSyncClick, onRefreshClick,
                     onLayoutModeChange, onCreateFolder, onAddBook = onCoverFlowAddBook, onEdit = onEditToggle,
                     sortBy = sortBy, onSortByChange = onSortByChange,
                     modifier = Modifier.coverFlowEntranceItem(0))
@@ -2454,7 +2431,7 @@ private fun BookshelfCapsuleHeader(
                     Spacer(Modifier.width(8.dp))
                     BookshelfHeaderActions(
                         layoutMode = layoutMode,
-                        isSyncing = isWebdavSyncing,
+                        isSyncing = isLibrarySyncing,
                         onSyncClick = onSyncClick,
                         onRefreshClick = onRefreshClick,
                         onLayoutModeChange = onLayoutModeChange,
@@ -2464,7 +2441,7 @@ private fun BookshelfCapsuleHeader(
                         onSortByChange = onSortByChange
                     )
                     Spacer(Modifier.width(8.dp))
-                    BookshelfSyncProgressIndicator(isSyncing = isWebdavSyncing)
+                    BookshelfSyncProgressIndicator(isSyncing = isLibrarySyncing)
                 }
 
                 BookshelfSearchLauncher(

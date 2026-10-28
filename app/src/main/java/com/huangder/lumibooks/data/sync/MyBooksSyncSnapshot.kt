@@ -12,7 +12,9 @@ data class MyBooksSyncSnapshot(
     val cursor: String? = null,
     val isFull: Boolean = true,
     val supportsReadingSync: Boolean = false,
-    val reading: List<MyBooksReadingHead> = emptyList()
+    val reading: List<MyBooksReadingHead> = emptyList(),
+    val supportsPortableSync: Boolean = false,
+    val portableRevision: Long = 0
 )
 
 /** A malformed or filtered response must never become deletion authority. */
@@ -88,5 +90,6 @@ internal fun parseMyBooksChanges(json: String, baseUrl: String): MyBooksSyncSnap
         MyBooksReadingHead(id, uuid, revision.toLong())
     }
     return parsed.copy(syncVersion = 3, cursor = cursor, isFull = complete,
-        supportsReadingSync = root.optBoolean("reading_sync"), reading = reading)
+        supportsReadingSync = root.optBoolean("reading_sync"), reading = reading,
+        supportsPortableSync = root.optBoolean("portable_sync"), portableRevision = root.optLong("portable_revision"))
 }

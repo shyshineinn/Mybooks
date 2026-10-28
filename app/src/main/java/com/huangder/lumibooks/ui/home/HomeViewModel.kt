@@ -67,7 +67,7 @@ import javax.inject.Inject
 data class DailyReading(val date: String, val duration: Long, val dayLabel: String)
 
 /** 导入前用户在弹窗里补充的书名/作者；按 uri 关联到具体文件。 */
-data class BookImportOverride(val title: String? = null, val author: String? = null)
+data class BookImportOverride(val title: String? = null, val author: String? = null, val metadata: String? = null)
 
 data class BookImportCandidate(
     val uri: Uri,
@@ -158,6 +158,7 @@ data class HomeUiState(
     /** 服务器 status 分类；本地导入书不在其中。 */
     val serverReadingStatusByBookId: Map<String, ReadingStatus> = emptyMap(),
     val isWebdavSyncing: Boolean = false,
+    val isLibrarySyncing: Boolean = false,
     val downloadStates: Map<String, BookDownloadState> = emptyMap(),
     val isBookDeleteInProgress: Boolean = false
 )
@@ -182,6 +183,14 @@ class HomeViewModel @Inject constructor(
         const val READING_HISTORY_START_DATE = "1970-01-01"
     }
 
+    enum class LibrarySyncBackend { MYBOOKS, WEBDAV }
+    val availableLibrarySyncBackends = kotlinx.coroutines.flow.combine(MyBooksConfig.connection, dataStoreManager.webdavConfig) { server, webdav ->
+        buildList {
+            if (server.loggedIn) add(LibrarySyncBackend.MYBOOKS)
+            if (webdav.enabled) add(LibrarySyncBackend.WEBDAV)
+        }
+    }
+    private var librarySyncJob: Job? = null
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
     private val _downloadedBooks = MutableSharedFlow<Book>(extraBufferCapacity = 1)
@@ -224,7 +233,6 @@ class HomeViewModel @Inject constructor(
         loadFolderBooksSort()
         loadAuthorizedBookDirectories()
         // 启动时静默同步一次服务器书库（10 分钟节流）
-        viewModelScope.launch { myBooksSyncManager.syncIfStale() }
     }
 
     fun loadBooks() {
@@ -517,9 +525,10 @@ class HomeViewModel @Inject constructor(
 
     private fun loadWebdavSyncStatus() {
         viewModelScope.launch {
-            webdavSyncManager.isSyncing.collectLatest { syncing ->
-                _uiState.value = _uiState.value.copy(isWebdavSyncing = syncing)
-            }
+            kotlinx.coroutines.flow.combine(webdavSyncManager.isSyncing, myBooksSyncManager.isSyncing) { webdav, server -> webdav to server }
+                .collectLatest { (webdav, server) ->
+                    _uiState.value = _uiState.value.copy(isWebdavSyncing = webdav, isLibrarySyncing = webdav || server)
+                }
         }
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(
@@ -559,11 +568,19 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun syncWebdavNow() {
-        _uiState.value = _uiState.value.copy(importMessage = application.getString(R.string.webdav_syncing))
-        viewModelScope.launch {
-            val result = webdavSyncManager.fullSync()
-            _uiState.value = _uiState.value.copy(importMessage = result.message)
+    fun syncLibraryNow(backend: LibrarySyncBackend) {
+        if (librarySyncJob?.isActive == true || _uiState.value.isLibrarySyncing) return
+        _uiState.value = _uiState.value.copy(importMessage = application.getString(R.string.sync_running), isLibrarySyncing = true)
+        librarySyncJob = viewModelScope.launch {
+            try {
+                val message = when (backend) {
+                    LibrarySyncBackend.MYBOOKS -> myBooksSyncManager.syncNow().message
+                    LibrarySyncBackend.WEBDAV -> webdavSyncManager.fullSync().message
+                }
+                _uiState.value = _uiState.value.copy(importMessage = message)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) { _uiState.value = _uiState.value.copy(error = error.message) }
+            finally { _uiState.value = _uiState.value.copy(isLibrarySyncing = webdavSyncManager.isSyncing.value || myBooksSyncManager.isSyncing.value) }
         }
     }
 
@@ -650,7 +667,8 @@ class HomeViewModel @Inject constructor(
                     sourceLastModified = authorizedStorageManager.queryLastModified(context, uri),
                     sourceSize = runCatching { com.huangder.lumibooks.util.BookFileAccess.size(context, uri.toString()) }.getOrDefault(0L),
                     titleOverride = override?.title,
-                    authorOverride = override?.author
+                    authorOverride = override?.author,
+                    importMetadata = override?.metadata
                 )
             },
             copyIntoApp = true,
@@ -768,6 +786,11 @@ class HomeViewModel @Inject constructor(
             )
             _uiState.value = _uiState.value.copy(importMessage = result.toMessage(context))
             onDone()
+            if (result.imported > 0) {
+                myBooksSyncManager.onLocalBooksImported()
+                val application = context.applicationContext as? com.huangder.lumibooks.EBookReaderApp
+                application?.webdavAutoSyncScheduler?.scheduleImmediate()
+            }
         }
     }
 
@@ -1338,6 +1361,27 @@ class HomeViewModel @Inject constructor(
             targetFolderId = targetFolderId,
             groupByAuthorizedSource = groupByAuthorizedSource
         )
+        val metadataByUri = documents.associateBy { it.uri.toString() }
+        for (outcome in result.outcomes) {
+            if (outcome.status != BookImportPipeline.Status.IMPORTED) continue
+            val id = outcome.bookId ?: continue
+            val raw = metadataByUri[outcome.document.uri.toString()]?.importMetadata ?: continue
+            database.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity("book_import_metadata:" + id, raw))
+            val root = org.json.JSONObject(raw); val fields = root.getJSONObject("fields")
+            val tags = fields.optJSONArray("tags")
+            if (tags != null) for (index in 0 until tags.length()) {
+                val name = tags.optString(index).trim(); if (name.isEmpty()) continue
+                database.tagDao().createAndAssignTag(id, com.huangder.lumibooks.data.local.entity.TagEntity(java.util.UUID.randomUUID().toString(), name,
+                    name.lowercase(java.util.Locale.ROOT), System.currentTimeMillis()))
+            }
+            val cover = root.optString("coverUrl").takeIf { it.isNotBlank() && it != "null" }
+            if (cover != null) runCatching {
+                val target = java.io.File(com.huangder.lumibooks.util.FileUtils.getCoversDirectory(context), "import-" + java.util.UUID.randomUUID() + ".jpg")
+                myBooksSyncManager.cacheImportedCover(cover, target)
+                val book = bookRepository.getBookById(id)
+                if (book != null) bookRepository.updateBookMetadata(book.copy(coverPath = target.path))
+            }
+        }
         return ImportResult(imported = result.imported, skipped = result.skipped, failed = result.failed)
     }
 
@@ -1354,6 +1398,7 @@ class HomeViewModel @Inject constructor(
         val sourceDirectoryBindings: List<FolderRepository.StorageBinding> = emptyList(),
         val titleOverride: String? = null,
         val authorOverride: String? = null,
+        val importMetadata: String? = null,
         /** 指定本地书 id：服务器建好的书要沿用同一个 id，才能共用本地正文副本。 */
         val idOverride: String? = null
     ) {
@@ -2104,52 +2149,31 @@ class HomeViewModel @Inject constructor(
         if (booksToDelete.isEmpty()) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isBookDeleteInProgress = true)
-            var remoteFailure: String? = null
-            if (mode.cloudFailureBlocksLocalDelete) {
-                val remoteIds = booksToDelete.asSequence()
-                    .filter { it.remoteFileName != null && !MyBooksConfig.isMyBooks(it) }
-                    .mapTo(mutableSetOf()) { it.id }
-                if (remoteIds.isNotEmpty()) {
-                    val remoteResult = webdavSyncManager.deleteRemoteBooks(remoteIds)
-                    if (!remoteResult.success) {
-                        _uiState.value = _uiState.value.copy(
-                            error = remoteResult.message,
-                            isBookDeleteInProgress = false
-                        )
-                        return@launch
-                    }
-                }
-            }
-            val failures = deleteBooksAndManagedData(booksToDelete, mode)
-            if (mode.forcesLocalDelete) {
-                // my-books 的书只做本地删除，不碰 WebDAV
-                val webdavTargets = booksToDelete.filterNot { MyBooksConfig.isMyBooks(it) }
-                if (webdavTargets.isNotEmpty()) {
-                    val remoteFileNames = webdavTargets.associate { book ->
-                        book.id to (book.remoteFileName ?: "${book.id}.${if (book.format == BookFormat.MARKDOWN) "mdpack" else book.format.name.lowercase()}")
-                    }
-                    val remoteResult = webdavSyncManager.deleteRemoteBooks(
-                        bookIds = webdavTargets.mapTo(mutableSetOf()) { it.id },
-                        remoteFileNames = remoteFileNames,
-                        publishPortableState = true
-                    )
-                    if (!remoteResult.success) {
-                        remoteFailure = application.getString(
-                            R.string.force_delete_cloud_failed,
-                            remoteResult.message
-                        )
-                    }
-                }
-            }
-            val messages = failures + listOfNotNull(remoteFailure)
-            if (messages.isNotEmpty()) {
-                _uiState.value = _uiState.value.copy(
-                    error = messages.joinToString(separator = "\n"),
-                    isBookDeleteInProgress = false
-                )
-            } else {
-                _uiState.value = _uiState.value.copy(isBookDeleteInProgress = false)
-            }
+            try {
+                val errors = com.huangder.lumibooks.domain.model.executeBookDeletion(mode,
+                    deleteLocal = { deleteBooksAndManagedData(booksToDelete, mode) },
+                    deleteCloud = {
+                        val failures = mutableListOf<String>()
+                        val serverIds = booksToDelete.filter(MyBooksConfig::isMyBooks).mapTo(mutableSetOf()) { it.id }
+                        if (serverIds.isNotEmpty()) {
+                            val result = myBooksSyncManager.deleteRemoteBooks(serverIds)
+                            if (!result.success) {
+                                failures += result.message
+                                if (mode.forcesLocalDelete) myBooksSyncManager.schedulePush()
+                            }
+                        }
+                        val webdav = booksToDelete.filterNot(MyBooksConfig::isMyBooks)
+                        val ids = webdav.filter { mode.forcesLocalDelete || it.remoteFileName != null }.mapTo(mutableSetOf()) { it.id }
+                        if (ids.isNotEmpty()) {
+                            val names = if (mode.forcesLocalDelete) webdav.associate { book -> book.id to (book.remoteFileName ?:
+                                (book.id + "." + if (book.format == BookFormat.MARKDOWN) "mdpack" else book.format.name.lowercase())) } else emptyMap()
+                            val result = webdavSyncManager.deleteRemoteBooks(ids, names, publishPortableState = mode.forcesLocalDelete)
+                            if (!result.success) failures += result.message
+                        }
+                        failures
+                    })
+                if (errors.isNotEmpty()) _uiState.value = _uiState.value.copy(error = errors.joinToString("\n"))
+            } finally { _uiState.value = _uiState.value.copy(isBookDeleteInProgress = false) }
         }
     }
 
@@ -2165,14 +2189,13 @@ class HomeViewModel @Inject constructor(
             .toSet()
         val deletedIds = mutableSetOf<String>()
         val failures = mutableListOf<String>()
-        var queuedServerDelete = false
 
         books.forEach { book ->
             val keepCloudPlaceholder = mode == BookDeleteMode.LOCAL_ONLY &&
-                book.remoteFileName != null &&
-                !MyBooksConfig.isMyBooks(book)
-            if (keepCloudPlaceholder && book.isCloudOnly) return@forEach
+                (book.remoteFileName != null || MyBooksConfig.isMyBooks(book))
             try {
+                if (keepCloudPlaceholder && MyBooksConfig.isMyBooks(book)) myBooksSyncManager.clearLocalBookData(book.id, keepServerAssociation = true)
+                if (keepCloudPlaceholder && book.isCloudOnly) return@forEach
                 val shouldDeletePhysicalFile = book.filePath.isNotBlank() &&
                     book.filePath !in pathsUsedByRemainingBooks
                 if (shouldDeletePhysicalFile) {
@@ -2206,10 +2229,9 @@ class HomeViewModel @Inject constructor(
                     }
                 } else {
                     if (MyBooksConfig.isMyBooks(book) &&
-                        mode != BookDeleteMode.LOCAL_ONLY &&
-                        MyBooksConfig.hasWriteToken()
+                        mode.forcesLocalDelete
                     ) {
-                        queuedServerDelete = myBooksSyncManager.queuePendingDelete(book.id) || queuedServerDelete
+                        myBooksSyncManager.queuePendingDelete(book.id)
                     }
                     bookRepository.deleteBook(book)
                     if (MyBooksConfig.isMyBooks(book)) {
@@ -2243,7 +2265,6 @@ class HomeViewModel @Inject constructor(
 
         }
 
-        if (queuedServerDelete) myBooksSyncManager.schedulePush()
         return failures
     }
 

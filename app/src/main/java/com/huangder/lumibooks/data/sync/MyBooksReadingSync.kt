@@ -68,7 +68,8 @@ class MyBooksReadingSync @Inject constructor(
         dao.putState(SyncStateEntity(CHOICE + uuid(state), useLocal.toString()))
     }
 
-    suspend fun sync(snapshot: MyBooksSyncSnapshot, excluded: Set<String> = emptySet()): List<Pair<String, Exception>> {
+    suspend fun sync(snapshot: MyBooksSyncSnapshot, excluded: Set<String> = emptySet(),
+        allowUpload: Boolean = true, uploadOnly: Boolean = false, selectedBookIds: Set<String>? = null): List<Pair<String, Exception>> {
         if (!snapshot.supportsReadingSync) return emptyList()
         val heads = snapshot.reading.associateBy { it.id }
         val errors = mutableListOf<Pair<String, Exception>>()
@@ -76,7 +77,8 @@ class MyBooksReadingSync @Inject constructor(
         val chosen = dao.getPrefix(CHOICE).map { it.key.removePrefix(CHOICE) }.toSet()
         val conflicts = dao.getPrefix(CONFLICT).map { it.key.removePrefix(CONFLICT) }.toSet()
         for (state in db.myBooksSyncStateDao().getAll()) {
-            if (state.bookId in excluded) continue
+            if (state.bookId in excluded || selectedBookIds != null && state.bookId !in selectedBookIds) continue
+            if (uploadOnly && state.bookId !in pending && uuid(state) !in chosen && uuid(state) !in conflicts) continue
             if (state.remoteId !in heads && state.bookId !in pending && uuid(state) !in chosen && uuid(state) !in conflicts) continue
             if (state.remoteDeleted || uuid(state).isBlank() || db.bookDao().getBookById(state.bookId) == null) continue
             try {
@@ -87,7 +89,7 @@ class MyBooksReadingSync @Inject constructor(
                 val dirty = readingCanonical(capture(book, base.getJSONObject("data"))) != readingCanonical(base.getJSONObject("data"))
                 if (dirty || head?.revision != null && head.revision != base.getLong("revision") ||
                     dao.getValue(CONFLICT + uuid(state)) != null || dao.getValue(CHOICE + uuid(state)) != null) {
-                    syncBook(state, requireNotNull(snapshot.libraryId))
+                    syncBook(state, requireNotNull(snapshot.libraryId), allowUpload = allowUpload)
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (error: Exception) {
@@ -110,7 +112,7 @@ class MyBooksReadingSync @Inject constructor(
         if (!state.remoteDeleted && uuid(state).isNotBlank()) syncBook(state, library, timeoutMs)
     }
 
-    private suspend fun syncBook(state: MyBooksSyncStateEntity, library: String, timeoutMs: Long = 0) {
+    private suspend fun syncBook(state: MyBooksSyncStateEntity, library: String, timeoutMs: Long = 0, allowUpload: Boolean = true) {
         ensureHash(state.bookId)
         val base = baseline(uuid(state))
         var remote = checkedState(client.fetchReadingState(state.remoteId, timeoutMs), state)
@@ -129,7 +131,7 @@ class MyBooksReadingSync @Inject constructor(
                 throw MyBooksReadingConflict(context.getString(R.string.mybooks_reading_conflict))
             }
             val confirmed = try {
-                if (readingCanonical(merged.data) == readingCanonical(remote.getJSONObject("data"))) remote
+                if (!allowUpload || readingCanonical(merged.data) == readingCanonical(remote.getJSONObject("data"))) remote
                 else checkedState(client.putReadingState(state.remoteId, library, uuid(state), remote.getLong("revision"), merged.data, timeoutMs), state)
             } catch (error: MyBooksHttpException) {
                 val current = runCatching { JSONObject(error.body).optJSONObject("current") }.getOrNull()
@@ -138,7 +140,8 @@ class MyBooksReadingSync @Inject constructor(
                 return@repeat
             }
             db.withTransaction {
-                val shadowed = apply(state.bookId, base.getJSONObject("data"), local, confirmed.getJSONObject("data"))
+                val shadowed = apply(state.bookId, base.getJSONObject("data"), local,
+                    if (allowUpload) confirmed.getJSONObject("data") else merged.data)
                 val latest = baseline(uuid(state))
                 val accepted = readingItems(confirmed.getJSONObject("data"), "positions").associateBy { readingItemKey("positions", it) }
                 val pending = jsonItems(latest.optJSONArray("pending_positions")).filter {

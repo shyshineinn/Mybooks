@@ -291,7 +291,7 @@ class MyBooksEditViewModel @Inject constructor(
     }
 
     /** 新建模式：草稿从文件名起步，确认后提交到服务器并上传正文。 */
-    fun beginCreate(source: MyBooksCreateSource) {
+    fun beginCreate(source: MyBooksCreateSource, localOnly: Boolean = false) {
         beginJob?.cancel()
         createSource = source
         book = null
@@ -305,7 +305,24 @@ class MyBooksEditViewModel @Inject constructor(
             status = "wish"
         )
         // 自定义字段定义同样要在新建模式里加载，否则该区块无法填写。
-        refreshCustomColumns()
+        if (localOnly) {
+            viewModelScope.launch {
+                val columns = withContext(Dispatchers.IO) { readCachedColumns() }
+                _uiState.value = _uiState.value.copy(customColumns = columns)
+            }
+        } else refreshCustomColumns()
+    }
+
+    fun localImportDraft(): String? {
+        val current = _uiState.value
+        val errors = validate(current)
+        if (errors.isNotEmpty()) {
+            _uiState.value = current.copy(fieldErrors = errors, error = errors.values.firstOrNull())
+            return null
+        }
+        _uiState.value = current.copy(dirty = false, error = null, fieldErrors = emptyMap())
+        return JSONObject().put("fields", buildCreatePayload(current))
+            .put("coverUrl", current.coverUrl ?: JSONObject.NULL).toString()
     }
 
     private fun saveCreate(onSaved: (String?) -> Unit) {

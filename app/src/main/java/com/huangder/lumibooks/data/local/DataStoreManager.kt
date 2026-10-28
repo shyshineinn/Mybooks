@@ -3325,3 +3325,28 @@ class DataStoreManager @Inject constructor(
         LaunchThemeController.deferSplashEnabled(context, true)
     }
 }
+
+/** Copy book-scoped preferences before an uploaded local row receives its server identity. */
+internal suspend fun copyBookScopedPreferences(context: Context, oldId: String, newId: String) {
+    context.dataStore.edit { preferences ->
+        val snapshot = preferences.asMap()
+        for ((key, value) in snapshot) {
+            if (!key.name.endsWith("_" + oldId)) continue
+            val name = key.name.removeSuffix(oldId) + newId
+            if (snapshot.keys.any { it.name == name }) continue
+            when (value) {
+                is String -> preferences[stringPreferencesKey(name)] = value
+                is Boolean -> preferences[booleanPreferencesKey(name)] = value
+                is Int -> preferences[intPreferencesKey(name)] = value
+                is Long -> preferences[longPreferencesKey(name)] = value
+                is Float -> preferences[floatPreferencesKey(name)] = value
+                is Double -> preferences[doublePreferencesKey(name)] = value
+                is Set<*> -> preferences[stringSetPreferencesKey(name)] = value.filterIsInstance<String>().toSet()
+            }
+        }
+    }
+}
+
+internal suspend fun saveDetachedBookReview(context: Context, bookId: String, content: String) {
+    context.dataStore.edit { preferences -> preferences[stringPreferencesKey("book_review_" + bookId)] = content }
+}

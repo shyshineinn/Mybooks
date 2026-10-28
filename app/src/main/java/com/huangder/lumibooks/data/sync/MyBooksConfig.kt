@@ -43,6 +43,12 @@ object MyBooksConfig {
         state.value = state.value.copy(loggedIn = false)
     }
 
+    fun clear(context: Context) {
+        MyBooksConnectionStore(context).clear()
+        deviceToken = ""
+        state.value = MyBooksConnection()
+    }
+
     fun hasWriteToken(): Boolean = adminToken.isNotEmpty()
 
     /** 本地 Book.id → 服务器书 id；不是服务器书返回 null。 */

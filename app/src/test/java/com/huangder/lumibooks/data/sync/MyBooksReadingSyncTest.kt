@@ -256,4 +256,22 @@ class MyBooksReadingSyncTest {
         assertEquals("retained", a.db.syncStateDao().getAllNotes().single().note)
         assertEquals(0, server.requestCount)
     }
+
+    @Test fun downloadingReadingDataOnlyReadsTheServerAndKeepsLocalEditsPendingForLaterUpload() = runBlocking {
+        val a = device()
+        a.db.syncStateDao().upsertNotes(listOf(note("local", "Local note")))
+        val serverNote = JSONObject().put("syncId", "remote").put("chapterIndex", 0).put("startPosition", 1)
+            .put("endPosition", 2).put("selectedText", "quote").put("note", "Remote note").put("color", "yellow")
+            .put("createdAt", 1).put("updatedAt", 1)
+        remote = root(1, emptyMyBooksReading().put("notes", JSONArray().put(serverNote)))
+        assertTrue(a.sync.sync(snapshot(), allowUpload = false).isEmpty())
+        assertEquals(1, server.requestCount); assertEquals("GET", server.takeRequest().method)
+        assertEquals(1L, remote.getLong("revision"))
+        assertEquals(setOf("local", "remote"), a.db.syncStateDao().getAllNotes().map { it.syncId }.toSet())
+        assertTrue(a.sync.pendingFingerprints.first().containsKey("mybooks-1"))
+        sync(a)
+        assertEquals(setOf("local", "remote"), readingItems(remote.getJSONObject("data"), "notes").map { it.getString("syncId") }.toSet())
+        assertTrue(a.sync.pendingFingerprints.first().isEmpty())
+    }
+
 }
