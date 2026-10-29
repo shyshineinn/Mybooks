@@ -57,6 +57,7 @@ class MyBooksBookTransfer @Inject constructor(
     internal suspend fun uploadUnderSyncLock(bookIds: Set<String>): MyBooksUploadResult = withContext(Dispatchers.IO) { performUpload(bookIds) { } }
 
     private suspend fun performUpload(bookIds: Set<String>, progress: (MyBooksTransferProgress) -> Unit): MyBooksUploadResult {
+        db.repairDanglingBookRelations()
         val snapshot = api.fetchSyncSnapshot()
         check(snapshot.syncVersion >= 3) { "请先升级服务器以支持经过正文校验的书籍上传" }
         val library = requireNotNull(snapshot.libraryId) { "请先升级服务器再上传书籍" }

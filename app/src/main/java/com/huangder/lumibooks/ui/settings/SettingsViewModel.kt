@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -79,8 +81,13 @@ class SettingsViewModel @Inject constructor(
     private val floatingSubtitleOverlayController: FloatingSubtitleOverlayController,
     private val backupArchiveManager: BackupArchiveManager,
     private val dictionaryRepository: com.huangder.lumibooks.dictionary.DictionaryRepository,
+    private val myBooksPreferences: com.huangder.lumibooks.data.sync.MyBooksSyncPreferencesStore,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
+
+    val myBooksSyncEnabled = myBooksPreferences.preferences
+        .map { it.enabled }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), false)
 
     val txtTocCustomRules: kotlinx.coroutines.flow.Flow<List<TxtTocRule>> = dataStoreManager.txtTocCustomRules()
     val txtTocThirdPartyRules: kotlinx.coroutines.flow.Flow<List<TxtTocRule>> =

@@ -91,6 +91,9 @@ class AnnotationPersistenceTest {
             SyncIdentityStore(db.syncStateDao()), db
         )
         try {
+            // Snapshot application requires book-scoped reading rows to have a live book.
+            db.bookDao().insertBook(com.huangder.lumibooks.data.local.entity.BookEntity(
+                "book", "Book", "", "", null, "EPUB", 0, 0f, createdAt = 1))
             db.noteDao().insertNote(NoteEntity(
                 bookId = "book", chapterIndex = 0, startPosition = 0, endPosition = 2,
                 selectedText = "正文", note = "笔记", color = "yellow", createdAt = 100,

@@ -96,6 +96,16 @@ internal class MyBooksPortableStateEngine(
                         remoteFileSize = current.remoteFileSize, remoteFileSha256 = current.remoteFileSha256,
                         isCloudOnly = current.isCloudOnly)
                 } })
+                // Books absent from the latest local capture must not leave book-scoped rows
+                // behind; inserting one would violate the cross-reference foreign keys.
+                val presentBookIds = currentBooks.keys
+                incoming = incoming.copy(
+                    bookFolderLinks = incoming.bookFolderLinks.filter { it.bookId in presentBookIds },
+                    bookTagLinks = incoming.bookTagLinks.filter { it.bookId in presentBookIds },
+                    readingRecords = incoming.readingRecords.filter { it.bookId in presentBookIds },
+                    bookmarks = incoming.bookmarks.filter { it.bookId in presentBookIds },
+                    notes = incoming.notes.filter { it.bookId in presentBookIds }
+                )
                 for (asset in incoming.assets.filter { PortableSyncRules.referenced(incoming, it.id) }) {
                     if (asset.id in files) continue
                     val source = latestBundle.assetSources[asset.id]

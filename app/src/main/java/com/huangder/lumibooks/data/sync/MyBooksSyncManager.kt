@@ -40,7 +40,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Provider
-import com.huangder.lumibooks.data.local.database.AppDatabase
 import com.huangder.lumibooks.util.BookFileAccess
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -86,8 +85,7 @@ class MyBooksSyncManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val preferences: MyBooksSyncPreferencesStore,
     private val portableState: Provider<MyBooksPortableStateSync>,
-    private val bookTransfer: Provider<MyBooksBookTransfer>,
-    private val database: AppDatabase
+    private val bookTransfer: Provider<MyBooksBookTransfer>
 ) {
     private val client = MyBooksApiClient()
     private val coverUploader = MyBooksCoverUploader(client)
@@ -175,11 +173,16 @@ class MyBooksSyncManager @Inject constructor(
     suspend fun checkServerChange(serverUrl: String) = syncMutex.withLock {
         checkServerChangeLocked(serverUrl)
     }
+    private suspend fun boundServerUrl(): String {
+        val configured = MyBooksConfig.SERVER_URL
+        return if (configured.isNotBlank()) configured else syncStateDao.getValue(KEY_BOUND_SERVER_URL).orEmpty()
+    }
+
     private suspend fun checkServerChangeLocked(serverUrl: String) {
         check(_downloadStates.value.values.none { it is BookDownloadState.Downloading }) {
             context.getString(R.string.mybooks_server_wait_download)
         }
-        val changed = MyBooksEndpoint.normalize(serverUrl) != MyBooksConfig.SERVER_URL
+        val changed = MyBooksEndpoint.normalize(serverUrl) != boundServerUrl()
         check(!changed || (bookRepository.getAllBooks().first().none(MyBooksConfig::isMyBooks) &&
             myBooksSyncStateDao.getAll().isEmpty() && myBooksSyncStateDao.getPendingDeletes().isEmpty() &&
             !hasPendingBookImports())) {
@@ -192,8 +195,9 @@ class MyBooksSyncManager @Inject constructor(
     }
     suspend fun saveConnection(serverUrl: String, username: String, token: String) = syncMutex.withLock {
         checkServerChangeLocked(serverUrl)
-        val changedServer = MyBooksEndpoint.normalize(serverUrl) != MyBooksConfig.SERVER_URL
+        val changedServer = MyBooksEndpoint.normalize(serverUrl) != boundServerUrl()
         withContext(Dispatchers.IO) { MyBooksConfig.save(context, serverUrl, username, token) }
+        syncStateDao.putState(SyncStateEntity(KEY_BOUND_SERVER_URL, MyBooksConfig.SERVER_URL))
         scheduler.cancel()
         preferences.setEnabled(true)
         stateStore.reset()
@@ -219,29 +223,17 @@ class MyBooksSyncManager @Inject constructor(
         revoked
     }
 
+    /** Clear connection credentials, keeping local books and the identity needed to reconnect safely. */
     suspend fun clearConfiguration() = syncMutex.withLock {
         check(_downloadStates.value.values.none { it is BookDownloadState.Downloading }) { context.getString(R.string.mybooks_server_wait_download) }
+        val endpoint = boundServerUrl()
+        if (endpoint.isNotBlank()) syncStateDao.putState(SyncStateEntity(KEY_BOUND_SERVER_URL, endpoint))
+        preferences.setEnabled(false)
         val token = MyBooksConfig.adminToken
         if (token.isNotBlank()) runCatching { MyBooksAuthClient(MyBooksConfig.SERVER_URL).logout(token) }
-        for (book in bookRepository.getAllBooks().first().filter(MyBooksConfig::isMyBooks)) {
-            if (book.isCloudOnly) {
-                bookRepository.deleteBook(book)
-                clearLocalBookData(book.id)
-            } else {
-                val targetId = UUID.randomUUID().toString()
-                val note = MyBooksConfig.remoteIdOf(book.id)?.let(notesStore::read)
-                moveLocalBookIdentity(database, context, book.id, targetId) { original -> original.copy(
-                    remoteLibraryKey = null, remoteFileName = null, remoteFileSize = 0, remoteFileSha256 = null,
-                    sourceUri = original.sourceUri?.takeUnless { it.startsWith(MyBooksConfig.SOURCE_URI_PREFIX) }) }
-                myBooksSyncStateDao.delete(targetId)
-                if (note?.content?.isNotBlank() == true) com.huangder.lumibooks.data.local.saveDetachedBookReview(context, targetId, note.content)
-            }
-        }
-        myBooksSyncStateDao.getAll().forEach { myBooksSyncStateDao.delete(it.bookId) }
-        myBooksSyncStateDao.getPendingDeletes().forEach { myBooksSyncStateDao.deletePendingDelete(it.remoteId) }
         withContext(Dispatchers.IO) { MyBooksConfig.clear(context) }
-        syncStateDao.getPrefix("mybooks_").filterNot { it.key == "mybooks_sync_preferences" }.forEach { syncStateDao.deleteState(it.key) }
         preferences.clear()
+        preferences.setEnabled(false)
         stateStore.reset()
     }
 
@@ -485,6 +477,12 @@ class MyBooksSyncManager @Inject constructor(
     // ────────────────────────── core sync ──────────────────────────
 
     private suspend fun runSyncNow(direction: MyBooksSyncDirection, selectedBookIds: Set<String>?): MyBooksSyncResult {
+        // Older builds could leave links behind after deleting a book, folder or tag. SQLite
+        // rejects even an unrelated UPDATE of such a row, so repair them before moving any
+        // local book to its server identity.
+        syncStateDao.deleteDanglingBookFolderLinks()
+        syncStateDao.deleteDanglingBookTagLinks()
+        syncStateDao.detachDanglingFolderParents()
         val options = preferences.current().content
         if (!options.hasSelectedContent) return MyBooksSyncResult(context.getString(R.string.webdav_select_content_required), false)
         val automaticFileErrors = mutableListOf<String>()
@@ -1180,6 +1178,7 @@ class MyBooksSyncManager @Inject constructor(
     private val downloadJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
 
     suspend fun downloadBook(bookId: String): CloudBookDownloadResult {
+        if (MyBooksConfig.SERVER_URL.isBlank()) return CloudBookDownloadResult(null, context.getString(R.string.mybooks_server_login_required), false)
         val lock = downloadLocks.getOrPut(bookId) { Mutex() }
         if (!lock.tryLock()) return CloudBookDownloadResult(null, context.getString(R.string.mybooks_download_running), false)
         kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.let { downloadJobs[bookId] = it }
@@ -1317,5 +1316,6 @@ class MyBooksSyncManager @Inject constructor(
         const val KEY_CURSOR = "mybooks_books_cursor"
         const val KEY_LAST_SYNC = "mybooks_last_sync_at"
         const val KEY_LIBRARY_ID = "mybooks_library_id"
+        internal const val KEY_BOUND_SERVER_URL = "mybooks_bound_server_url"
     }
 }

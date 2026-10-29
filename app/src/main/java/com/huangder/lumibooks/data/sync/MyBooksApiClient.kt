@@ -307,7 +307,7 @@ class MyBooksApiClient(
         downloadFile("$SERVER_URL/api/sync/state/assets/$name", target, size) { _, _ -> }
 
     suspend fun fileSha256(url: String): String? = withContext(Dispatchers.IO) {
-        client.newCall(Request.Builder().url(url).head().build()).execute().use { response ->
+        client.newCall(Request.Builder().url(resolveUrl(SERVER_URL, url)).head().build()).execute().use { response ->
             if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
             response.header("X-Content-SHA256")?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
         }
@@ -410,7 +410,7 @@ class MyBooksApiClient(
         expectedSize: Long = -1L,
         onProgress: (bytesRead: Long, totalBytes: Long) -> Unit
     ): MyBooksDownloadReceipt = withContext(Dispatchers.IO) {
-        MyBooksResumableDownload(client).download(url, destination, expectedSize, onProgress)
+        MyBooksResumableDownload(client).download(resolveUrl(SERVER_URL, url), destination, expectedSize, onProgress)
     }
 
     private suspend fun getRaw(path: String): String = withContext(Dispatchers.IO) {

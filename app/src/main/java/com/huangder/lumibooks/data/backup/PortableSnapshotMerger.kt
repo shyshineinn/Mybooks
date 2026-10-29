@@ -26,8 +26,8 @@ object PortableSnapshotMerger {
             { it.id },
             { it.updatedAt },
             tombstoneMap
-        ).distinctByLatest({ it.normalizedName }, { it.updatedAt })
-        val validTagIds = tags.mapTo(mutableSetOf()) { it.id }
+        )
+        // Resolve duplicate names after merging links so neither device loses assignments.
         val folders = mergeLive(
             local.folders,
             remote.folders,
@@ -55,7 +55,8 @@ object PortableSnapshotMerger {
             { "${it.bookId}:${it.tagId}" },
             { it.updatedAt },
             tombstoneMap
-        ).filter { it.bookId in validBookIds && it.tagId in validTagIds }
+        ).filter { it.bookId in validBookIds }
+        val tagMerge = mergePortableTags(tags, tagLinks)
 
         return PortableSnapshot(
             createdAt = maxOf(local.createdAt, remote.createdAt),
@@ -70,12 +71,12 @@ object PortableSnapshotMerger {
             books = books,
             folders = folders,
             bookFolderLinks = folderLinks,
-            tags = tags,
+            tags = tagMerge.tags,
             annotationTags = mergeLatest(
                 local.annotationTags, remote.annotationTags, { it.name }, { it.updatedAt },
                 { if (it.isDeleted) "1" else "0" }
             ).distinctByLatest({ it.name }, { it.updatedAt }),
-            bookTagLinks = tagLinks,
+            bookTagLinks = tagMerge.links,
             readingRecords = mergeReadingRecords(local.readingRecords, remote.readingRecords)
                 .filter { it.bookId in validBookIds },
             bookmarks = mergeLive(

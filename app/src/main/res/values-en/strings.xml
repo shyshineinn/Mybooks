@@ -1976,6 +1976,6 @@
     <string name="mybooks_enable">Enable server sync</string>
     <string name="mybooks_disable">Disable server sync</string>
     <string name="mybooks_disabled">Server sync is disabled</string>
-    <string name="mybooks_config_cleared">Server sync configuration cleared</string>
+    <string name="mybooks_config_cleared">Server configuration cleared. Local books, covers and reading data are preserved.</string>
     <string name="mybooks_cloud_delete_done">Server books moved to trash</string>
 </resources>

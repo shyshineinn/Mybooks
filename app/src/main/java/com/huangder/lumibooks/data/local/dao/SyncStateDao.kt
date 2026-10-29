@@ -66,6 +66,18 @@ interface SyncStateDao {
     @Query("SELECT * FROM book_tag_cross_refs")
     suspend fun getAllBookTagLinks(): List<BookTagCrossRefEntity>
 
+    @Query("DELETE FROM book_folder_cross_refs WHERE bookId NOT IN (SELECT id FROM books) " +
+        "OR folderId NOT IN (SELECT id FROM folders)")
+    suspend fun deleteDanglingBookFolderLinks()
+
+    @Query("DELETE FROM book_tag_cross_refs WHERE bookId NOT IN (SELECT id FROM books) " +
+        "OR tagId NOT IN (SELECT id FROM tags)")
+    suspend fun deleteDanglingBookTagLinks()
+
+    @Query("UPDATE folders SET parentId=NULL WHERE parentId IS NOT NULL " +
+        "AND parentId NOT IN (SELECT id FROM folders)")
+    suspend fun detachDanglingFolderParents()
+
     @Query("SELECT * FROM sync_tombstones")
     suspend fun getAllTombstones(): List<SyncTombstoneEntity>
 

@@ -132,6 +132,28 @@ class MyBooksPortableStateSyncTest {
         assertArrayEquals(bytes, assets[asset.fileName]); assertArrayEquals(bytes, b.received[sha])
         assertEquals("asset://$sha", b.state.preferences.single().value)
     }
+    @Test fun organizationRowsForBooksMissingFromTheLocalCaptureAreNotApplied() = runBlocking {
+        val folder = FolderEntity("f", "Books", "books", null, 1)
+        val tag = com.huangder.lumibooks.data.local.entity.TagEntity("t", "Tag", "tag", 1)
+        val book = PortableBook("mybooks-1", "Remote only", "Author", "EPUB", 0, 0f, null, 1,
+            false, true, 1, null, null, null, null, 0, null)
+        remote = JSONObject(empty("b").copy(
+            books = listOf(book), folders = listOf(folder), tags = listOf(tag),
+            bookFolderLinks = listOf(com.huangder.lumibooks.data.local.entity.BookFolderCrossRefEntity("mybooks-1", "f", 1)),
+            bookTagLinks = listOf(com.huangder.lumibooks.data.local.entity.BookTagCrossRefEntity("mybooks-1", "t", 1))
+        ).toJson()).put("bookIdentities", JSONObject().put("mybooks-1", "uuid"))
+        remoteRevision = 1L
+        var applied: PortableSnapshot? = null
+        MyBooksPortableStateEngine(context, MyBooksApiClient(),
+            capture = { PortableSnapshotBundle(empty("a"), emptyMap()) },
+            apply = { snapshot, _ -> applied = snapshot },
+            identities = { mapOf("mybooks-1" to "uuid") }, revision = { 0L }, rememberRevision = { _, _ -> })
+            .sync("library", SyncContentSelection(libraryOrganization = true), MyBooksSyncDirection.BOTH)
+        val result = requireNotNull(applied)
+        assertTrue(result.bookFolderLinks.isEmpty())
+        assertTrue(result.bookTagLinks.isEmpty())
+    }
+
     @Test fun rollbackDoesNotApplyOrAcknowledgeRemoteState() = runBlocking {
         val a = Device(empty()); a.revision = 2
         try { sync(a); fail("version rollback must stop sync") } catch (_: IllegalArgumentException) { }

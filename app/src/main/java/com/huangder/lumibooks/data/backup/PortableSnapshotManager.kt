@@ -182,6 +182,9 @@ class PortableSnapshotManager @Inject constructor(
             database.withTransaction {
                 val bookDao = database.bookDao()
                 val syncDao = database.syncStateDao()
+                syncDao.deleteDanglingBookFolderLinks()
+                syncDao.deleteDanglingBookTagLinks()
+                syncDao.detachDanglingFolderParents()
                 val existingBooks = bookDao.getAllBooksSnapshot().associateBy { it.id }
                 val existingFolders = syncDao.getAllFolders()
                 val existingTags = syncDao.getAllTags().associateBy { it.id }
@@ -238,6 +241,29 @@ class PortableSnapshotManager @Inject constructor(
                     database.highlightRuleDao().clearRules()
                 }
                 if (restoredBooks.isNotEmpty()) bookDao.upsertBooks(restoredBooks)
+                // A server snapshot can outlive a local edit that removed a book, folder or tag.
+                // Never write a cross reference whose parent is absent: SQLite would abort the
+                // whole transaction with FOREIGN KEY constraint failed (787).
+                val availableBookIds = if (replace) restoredBooks.mapTo(mutableSetOf()) { it.id }
+                    else existingBooks.keys + restoredBooks.map { it.id }
+                val availableFolderIds = if (replace) snapshot.folders.mapTo(mutableSetOf()) { it.id }
+                    else existingFolders.mapTo(mutableSetOf()) { it.id } + snapshot.folders.map { it.id }
+                val tagMerge = mergePortableTags(
+                    (if (replace) emptyList() else existingTags.values.toList()) + snapshot.tags.map { incoming ->
+                        existingTags[incoming.id]?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
+                    },
+                    (if (replace) emptyList() else existingTagLinks.values.toList()) + snapshot.bookTagLinks
+                )
+                val availableTagIds = tagMerge.tags.mapTo(mutableSetOf()) { it.id }
+                val folderLinks = snapshot.bookFolderLinks.filter {
+                    it.bookId in availableBookIds && it.folderId in availableFolderIds
+                }
+                val tagLinks = tagMerge.links.filter {
+                    it.bookId in availableBookIds && it.tagId in availableTagIds
+                }
+                val readingRecords = snapshot.readingRecords.filter { it.bookId in availableBookIds }
+                val bookmarks = snapshot.bookmarks.filter { it.bookId in availableBookIds }
+                val notes = snapshot.notes.filter { it.bookId in availableBookIds }
                 val knownFolderIds = if (replace) emptySet() else existingFolders.mapTo(mutableSetOf()) { it.id }
                 val existingFoldersById = existingFolders.associateBy { it.id }
                 val restoredFolders = sortFoldersParentFirst(snapshot.folders, knownFolderIds).map { folder ->
@@ -252,27 +278,28 @@ class PortableSnapshotManager @Inject constructor(
                     )
                 }
                 if (restoredFolders.isNotEmpty()) syncDao.upsertFolders(restoredFolders)
-                if (snapshot.tags.isNotEmpty()) syncDao.upsertTags(snapshot.tags.map { incoming ->
-                    existingTags[incoming.id]?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
-                })
-                if (snapshot.bookFolderLinks.isNotEmpty()) syncDao.upsertBookFolderLinks(snapshot.bookFolderLinks.map { incoming ->
+                // Rebuild this small catalog and its links atomically. Upsert alone cannot
+                // resolve a normalizedName conflict between two different primary keys.
+                // Saving all local links above preserves assignments to the losing IDs.
+                syncDao.clearBookTagLinks()
+                syncDao.clearTags()
+                if (tagMerge.tags.isNotEmpty()) syncDao.upsertTags(tagMerge.tags)
+                if (folderLinks.isNotEmpty()) syncDao.upsertBookFolderLinks(folderLinks.map { incoming ->
                     existingFolderLinks[incoming.bookId]?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
                 })
-                if (snapshot.bookTagLinks.isNotEmpty()) syncDao.upsertBookTagLinks(snapshot.bookTagLinks.map { incoming ->
-                    existingTagLinks[incoming.bookId + ":" + incoming.tagId]?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
-                })
-                if (snapshot.readingRecords.isNotEmpty()) syncDao.upsertReadingRecords(snapshot.readingRecords.map {
+                if (tagLinks.isNotEmpty()) syncDao.upsertBookTagLinks(tagLinks)
+                if (readingRecords.isNotEmpty()) syncDao.upsertReadingRecords(readingRecords.map {
                     val key = "${it.bookId}\u0000${it.date}\u0000${it.sourceDeviceId}"
                     it.copy(id = if (replace) 0 else existingRecords[key]?.id ?: 0)
                 })
-                if (snapshot.bookmarks.isNotEmpty()) syncDao.upsertBookmarks(snapshot.bookmarks.map {
+                if (bookmarks.isNotEmpty()) syncDao.upsertBookmarks(bookmarks.map {
                     val existing = existingBookmarks[it.syncId]
                     // A sync payload may have been captured before the user edited tags
                     // while network requests were in flight. Recheck under the write lock.
                     if (!replace && existing != null && existing.updatedAt > it.updatedAt) existing
                     else it.copy(id = if (replace) 0 else existing?.id ?: 0)
                 })
-                if (snapshot.notes.isNotEmpty()) syncDao.upsertNotes(snapshot.notes.map {
+                if (notes.isNotEmpty()) syncDao.upsertNotes(notes.map {
                     val existing = existingNotes[it.syncId]
                     if (!replace && existing != null && existing.updatedAt > it.updatedAt) existing
                     else it.copy(id = if (replace) 0 else existing?.id ?: 0)

@@ -68,9 +68,12 @@ fun MyBooksSettingsDetail(
     val preferences by viewModel.preferences.collectAsState()
     val enabled = connection.loggedIn && preferences.enabled
     val hasToken = MyBooksConfig.hasWriteToken()
-    val lastSync = if (status.lastSuccessAt > 0) stringResource(R.string.webdav_last_sync_time,
-        remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }.format(Date(status.lastSuccessAt)))
-        else stringResource(R.string.webdav_not_configured)
+    val lastSync = when {
+        status.lastSuccessAt > 0 -> stringResource(R.string.webdav_last_sync_time,
+            remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }.format(Date(status.lastSuccessAt)))
+        enabled -> stringResource(R.string.mybooks_sync_no_success)
+        else -> stringResource(R.string.webdav_not_configured)
+    }
     Column(Modifier.fillMaxWidth().padding(horizontal = AppSpace.md, vertical = AppSpace.sm),
         verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
         SyncConnectionStatusCard(enabled, stringResource(if (enabled) R.string.mybooks_server_connected else R.string.mybooks_server_disconnected),

@@ -2000,6 +2000,6 @@
     <string name="mybooks_enable">启用服务器同步</string>
     <string name="mybooks_disable">停用服务器同步</string>
     <string name="mybooks_disabled">服务器同步未启用</string>
-    <string name="mybooks_config_cleared">服务器同步配置已清除</string>
+    <string name="mybooks_config_cleared">服务器配置已清除，本机书籍、封面和阅读数据已保留</string>
     <string name="mybooks_cloud_delete_done">服务器书籍已移入回收站</string>
 </resources>

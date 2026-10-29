@@ -269,6 +269,7 @@ fun SettingsScreen(
 @Composable
 fun ThirdPartyServicesDetail(viewModel: SettingsViewModel) {
     val myBooksConnection by com.huangder.lumibooks.data.sync.MyBooksConfig.connection.collectAsState()
+    val myBooksSyncEnabled by viewModel.myBooksSyncEnabled.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
@@ -319,7 +320,11 @@ fun ThirdPartyServicesDetail(viewModel: SettingsViewModel) {
         CategoryItem(
             label = stringResource(R.string.mybooks_server_title),
             supportingText = stringResource(
-                if (myBooksConnection.loggedIn) R.string.mybooks_server_connected else R.string.mybooks_server_disconnected
+                when {
+                    myBooksConnection.loggedIn && myBooksSyncEnabled -> R.string.mybooks_server_connected
+                    myBooksConnection.loggedIn -> R.string.mybooks_disabled
+                    else -> R.string.mybooks_server_disconnected
+                }
             ),
             grouped = true
         ) {

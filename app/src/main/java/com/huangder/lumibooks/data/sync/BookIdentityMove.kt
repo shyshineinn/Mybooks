@@ -7,6 +7,13 @@ import com.huangder.lumibooks.data.local.database.AppDatabase
 import com.huangder.lumibooks.data.local.entity.BookEntity
 import org.json.JSONArray
 
+/** Remove book/folder/tag links that predate the current foreign-key constraints. */
+internal suspend fun AppDatabase.repairDanglingBookRelations() = withTransaction {
+    syncStateDao().deleteDanglingBookFolderLinks()
+    syncStateDao().deleteDanglingBookTagLinks()
+    syncStateDao().detachDanglingFolderParents()
+}
+
 internal suspend fun moveLocalBookIdentity(db: AppDatabase, context: Context, sourceId: String, targetId: String,
     transform: (BookEntity) -> BookEntity): String {
     copyBookScopedPreferences(context, sourceId, targetId)
