@@ -417,6 +417,10 @@ fun BookNotesScreen(
 
 // ─── 分段选择器（设计规范：#F2F2F7 背景, 圆角 20dp, 选中白色带阴影）───
 
+// Shared by annotation filters and book detail tabs so their visual heights stay identical.
+internal fun segmentedTabHeight(fontScale: Float) =
+    (40f * fontScale.coerceIn(1f, 1.6f)).dp
+
 @Composable
 internal fun SegmentedTabBar(
     selectedTab: Int,
@@ -426,7 +430,7 @@ internal fun SegmentedTabBar(
     backdrop: Backdrop? = null,
     labelFontSize: TextUnit = 14.sp
 ) {
-    val tabHeight = (40f * LocalDensity.current.fontScale.coerceIn(1f, 1.6f)).dp
+    val tabHeight = segmentedTabHeight(LocalDensity.current.fontScale)
     if (LocalAppTheme.current == "liquid_glass" && !LocalEInkMode.current) {
         LiquidGlassSegmentedControl(
             itemCount = tabs.size,

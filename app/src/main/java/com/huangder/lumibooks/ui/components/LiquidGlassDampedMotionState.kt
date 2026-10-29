@@ -69,11 +69,11 @@ internal class LiquidGlassDampedMotionState(
     val velocity: Float get() = trackedVelocity
     val isInteracting: Boolean get() = directInteraction
 
-    fun beginInteraction() {
+    fun beginInteraction(initialValue: Float = value) {
         transitionJob?.cancel()
         pressJob?.cancel()
 
-        val start = value
+        val start = initialValue.coerceIn(valueRange)
         directValue = start
         requestedValue = start
         directInteraction = true
@@ -89,6 +89,20 @@ internal class LiquidGlassDampedMotionState(
         }
         pressJob = animationScope.launch {
             pressAnimation.animateTo(1f, pressInSpec())
+        }
+    }
+
+    /** Follow an external gesture without adding another positional spring. */
+    suspend fun snapToValue(value: Float) {
+        transitionJob?.cancel()
+        transitionJob = null
+        val target = value.coerceIn(valueRange)
+        mutatorMutex.mutate(MutatePriority.UserInput) {
+            valueAnimation.snapTo(target)
+            directValue = target
+            requestedValue = target
+            trackedVelocity = 0f
+            directInteraction = false
         }
     }
 

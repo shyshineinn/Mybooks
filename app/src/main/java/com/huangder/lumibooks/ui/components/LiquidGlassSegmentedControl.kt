@@ -223,6 +223,8 @@ fun LiquidGlassSegmentedControl(
     trackHeight: Dp = 40.dp,
     trackPadding: Dp = 2.dp,
     backdrop: Backdrop? = LocalLiquidGlassBackdrop.current,
+    // Non-null values follow a content pager; null retains the selector's own motion.
+    externalPosition: (() -> Float?)? = null,
     content: @Composable BoxScope.(index: Int, selected: Boolean) -> Unit
 ) {
     if (itemCount <= 0) {
@@ -241,6 +243,7 @@ fun LiquidGlassSegmentedControl(
     val motionEnabled = LocalMotionEnabled.current
     val animationScope = rememberCoroutineScope()
     val safeSelectedIndex = selectedIndex.coerceIn(0, itemCount - 1)
+    val currentSelectedIndex by rememberUpdatedState(safeSelectedIndex)
     val enabledItems = List(itemCount) { enabled && itemEnabled(it) }
     val currentOnSelected by rememberUpdatedState(onSelected)
     val motionState = remember(animationScope, motionEnabled, itemCount) {
@@ -279,8 +282,12 @@ fun LiquidGlassSegmentedControl(
     }
     val maximumOvershootPx = with(density) { SegmentMaximumOvershoot.toPx() }
 
-    LaunchedEffect(safeSelectedIndex, motionState) {
-        if (!motionState.isInteracting && abs(motionState.targetValue - safeSelectedIndex) > 0.001f) {
+    val externallyDrivenValue = externalPosition?.invoke()?.coerceIn(0f, itemCount - 1f)
+    LaunchedEffect(safeSelectedIndex, externallyDrivenValue, motionState) {
+        if (motionState.isInteracting) return@LaunchedEffect
+        if (externallyDrivenValue != null) {
+            motionState.snapToValue(externallyDrivenValue)
+        } else if (abs(motionState.targetValue - safeSelectedIndex) > 0.001f) {
             animationOrigin = motionState.value
             animationTarget = safeSelectedIndex
             motionState.syncToValue(safeSelectedIndex.toFloat(), movementSpec)
@@ -292,11 +299,13 @@ fun LiquidGlassSegmentedControl(
         animationOrigin = motionState.value
         animationTarget = index
         motionState.animateToValue(index.toFloat(), movementSpec)
-        if (index != safeSelectedIndex) currentOnSelected(index)
+        if (index != currentSelectedIndex) currentOnSelected(index)
     }
 
     val rawValue = motionState.value
-    val visualValue = if (motionEnabled && !motionState.isInteracting) {
+    val visualValue = if (!motionState.isInteracting && externallyDrivenValue != null) {
+        externallyDrivenValue
+    } else if (motionEnabled && !motionState.isInteracting) {
         cappedLiquidGlassSegmentValue(
             value = rawValue,
             origin = animationOrigin,
@@ -307,6 +316,7 @@ fun LiquidGlassSegmentedControl(
     } else {
         rawValue.coerceIn(0f, itemCount - 1f)
     }
+    val currentVisualValue by rememberUpdatedState(visualValue)
     val previewIndex = if (motionState.isInteracting) {
         nearestEnabledLiquidGlassSegment(rawValue, enabledItems).takeIf { it >= 0 }
             ?: safeSelectedIndex
@@ -400,86 +410,91 @@ fun LiquidGlassSegmentedControl(
                 geometry,
                 enabledItems,
                 isLtr,
-                safeSelectedIndex,
                 movementSpec
             ) {
                 if (geometry.size == 0 || geometry.totalWidthPx <= 0f) return@pointerInput
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val downX = down.position.x - paddingPx
-                    val downValue = if (motionState.isInteracting) motionState.value else visualValue
-                    val downStart = liquidGlassSegmentStartPx(geometry, downValue, isLtr)
-                    val downWidth = segmentMetricAtValue(geometry.widthsPx, downValue)
-                    val startsOnIndicator = enabled && downX in downStart..(downStart + downWidth)
-                    val startCenter = liquidGlassSegmentCenterPx(geometry, downValue, isLtr)
-                    var totalX = 0f
-                    var totalY = 0f
-                    var horizontalDrag = false
-                    var cancelled = false
-                    var released = false
+                try {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val downX = down.position.x - paddingPx
+                        val downValue = if (motionState.isInteracting) motionState.value else currentVisualValue
+                        val downStart = liquidGlassSegmentStartPx(geometry, downValue, isLtr)
+                        val downWidth = segmentMetricAtValue(geometry.widthsPx, downValue)
+                        val startsOnIndicator = enabled && downX in downStart..(downStart + downWidth)
+                        val startCenter = liquidGlassSegmentCenterPx(geometry, downValue, isLtr)
+                        var totalX = 0f
+                        var totalY = 0f
+                        var horizontalDrag = false
+                        var cancelled = false
+                        var released = false
 
-                    if (startsOnIndicator) motionState.beginInteraction()
+                        if (startsOnIndicator) motionState.beginInteraction(initialValue = downValue)
 
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        val delta = change.positionChange()
-                        totalX += delta.x
-                        totalY += delta.y
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            val delta = change.positionChange()
+                            totalX += delta.x
+                            totalY += delta.y
 
-                        if (!horizontalDrag && !cancelled &&
-                            (abs(totalX) >= viewConfiguration.touchSlop ||
-                                abs(totalY) >= viewConfiguration.touchSlop)
-                        ) {
-                            if (startsOnIndicator && abs(totalX) > abs(totalY)) {
-                                horizontalDrag = true
-                            } else {
-                                cancelled = true
+                            if (!horizontalDrag && !cancelled &&
+                                (abs(totalX) >= viewConfiguration.touchSlop ||
+                                    abs(totalY) >= viewConfiguration.touchSlop)
+                            ) {
+                                if (startsOnIndicator && abs(totalX) > abs(totalY)) {
+                                    horizontalDrag = true
+                                } else {
+                                    cancelled = true
+                                }
                             }
+
+                            if (horizontalDrag) {
+                                change.consume()
+                                motionState.dragTo(
+                                    liquidGlassSegmentValueForCenter(
+                                        physicalCenterPx = startCenter + totalX,
+                                        geometry = geometry,
+                                        isLtr = isLtr
+                                    )
+                                )
+                            }
+
+                            if (change.changedToUpIgnoreConsumed()) {
+                                released = true
+                                break
+                            }
+                            if (!change.pressed || (change.isConsumed && !horizontalDrag)) break
                         }
 
-                        if (horizontalDrag) {
-                            change.consume()
-                            motionState.dragTo(
-                                liquidGlassSegmentValueForCenter(
-                                    physicalCenterPx = startCenter + totalX,
+                        when {
+                            horizontalDrag && released -> {
+                                val target = nearestEnabledLiquidGlassSegment(
+                                    motionState.value,
+                                    enabledItems
+                                ).takeIf { it >= 0 } ?: currentSelectedIndex
+                                animationOrigin = motionState.value
+                                animationTarget = target
+                                motionState.settleTo(
+                                    value = target.toFloat(),
+                                    animationSpec = movementSpec,
+                                    initialVelocity = motionState.velocity.coerceIn(-5f, 5f)
+                                )
+                                if (target != currentSelectedIndex) currentOnSelected(target)
+                            }
+                            released && !cancelled -> {
+                                val target = liquidGlassSegmentAtPosition(
+                                    xPx = down.position.x - paddingPx,
                                     geometry = geometry,
                                     isLtr = isLtr
                                 )
-                            )
+                                animateAndCommit(target)
+                            }
+                            startsOnIndicator -> motionState.cancelInteraction(currentSelectedIndex.toFloat())
                         }
-
-                        if (change.changedToUpIgnoreConsumed()) {
-                            released = true
-                            break
-                        }
-                        if (!change.pressed || (change.isConsumed && !horizontalDrag)) break
                     }
-
-                    when {
-                        horizontalDrag && released -> {
-                            val target = nearestEnabledLiquidGlassSegment(
-                                motionState.value,
-                                enabledItems
-                            ).takeIf { it >= 0 } ?: safeSelectedIndex
-                            animationOrigin = motionState.value
-                            animationTarget = target
-                            motionState.settleTo(
-                                value = target.toFloat(),
-                                animationSpec = movementSpec,
-                                initialVelocity = motionState.velocity.coerceIn(-5f, 5f)
-                            )
-                            if (target != safeSelectedIndex) currentOnSelected(target)
-                        }
-                        released && !cancelled -> {
-                            val target = liquidGlassSegmentAtPosition(
-                                xPx = down.position.x - paddingPx,
-                                geometry = geometry,
-                                isLtr = isLtr
-                            )
-                            animateAndCommit(target)
-                        }
-                        startsOnIndicator -> motionState.cancelInteraction(safeSelectedIndex.toFloat())
+                } finally {
+                    if (motionState.isInteracting) {
+                        motionState.cancelInteraction(currentSelectedIndex.toFloat())
                     }
                 }
             },

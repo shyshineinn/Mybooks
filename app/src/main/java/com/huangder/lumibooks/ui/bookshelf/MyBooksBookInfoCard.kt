@@ -111,7 +111,10 @@ fun rememberMyBooksMeta(book: Book): MyBooksMetaUiState {
 fun MyBooksContentRows(
     metaState: MyBooksMetaUiState,
     notesState: MyBooksNotesUiState? = null,
-    syncBadge: MyBooksSyncBadge? = null
+    syncBadge: MyBooksSyncBadge? = null,
+    includeReadingRecords: Boolean = true,
+    summaryExpanded: Boolean,
+    onSummaryExpandedChange: (Boolean) -> Unit
 ) {
     val meta = metaState.meta
     if (meta == null) {
@@ -120,7 +123,7 @@ fun MyBooksContentRows(
     }
 
     if (hasMeaningfulSummary(meta.summary)) {
-        SummaryRow(meta.summary.trim())
+        SummaryRow(meta.summary.trim(), summaryExpanded, onSummaryExpandedChange)
     }
     val context = LocalContext.current
     buildServerDetailRows(meta).forEach { row ->
@@ -128,7 +131,7 @@ fun MyBooksContentRows(
             row.url?.let { openServerUrl(context, it) }
         })
     }
-    ReadingRecordBlock(meta)
+    if (includeReadingRecords) ReadingRecordBlock(meta)
     if (notesState != null) {
         NotesStatusRow(notesState)
     }
@@ -196,8 +199,7 @@ fun MyBooksFileRows(book: Book, metaState: MyBooksMetaUiState) {
 }
 
 @Composable
-private fun SummaryRow(summary: String) {
-    var expanded by remember(summary) { mutableStateOf(false) }
+private fun SummaryRow(summary: String, expanded: Boolean, onExpandedChange: (Boolean) -> Unit) {
     val canExpand = summary.length > 120
     val motionEnabled = LocalMotionEnabled.current
     Column(
@@ -213,7 +215,7 @@ private fun SummaryRow(summary: String) {
                         Modifier.clickable(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() }
-                        ) { expanded = !expanded }
+                        ) { onExpandedChange(!expanded) }
                     } else {
                         Modifier
                     }
@@ -249,7 +251,7 @@ private fun SummaryRow(summary: String) {
 }
 
 @Composable
-private fun ReadingRecordBlock(meta: ServerBookMeta) {
+internal fun ReadingRecordBlock(meta: ServerBookMeta) {
     val labels = readingLogLabels(meta)
     if (labels.isNotEmpty()) {
         Column(

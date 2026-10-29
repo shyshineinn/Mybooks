@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="book_detail_tab_info">정보</string>
+    <string name="book_detail_tab_reading">독서</string>
+    <string name="book_detail_tab_files">파일</string>
+    <string name="book_detail_open_annotations">북마크와 노트 보기</string>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="book_detail_tab_info">資訊</string>
+    <string name="book_detail_tab_reading">閱讀</string>
+    <string name="book_detail_tab_files">檔案</string>
+    <string name="book_detail_open_annotations">查看書籤與筆記</string>
+</resources>

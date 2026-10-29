@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="book_detail_tab_info">情報</string>
+    <string name="book_detail_tab_reading">読書</string>
+    <string name="book_detail_tab_files">ファイル</string>
+    <string name="book_detail_open_annotations">ブックマークとノートを表示</string>
+</resources>
