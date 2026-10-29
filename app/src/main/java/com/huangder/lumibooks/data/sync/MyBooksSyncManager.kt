@@ -1,6 +1,8 @@
 package com.huangder.lumibooks.data.sync
 
 import android.content.Context
+import androidx.room.withTransaction
+import com.huangder.lumibooks.data.local.database.AppDatabase
 import com.huangder.lumibooks.R
 import com.huangder.lumibooks.data.local.dao.MyBooksSyncStateDao
 import com.huangder.lumibooks.data.local.dao.SyncStateDao
@@ -85,7 +87,8 @@ class MyBooksSyncManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val preferences: MyBooksSyncPreferencesStore,
     private val portableState: Provider<MyBooksPortableStateSync>,
-    private val bookTransfer: Provider<MyBooksBookTransfer>
+    private val bookTransfer: Provider<MyBooksBookTransfer>,
+    private val database: AppDatabase
 ) {
     private val client = MyBooksApiClient()
     private val coverUploader = MyBooksCoverUploader(client)
@@ -414,6 +417,7 @@ class MyBooksSyncManager @Inject constructor(
             withContext(Dispatchers.IO) {
                 for (id in bookIds) {
                     val remoteId = requireNotNull(MyBooksConfig.remoteIdOf(id))
+
                     val pending = myBooksSyncStateDao.getPendingDelete(remoteId)
                     val base = myBooksSyncStateDao.get(id)?.baseJson?.let(::JSONObject)
                     val uuid = pending?.expectedUuid ?: base?.optString("uuid").orEmpty()
@@ -438,6 +442,10 @@ class MyBooksSyncManager @Inject constructor(
         finally { syncMutex.unlock() }
     }
 
+    /** A server-deleted book has no cloud placeholder to retain. This also works offline. */
+    suspend fun shouldKeepCloudPlaceholder(bookId: String): Boolean =
+        myBooksSyncStateDao.get(bookId)?.remoteDeleted != true
+
     suspend fun clearLocalBookData(bookId: String, keepServerAssociation: Boolean = false) {
         val remoteId = MyBooksConfig.remoteIdOf(bookId) ?: return
         val download = downloadJobs[bookId]
@@ -446,6 +454,7 @@ class MyBooksSyncManager @Inject constructor(
         }
         withContext(Dispatchers.IO) {
             if (!keepServerAssociation) {
+                myBooksSyncStateDao.get(bookId)?.let { readingSync.forgetBook(it) }
                 myBooksSyncStateDao.delete(bookId)
                 metaCache.delete(remoteId)
                 notesStore.delete(remoteId)
@@ -1014,19 +1023,42 @@ class MyBooksSyncManager @Inject constructor(
 
     private suspend fun applyServerDeletions(events: List<MyBooksDeletion>): Int {
         var marked = 0
-        for (event in events) editMutex.withLock {
-            val bookId = MyBooksConfig.BOOK_ID_PREFIX + event.id
-            val state = myBooksSyncStateDao.get(bookId) ?: return@withLock
-            if (!matchesMyBooksDeletion(state.baseJson, event)) return@withLock
-            val tags = tagDao.getTagsForBook(bookId).map(TagEntity::name)
-            val pending = hasPendingChanges(state, tags)
-            myBooksSyncStateDao.upsert(state.copy(remoteDeleted = true,
-                lastError = context.getString(if (pending) R.string.mybooks_deleted_pending else R.string.mybooks_deleted_retained)))
-            if (!state.remoteDeleted) marked++
+        val candidates = myBooksSyncStateDao.getAll().filter { state ->
+            state.remoteDeleted || events.any { it.id == state.remoteId && matchesMyBooksDeletion(state.baseJson, it) }
+        }
+        for (candidate in candidates) {
+            clearLocalBookData(candidate.bookId, keepServerAssociation = true)
+            editMutex.withLock {
+                database.withTransaction {
+                    val state = myBooksSyncStateDao.get(candidate.bookId) ?: return@withTransaction
+                    val bookId = state.bookId
+                    val tags = tagDao.getTagsForBook(bookId).map(TagEntity::name)
+                    // Recheck reading rows under the write lock, including states marked
+                    // deleted by an earlier build. Their outbox intentionally excludes them.
+                    val pending = hasPendingChanges(state, tags) || readingSync.hasPendingChanges(bookId)
+                    myBooksSyncStateDao.upsert(state.copy(remoteDeleted = true, conflictFieldsJson = "[]",
+                        lastError = context.getString(if (pending) R.string.mybooks_deleted_pending else R.string.mybooks_deleted_retained)))
+                    readingSync.acknowledgeRemoteDeletion(state)
+                    if (!state.remoteDeleted) marked++
+                    if (!pending) {
+                        val book = bookRepository.getBookById(bookId)
+                        if (book != null) {
+                            val others = database.bookDao().getAllBooksSnapshot().filterNot { it.id == bookId }
+                            if (book.filePath.isNotBlank() && others.none { it.filePath == book.filePath }) {
+                                check(FileUtils.deleteAppManagedBookFile(context, book.filePath)) { "Unable to delete the local file for ${book.title}" }
+                            }
+                            bookRepository.deleteBook(book)
+                            FileUtils.deleteTxtIndexCache(context, book.filePath)
+                            book.coverPath?.takeIf { cover -> others.none { it.coverPath == cover } }?.let { FileUtils.deleteAppOwnedFile(context, it) }
+                        }
+                        clearLocalBookData(bookId)
+                        myBooksSyncStateDao.deletePendingDelete(state.remoteId)
+                    }
+                }
+            }
         }
         return marked
     }
-
     private suspend fun pushPendingDeletes(
         token: String, snapshot: MyBooksSyncSnapshot, failures: MutableList<MyBooksSyncFailure>,
         failureDetails: MutableList<String>,

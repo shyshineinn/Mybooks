@@ -60,7 +60,7 @@ class MyBooksSyncReliabilityTest {
             store, MyBooksSyncScheduler(context, store, MyBooksSyncPreferencesStore(db.syncStateDao())),
             LocalNetworkAccessManager(context), reading, context, MyBooksSyncPreferencesStore(db.syncStateDao()),
             javax.inject.Provider { error("portable capability not declared by this fixture") },
-            javax.inject.Provider { MyBooksBookTransfer(db, manager, context) })
+            javax.inject.Provider { MyBooksBookTransfer(db, manager, context) }, db)
     }
 
     @After fun cleanup() {
@@ -490,6 +490,7 @@ class MyBooksSyncReliabilityTest {
         val failed = JSONObject(requireNotNull(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)) { "Expected cloud DELETE request" }.body.readUtf8())
         assertEquals(7L, failed.getLong("expected_revision")); assertEquals("book-one", failed.getString("expected_uuid"))
         server.enqueue(MockResponse().setBody("{}"))
+
         assertTrue(manager.deleteRemoteBooks(setOf("mybooks-1")).success)
         val retry = requireNotNull(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)) { "Expected cloud DELETE request" }; assertEquals("DELETE", retry.method); assertEquals("/api/books/1", retry.path)
         assertNull(db.myBooksSyncStateDao().getPendingDelete(1))
@@ -640,4 +641,67 @@ class MyBooksSyncReliabilityTest {
         assertNotNull(db.myBooksSyncStateDao().get("mybooks-1"))
     }
 
+    private fun deletionDelta(cursor: String, uuid: String = "book-one", revision: Long = 2): String =
+        JSONObject(delta(cursor, false)).put("deleted", JSONArray().put(JSONObject()
+            .put("id", 1).put("uuid", uuid).put("revision", revision).put("deleted_at", "2026-10-29T00:00:00Z"))).toString()
+
+    @Test fun webDeletionRemovesAnUnmodifiedDownloadedCopyAndDoesNotRecreateIt() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val body = java.io.File(com.huangder.lumibooks.util.FileUtils.getBooksDirectory(context), "mybooks-1.epub").apply { writeText("body") }
+        try {
+            localBook(readAt = 0)
+            db.bookDao().updateBook(db.bookDao().getBookById("mybooks-1")!!.copy(filePath = body.path, readingProgress = 0f, locatorJson = null))
+            db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = remote().toString()))
+            server.enqueue(MockResponse().setBody(deletionDelta("deleted")))
+            assertTrue(manager.syncNow(scheduleRetry = false).success)
+            assertNull(db.bookDao().getBookById("mybooks-1")); assertFalse(body.exists())
+            assertNull(db.myBooksSyncStateDao().get("mybooks-1"))
+            assertEquals(0, store.pendingCount.first()); assertTrue(manager.syncIssues.first().isEmpty())
+            server.enqueue(MockResponse().setBody(delta("empty", false)))
+            assertTrue(manager.syncNow(scheduleRetry = false).success)
+            assertNull(db.bookDao().getBookById("mybooks-1")); assertEquals(2, server.requestCount)
+        } finally { body.delete() }
+    }
+
+    @Test fun webDeletionRetainsDirtyReadingAcrossRepeatedSyncButClearsObsoleteConflicts() = runBlocking {
+        localBook()
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = remote().toString(), conflictFieldsJson = "[\"title\"]", lastError = "old conflict"))
+        db.syncStateDao().putState(com.huangder.lumibooks.data.local.entity.SyncStateEntity(
+            MyBooksReadingSync.CONFLICT + "book-one", JSONObject().put("bookId", "mybooks-1").toString()))
+        server.enqueue(MockResponse().setBody(deletionDelta("deleted")))
+        assertTrue(manager.syncNow(scheduleRetry = false).success)
+        assertNotNull(db.bookDao().getBookById("mybooks-1"))
+        assertTrue(db.myBooksSyncStateDao().get("mybooks-1")!!.remoteDeleted)
+        assertEquals("[]", db.myBooksSyncStateDao().get("mybooks-1")!!.conflictFieldsJson)
+        assertNull(db.syncStateDao().getValue(MyBooksReadingSync.CONFLICT + "book-one"))
+        assertTrue(manager.syncIssues.first().none { it.canResolve || it.readingConflict })
+        assertEquals(0, store.pendingCount.first())
+        server.enqueue(MockResponse().setBody(delta("empty", false)))
+        assertTrue(manager.syncNow(scheduleRetry = false).success)
+        assertEquals("kept-position", db.bookDao().getBookById("mybooks-1")!!.locatorJson)
+        assertFalse(manager.shouldKeepCloudPlaceholder("mybooks-1"))
+
+
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test fun aPreviouslyRetainedCloudPlaceholderCanBeRemovedWithoutAnotherDeletionEvent() = runBlocking {
+        localBook(readAt = 0)
+        db.bookDao().updateBook(db.bookDao().getBookById("mybooks-1")!!.copy(filePath = "", isCloudOnly = true))
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = remote().toString(), remoteDeleted = true))
+        assertFalse(manager.shouldKeepCloudPlaceholder("mybooks-1"))
+        server.enqueue(MockResponse().setBody(delta("empty", false)))
+        assertTrue(manager.syncNow(scheduleRetry = false).success)
+        assertNull(db.bookDao().getBookById("mybooks-1"))
+    }
+
+    @Test fun deletionForAnotherIdentityNeverRemovesTheLocalCopy() = runBlocking {
+        localBook(readAt = 0)
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = remote().toString()))
+        server.enqueue(MockResponse().setBody(deletionDelta("wrong-uuid", uuid = "another-book")))
+        assertTrue(manager.syncNow(scheduleRetry = false).success)
+        assertNotNull(db.bookDao().getBookById("mybooks-1"))
+        assertFalse(db.myBooksSyncStateDao().get("mybooks-1")!!.remoteDeleted)
+        assertTrue(manager.shouldKeepCloudPlaceholder("mybooks-1"))
+    }
 }

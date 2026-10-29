@@ -2192,7 +2192,8 @@ class HomeViewModel @Inject constructor(
 
         books.forEach { book ->
             val keepCloudPlaceholder = mode == BookDeleteMode.LOCAL_ONLY &&
-                (book.remoteFileName != null || MyBooksConfig.isMyBooks(book))
+                (book.remoteFileName != null || MyBooksConfig.isMyBooks(book)) &&
+                (!MyBooksConfig.isMyBooks(book) || myBooksSyncManager.shouldKeepCloudPlaceholder(book.id))
             try {
                 if (keepCloudPlaceholder && MyBooksConfig.isMyBooks(book)) myBooksSyncManager.clearLocalBookData(book.id, keepServerAssociation = true)
                 if (keepCloudPlaceholder && book.isCloudOnly) return@forEach

@@ -91,6 +91,7 @@ class MyBooksSyncStateStore @Inject constructor(
         }
         val pending = deletes.mapTo(mutableSetOf()) { it.bookId }
         for (state in states) {
+            if (state.remoteDeleted) continue
             val base = runCatching { JSONObject(state.baseJson) }.getOrDefault(JSONObject())
             val book = booksById[state.bookId]
             val changed = state.coverDirty ||

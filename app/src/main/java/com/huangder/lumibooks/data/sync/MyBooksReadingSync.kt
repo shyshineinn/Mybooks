@@ -62,6 +62,25 @@ class MyBooksReadingSync @Inject constructor(
         }
     }
 
+    suspend fun hasPendingChanges(bookId: String): Boolean {
+        val state = db.myBooksSyncStateDao().get(bookId) ?: return false
+        return db.withTransaction {
+            val book = db.bookDao().getBookById(bookId) ?: return@withTransaction false
+            val base = baseline(uuid(state)).getJSONObject("data")
+            readingCanonical(capture(book, base)) != readingCanonical(base) || dao.getValue(CONFLICT + uuid(state)) != null
+        }
+    }
+
+    suspend fun acknowledgeRemoteDeletion(state: MyBooksSyncStateEntity) {
+        dao.deleteState(CONFLICT + uuid(state))
+        dao.deleteState(CHOICE + uuid(state))
+    }
+
+    suspend fun forgetBook(state: MyBooksSyncStateEntity) {
+        acknowledgeRemoteDeletion(state)
+        dao.deleteState(BASE + uuid(state))
+    }
+
     suspend fun choose(bookId: String, useLocal: Boolean) {
         val state = db.myBooksSyncStateDao().get(bookId) ?: error("找不到同步书目")
         check(!state.remoteDeleted)

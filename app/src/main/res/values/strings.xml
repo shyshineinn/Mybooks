@@ -1905,7 +1905,7 @@
     <string name="server_meta_no_file">暂无文件</string>
     <string name="mybooks_connection_failed">无法连接书库</string>
     <string name="mybooks_empty_library_skip_delete">服务器返回空书库，已跳过本地删除</string>
-    <string name="mybooks_sync_summary">已同步书库（新增 %1$d · 更新 %2$d · 服务器删除 %3$d，本机副本保留）</string>
+    <string name="mybooks_sync_summary">已同步书库（新增 %1$d · 更新 %2$d · 服务器删除 %3$d）</string>
     <string name="mybooks_no_download_source">这本书没有可下载来源</string>
     <string name="mybooks_no_download_file">没有可下载的电子书文件</string>
     <string name="mybooks_unsupported_format">暂不支持 %1$s 格式</string>
@@ -1937,7 +1937,7 @@
     <string name="mybooks_library_changed">服务器书库身份发生变化，已停止同步并保留本机数据。请确认服务器地址和书库是否被替换。</string>
     <string name="mybooks_book_identity_changed">服务器书目身份发生变化，已停止更新并保留本机数据。请检查书库是否被替换。</string>
     <string name="mybooks_revision_rollback">服务器书目版本早于本机同步记录，已停止更新。请检查服务器是否恢复了旧备份。</string>
-    <string name="mybooks_deleted_pending">服务器已删除这本书。本机待上传修改、文件和阅读数据已保留；在网页恢复后可继续同步。</string>
+    <string name="mybooks_deleted_pending">服务器已删除这本书。本机待上传修改、文件和阅读数据已保留；可仅删除本地副本，或在网页恢复后继续同步。</string>
     <string name="mybooks_deleted_retained">服务器已删除这本书，本机副本与阅读数据已保留。可在网页回收站恢复后再次同步。</string>
     <string name="mybooks_delete_upgrade_required">请升级服务器以同步删除，本次删除仍保留在待处理队列。</string>
     <string name="mybooks_delete_missing_baseline">这项删除缺少原书目的版本记录，请取消待同步删除后重新核对服务器书目。</string>

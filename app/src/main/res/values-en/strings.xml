@@ -1881,7 +1881,7 @@
     <string name="server_meta_no_file">No file</string>
     <string name="mybooks_connection_failed">Unable to reach the library</string>
     <string name="mybooks_empty_library_skip_delete">Server returned an empty library; local deletion was skipped</string>
-    <string name="mybooks_sync_summary">Library synced (added %1$d · updated %2$d · server deleted %3$d; local copies kept)</string>
+    <string name="mybooks_sync_summary">Library synced (added %1$d · updated %2$d · server deleted %3$d)</string>
     <string name="mybooks_no_download_source">This book has no downloadable source</string>
     <string name="mybooks_no_download_file">No downloadable e-book file</string>
     <string name="mybooks_unsupported_format">%1$s format is not supported yet</string>
@@ -1913,7 +1913,7 @@
     <string name="mybooks_library_changed">The server library identity changed. Sync stopped and local data is kept. Check the server address and library.</string>
     <string name="mybooks_book_identity_changed">The book identity changed. Updates stopped and local data is kept. Check whether the library was replaced.</string>
     <string name="mybooks_revision_rollback">The server book version is older than the last synced version. Check whether an older backup was restored.</string>
-    <string name="mybooks_deleted_pending">The server deleted this book. Local pending edits, files and reading data are kept. Restore it on the website to resume sync.</string>
+    <string name="mybooks_deleted_pending">The server deleted this book. Local pending edits, files and reading data are kept. Delete the local copy, or restore it on the website to resume sync.</string>
     <string name="mybooks_deleted_retained">The server deleted this book. The local copy and reading data are kept. Restore it in the website trash to resume sync.</string>
     <string name="mybooks_delete_upgrade_required">Upgrade the server to sync deletions. This deletion remains queued.</string>
     <string name="mybooks_delete_missing_baseline">This deletion has no original book version. Cancel the pending deletion and check the server book again.</string>
