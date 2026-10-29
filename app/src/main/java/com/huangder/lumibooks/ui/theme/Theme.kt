@@ -188,7 +188,7 @@ fun EBookReaderTheme(
         else -> Color(appAccentContentArgb(effectiveAccentColor.toArgb()))
     }
 
-    val hdrHighlightRequested = effectiveAppTheme == "liquid_glass" && effectiveHdrHighlightEnabled
+    val hdrHighlightRequested = usesLiquidGlassDock(appTheme, liquidGlassCapability) && effectiveHdrHighlightEnabled
     val hdrHighlightActive = hdrHighlightRequested && liquidGlassCapability.hdrSupported
     if (!view.isInEditMode) {
         SideEffect {

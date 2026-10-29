@@ -128,8 +128,11 @@ class BookDetailsLandscapeInstrumentedTest {
                                     actions = {
                                         FloatingDetailTag(Modifier, {}, {}, {}, {}, {})
                                     }
-                                ) {
-                                    BookDetailsPager(book.id, Modifier.fillMaxSize()) { page ->
+                                ) { bottomOverlayHeight ->
+                                    BookDetailsPager(
+                                        book.id, Modifier.fillMaxSize(),
+                                        bottomContentPadding = bottomOverlayHeight + 16.dp
+                                    ) { page ->
                                         items(50) { index ->
                                             if (index == 0 && page == BookDetailsPage.Information) {
                                                 Column(
@@ -179,7 +182,8 @@ class BookDetailsLandscapeInstrumentedTest {
         val content = composeRule.onNodeWithTag("book_details_content").fetchSemanticsNode().boundsInRoot
         val footer = composeRule.onNodeWithTag("book_details_actions").fetchSemanticsNode().boundsInRoot
         assertTrue(if (rtl) hero.left >= content.right else hero.right <= content.left)
-        assertTrue("The footer must reserve its own height", content.bottom <= footer.top + 1f)
+        assertTrue("Actions must float over the content", content.bottom > footer.top)
+        assertTrue(kotlin.math.abs(content.bottom - footer.bottom) <= 1f)
         assertTrue("The content viewport must remain usable", content.height >= 100f)
         assertTrue(footer.left >= content.left - 1f && footer.right <= content.right + 1f)
         composeRule.onNode(
@@ -218,14 +222,15 @@ class BookDetailsLandscapeInstrumentedTest {
         capture("lumi-large-font")
     }
 
-    @Test fun largeFontNarrowWindowFallsBackWithoutCoveringContent() {
+    @Test fun largeFontNarrowWindowKeepsFloatingActions() {
         windowWidth = 680f
         mount(theme = "material3", fontScale = 2f)
         composeRule.onNodeWithTag("book_details_single_pane").assertIsDisplayed()
         select(BookDetailsPage.Files)
         val page = composeRule.onNodeWithTag("book_details_content").fetchSemanticsNode().boundsInRoot
         val actions = composeRule.onNodeWithTag("book_details_actions").fetchSemanticsNode().boundsInRoot
-        assertTrue(page.bottom <= actions.top + 1f)
+        assertTrue(page.bottom > actions.top)
+        assertTrue(kotlin.math.abs(page.bottom - actions.bottom) <= 1f)
         capture("material3-large-font-fallback")
     }
 

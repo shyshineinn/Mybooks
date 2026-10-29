@@ -28,6 +28,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -108,30 +111,17 @@ fun rememberMyBooksMeta(book: Book): MyBooksMetaUiState {
 }
 
 @Composable
-fun MyBooksContentRows(
-    metaState: MyBooksMetaUiState,
-    notesState: MyBooksNotesUiState? = null,
-    syncBadge: MyBooksSyncBadge? = null,
-    includeReadingRecords: Boolean = true,
-    summaryExpanded: Boolean,
-    onSummaryExpandedChange: (Boolean) -> Unit
-) {
-    val meta = metaState.meta
-    if (meta == null) {
-        if (!metaState.loading) MetaRetryRow(metaState.retry)
-        return
-    }
-
-    if (hasMeaningfulSummary(meta.summary)) {
-        SummaryRow(meta.summary.trim(), summaryExpanded, onSummaryExpandedChange)
-    }
+internal fun MyBooksDetailRows(meta: ServerBookMeta) {
     val context = LocalContext.current
     buildServerDetailRows(meta).forEach { row ->
         DetailRow(row.label, row.value, row.url != null, onClick = {
             row.url?.let { openServerUrl(context, it) }
         })
     }
-    if (includeReadingRecords) ReadingRecordBlock(meta)
+}
+
+@Composable
+internal fun MyBooksSyncRows(notesState: MyBooksNotesUiState?, syncBadge: MyBooksSyncBadge?) {
     if (notesState != null) {
         NotesStatusRow(notesState)
     }
@@ -199,7 +189,7 @@ fun MyBooksFileRows(book: Book, metaState: MyBooksMetaUiState) {
 }
 
 @Composable
-private fun SummaryRow(summary: String, expanded: Boolean, onExpandedChange: (Boolean) -> Unit) {
+internal fun SummaryRow(summary: String, expanded: Boolean, onExpandedChange: (Boolean) -> Unit) {
     val canExpand = summary.length > 120
     val motionEnabled = LocalMotionEnabled.current
     Column(
@@ -226,8 +216,9 @@ private fun SummaryRow(summary: String, expanded: Boolean, onExpandedChange: (Bo
             Text(
                 stringResource(R.string.server_meta_summary),
                 fontSize = AppType.Body,
+                fontWeight = FontWeight.SemiBold,
                 color = AppColors.TextPrimary,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).semantics { heading() }
             )
             if (canExpand) {
                 Icon(
@@ -293,7 +284,7 @@ internal fun ReadingRecordBlock(meta: ServerBookMeta) {
 }
 
 @Composable
-private fun MetaRetryRow(onRetry: () -> Unit) {
+internal fun MetaRetryRow(onRetry: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()

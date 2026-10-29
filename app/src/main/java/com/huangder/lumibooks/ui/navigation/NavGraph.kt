@@ -10,6 +10,8 @@ import com.huangder.lumibooks.ui.theme.LocalReduceTransparency
 import com.huangder.lumibooks.ui.theme.LumiBackgroundHost
 import com.huangder.lumibooks.ui.theme.LumiBackgroundScene
 import com.huangder.lumibooks.ui.theme.LocalAppThemeVariant
+import com.huangder.lumibooks.ui.theme.LocalLiquidGlassCapability
+import com.huangder.lumibooks.ui.theme.usesLiquidGlassDock
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.huangder.lumibooks.ui.theme.AppColors
 
@@ -369,6 +371,9 @@ fun MainNavGraph(
     val eInkMode = LocalEInkMode.current
     val useMaterial3Navigation = LocalUseMaterial3Theme.current
     val isLiquidGlass = LocalAppTheme.current == "liquid_glass" && !eInkMode
+    val glassDock = !eInkMode && usesLiquidGlassDock(
+        LocalAppThemeVariant.current, LocalLiquidGlassCapability.current
+    )
     val isLumiChan = LocalAppThemeVariant.current == "lumi_chan"
     val glassBackdropBackground = AppColors.WindowBg
     val liquidGlassBackdrop = rememberLayerBackdrop(onDraw = {
@@ -819,7 +824,7 @@ fun MainNavGraph(
                 modifier = Modifier
                     .fillMaxSize()
                     .then(
-                        if (canCaptureNavigationBackdrop && isLiquidGlass && !isLumiChan) {
+                        if (canCaptureNavigationBackdrop && glassDock && !isLumiChan) {
                             Modifier.layerBackdrop(liquidGlassBackdrop)
                         } else if (canCaptureNavigationBackdrop && !eInkMode && !reduceTransparency) {
                             Modifier.haze(hazeState)
@@ -913,7 +918,7 @@ fun MainNavGraph(
                                             showImportActions = true
                                             showImportConfirmation = false
                                         },
-                                        showImportButton = !isLiquidGlass,
+                                        showImportButton = !glassDock,
                                         showReadingGoalSheet = homeGoalSheetVisible,
                                         onReadingGoalSheetVisibleChange = { visible -> homeGoalSheetVisible = visible },
                                         renderReadingGoalSheet = false,
@@ -1194,52 +1199,56 @@ fun MainNavGraph(
                     }
                 }
         ) {
-            val showLiquidImport = isLiquidGlass
+            val showLiquidImport = glassDock
             if (useMaterial3Navigation) {
                 Material3BottomNavigationBar(
                     selectedIndex = selectedTab,
                     onTabSelected = selectTab
                 )
             } else {
-                Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.Center
+                CompositionLocalProvider(
+                    LocalAppTheme provides if (glassDock) "liquid_glass" else LocalAppTheme.current
                 ) {
-                    val requestImport = {
-                        importRequestFolderId = null
-                        selectedImportBooks = emptyList()
-                        selectedImportBookUris = emptySet()
-                        importCopiesIntoApp = true
-                        isPreparingImport = false
-                        importPreparationGeneration++
-                        showImportActions = true
-                        showImportConfirmation = false
-                    }
                     Box(
-                        modifier = Modifier.widthIn(
-                            max = if (isLiquidGlass) 480.dp else 430.dp
-                        )
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
                     ) {
-                        if (showLiquidImport) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .windowInsetsPadding(WindowInsets.navigationBarsIgnoringVisibility)
-                                    .padding(end = 24.dp, bottom = 10.dp)
-                            ) {
-                                LiquidGlassImportButton(
-                                    onClick = requestImport,
-                                    liquidGlassBackdrop = liquidGlassBackdrop
-                                )
-                            }
+                        val requestImport = {
+                            importRequestFolderId = null
+                            selectedImportBooks = emptyList()
+                            selectedImportBookUris = emptySet()
+                            importCopiesIntoApp = true
+                            isPreparingImport = false
+                            importPreparationGeneration++
+                            showImportActions = true
+                            showImportConfirmation = false
                         }
-                        FloatingTabBar(
-                            selectedIndex = selectedTab,
-                            hazeState = hazeState,
-                            liquidGlassBackdrop = liquidGlassBackdrop,
-                            reserveImportButtonSpace = showLiquidImport,
-                            onTabSelected = selectTab
-                        )
+                        Box(
+                            modifier = Modifier.widthIn(
+                                max = if (glassDock) 480.dp else 430.dp
+                            )
+                        ) {
+                            if (showLiquidImport) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .windowInsetsPadding(WindowInsets.navigationBarsIgnoringVisibility)
+                                        .padding(end = 24.dp, bottom = 10.dp)
+                                ) {
+                                    LiquidGlassImportButton(
+                                        onClick = requestImport,
+                                        liquidGlassBackdrop = liquidGlassBackdrop
+                                    )
+                                }
+                            }
+                            FloatingTabBar(
+                                selectedIndex = selectedTab,
+                                hazeState = hazeState,
+                                liquidGlassBackdrop = liquidGlassBackdrop,
+                                reserveImportButtonSpace = showLiquidImport,
+                                onTabSelected = selectTab
+                            )
+                        }
                     }
                 }
             }

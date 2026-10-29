@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.huangder.lumibooks.R
 import com.huangder.lumibooks.ui.components.LiquidGlassSegmentedControl
@@ -80,6 +81,7 @@ internal enum class BookDetailsPage(@StringRes val titleRes: Int) {
 internal fun BookDetailsPager(
     bookId: String,
     modifier: Modifier = Modifier,
+    bottomContentPadding: Dp = AppSpace.md,
     content: LazyListScope.(BookDetailsPage) -> Unit
 ) {
     key(bookId) {
@@ -144,7 +146,7 @@ internal fun BookDetailsPager(
                             .testTag("book_details_page_${page.name}"),
                         contentPadding = PaddingValues(
                             start = AppSpace.md, end = AppSpace.md,
-                            top = AppSpace.sm, bottom = AppSpace.md
+                            top = AppSpace.sm, bottom = bottomContentPadding
                         ),
                         verticalArrangement = Arrangement.spacedBy(AppSpace.md)
                     ) {

@@ -4,4 +4,6 @@
     <string name="book_detail_tab_reading">阅读</string>
     <string name="book_detail_tab_files">文件</string>
     <string name="book_detail_open_annotations">查看书签与笔记</string>
+    <string name="book_detail_group_details">详细信息</string>
+    <string name="book_detail_group_library">书库管理</string>
 </resources>

@@ -4,4 +4,6 @@
     <string name="book_detail_tab_reading">Reading</string>
     <string name="book_detail_tab_files">Files</string>
     <string name="book_detail_open_annotations">View bookmarks and notes</string>
+    <string name="book_detail_group_details">Details</string>
+    <string name="book_detail_group_library">Library</string>
 </resources>

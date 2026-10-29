@@ -26,8 +26,14 @@ data class LiquidGlassCapability(
 
 fun effectiveAppTheme(appTheme: String, capability: LiquidGlassCapability): String =
     if ((appTheme == "liquid_glass" || appTheme == "lumi_chan") && !capability.supported) "lumi"
+    else if (appTheme == "fuguang") "lumi"
     else if (appTheme == "lumi_chan") "liquid_glass"
     else appTheme
+
+/** Floating Light uses Lumi for pages and enables glass only inside the dock. */
+fun usesLiquidGlassDock(appTheme: String, capability: LiquidGlassCapability): Boolean =
+    capability.supported &&
+        (appTheme == "fuguang" || effectiveAppTheme(appTheme, capability) == "liquid_glass")
 
 fun detectLiquidGlassCapability(view: View, eInkMode: Boolean = false): LiquidGlassCapability {
     if (eInkMode || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {

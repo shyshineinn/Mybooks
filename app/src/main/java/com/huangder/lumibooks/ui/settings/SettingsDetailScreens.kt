@@ -1092,7 +1092,10 @@ fun DisplayDetail(viewModel: SettingsViewModel) {
     ) + (if (uiState.eInkModeEnabled || !liquidGlassSupported) {
         emptyList()
     } else {
-        listOf("liquid_glass" to stringResource(R.string.app_theme_liquid_glass))
+        listOf(
+            "fuguang" to stringResource(R.string.app_theme_fuguang),
+            "liquid_glass" to stringResource(R.string.app_theme_liquid_glass)
+        )
     }) + listOf("lumi_chan" to "？")
     val globalFontOptions = listOf(
         "default" to stringResource(R.string.global_font_default),
@@ -1128,7 +1131,8 @@ fun DisplayDetail(viewModel: SettingsViewModel) {
             selected = DataStoreManager.normalizeStartupScreen(uiState.startupScreen), onSelect = viewModel::saveStartupScreen)
         SettingsDivider()
         AppThemeGridSettingRow(label = stringResource(R.string.label_app_theme), options = appThemeOptions,
-            selected = if ((uiState.eInkModeEnabled || !liquidGlassSupported) && uiState.appTheme == "liquid_glass") "lumi" else uiState.appTheme,
+            selected = if ((uiState.eInkModeEnabled || !liquidGlassSupported) &&
+                uiState.appTheme in listOf("liquid_glass", "fuguang")) "lumi" else uiState.appTheme,
             onSelect = viewModel::saveAppTheme)
         if (uiState.appTheme != "material3" && !uiState.eInkModeEnabled) {
             SettingsDivider()
@@ -1175,7 +1179,8 @@ fun DisplayDetail(viewModel: SettingsViewModel) {
 
 
     AnimatedVisibility(
-        visible = uiState.appTheme == "liquid_glass" && !uiState.eInkModeEnabled && liquidGlassSupported,
+        visible = uiState.appTheme in listOf("liquid_glass", "fuguang") &&
+            !uiState.eInkModeEnabled && liquidGlassSupported,
         enter = expandVertically(animationSpec = tween(260)) +
             slideInVertically(animationSpec = tween(260)) { it / 3 } +
             fadeIn(animationSpec = tween(180)),

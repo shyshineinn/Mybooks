@@ -9,13 +9,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 internal data class BookDetailsLayoutSpec(
@@ -47,7 +53,8 @@ internal fun bookDetailsLayoutSpec(
 /**
  * The four slots keep the same composition identity across window changes. In particular,
  * the pager is never moved into a different Row/Column branch, so its scroll and saved page
- * state survive rotation. The measured footer reserves space instead of covering the list.
+ * state survive rotation. Actions overlay the full-height content viewport; their measured
+ * height is passed to the list for trailing scroll clearance, never viewport padding.
  */
 @Composable
 internal fun BookDetailsLayout(
@@ -55,12 +62,15 @@ internal fun BookDetailsLayout(
     topBar: @Composable (showHero: Boolean) -> Unit,
     hero: @Composable (twoPane: Boolean, compact: Boolean) -> Unit,
     actions: @Composable () -> Unit,
-    content: @Composable () -> Unit
+    content: @Composable (bottomOverlayHeight: Dp) -> Unit
 ) {
     BoxWithConstraints(
         modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
-        val spec = bookDetailsLayoutSpec(maxWidth.value, maxHeight.value, LocalDensity.current.fontScale)
+        val density = LocalDensity.current
+        val spec = bookDetailsLayoutSpec(maxWidth.value, maxHeight.value, density.fontScale)
+        // Safe initial clearance until the first measurement (64dp bar + 16dp outer gap).
+        var actionsHeight by remember(density) { mutableStateOf(80.dp) }
         Layout(
             modifier = Modifier.fillMaxSize()
                 .testTag(if (spec.twoPane) "book_details_two_pane" else "book_details_single_pane"),
@@ -72,9 +82,11 @@ internal fun BookDetailsLayout(
                 ) {
                     if (spec.showHero) hero(spec.twoPane, spec.compactHero)
                 }
-                Box(Modifier.testTag("book_details_content")) { content() }
+                Box(Modifier.testTag("book_details_content")) { content(actionsHeight) }
                 Box(
-                    Modifier.fillMaxWidth().testTag("book_details_actions").padding(vertical = 8.dp),
+                    Modifier.fillMaxWidth().testTag("book_details_actions")
+                        .onSizeChanged { actionsHeight = with(density) { it.height.toDp() } }
+                        .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) { actions() }
             }
@@ -91,7 +103,7 @@ internal fun BookDetailsLayout(
             )
             val heroMaxHeight = when {
                 spec.twoPane -> bodyHeight
-                spec.showHero -> minOf((bodyHeight - footer.height).coerceAtLeast(0), 168.dp.roundToPx())
+                spec.showHero -> minOf(bodyHeight, 168.dp.roundToPx())
                 else -> 0
             }
             val hero = measurables[1].measure(
@@ -99,7 +111,7 @@ internal fun BookDetailsLayout(
                     .copy(maxHeight = heroMaxHeight)
             )
             val contentTop = topBar.height + if (spec.twoPane) 0 else hero.height
-            val contentHeight = (height - contentTop - footer.height).coerceAtLeast(0)
+            val contentHeight = (height - contentTop).coerceAtLeast(0)
             val page = measurables[2].measure(Constraints.fixed(contentWidth, contentHeight))
 
             layout(width, height) {

@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -90,6 +91,7 @@ import com.huangder.lumibooks.ui.components.LiquidGlassDialogHost
 import com.huangder.lumibooks.ui.components.LiquidGlassIconButton
 import com.huangder.lumibooks.ui.components.ReplacingToast
 import com.huangder.lumibooks.ui.components.LiquidGlassSurface
+import com.huangder.lumibooks.ui.components.InformationCard
 import com.huangder.lumibooks.ui.components.LiquidGlassAlertDialog
 import com.huangder.lumibooks.ui.components.LiquidGlassMenuItem
 import com.huangder.lumibooks.ui.components.LiquidGlassMenuSpec
@@ -151,6 +153,8 @@ class BookDetailsActivity : ComponentActivity() {
             val hdr by dataStoreManager.liquidGlassHdrHighlightEnabled.collectAsState(initial = launchTheme.liquidGlassHdrHighlightEnabled)
             val darkMode by dataStoreManager.darkMode.collectAsState(initial = launchTheme.darkMode)
             val eInk by dataStoreManager.eInkModeEnabled.collectAsState(initial = launchTheme.eInkModeEnabled)
+            val cardOutlinesEnabled by dataStoreManager.cardOutlinesEnabled
+                .collectAsState(initial = launchTheme.cardOutlinesEnabled)
             val predictiveBack by dataStoreManager.predictiveBackEnabled.collectAsState(initial = launchTheme.predictiveBackEnabled)
             val isDark = if (eInk) false else when (darkMode) { "dark" -> true; "light" -> false; else -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES }
             val capability = rememberLiquidGlassCapability(eInk, LocalView.current)
@@ -174,6 +178,7 @@ class BookDetailsActivity : ComponentActivity() {
                 liquidGlassTransparency = transparency,
                 liquidGlassHdrHighlightEnabled = hdr && !eInk,
                 eInkMode = eInk,
+                cardOutlinesEnabled = cardOutlinesEnabled,
                 appFontSize = appFontSize,
                 globalFontMode = font
             ) {
@@ -513,11 +518,14 @@ fun BookDetailsScreen(
                 onRead = { onOpenReader(book.id) }
             )
         }
-    ) {
-        BookDetailsPager(book.id, Modifier.fillMaxSize()) { page ->
+    ) { bottomOverlayHeight ->
+        BookDetailsPager(
+            book.id, Modifier.fillMaxSize(),
+            bottomContentPadding = bottomOverlayHeight + AppSpace.md
+        ) { page ->
             when (page) {
                 BookDetailsPage.Information -> item {
-                    ContentInfoCard(
+                    ContentInfoCards(
                         book = book,
                         folder = folderName,
                         tags = tags.joinToString { it.name },
@@ -537,26 +545,24 @@ fun BookDetailsScreen(
                         MetricGrid(book, details.totalReadingTime, details.activeDays, details.bookmarkCount, details.noteCount)
                     }
                     item {
-                        LiquidGlassSurface(
-                            AppRoundedCornerShape(AppRadius.lg), AppColors.CardBg,
-                            Modifier.fillMaxWidth()
+                        InformationCard(
+                            contentPadding = PaddingValues(0.dp),
+                            verticalArrangement = Arrangement.Top
                         ) {
-                            Column {
-                                metaState.meta?.let { ReadingRecordBlock(it) }
-                                if (!book.isCloudOnly) {
-                                    DetailRow(stringResource(R.string.book_detail_last_read), dateText(book.lastReadTime), false)
-                                }
-                                DetailRow(
-                                    stringResource(R.string.bookmarks_notes),
-                                    stringResource(R.string.book_detail_open_annotations),
-                                    clickable = true,
-                                    onClick = {
-                                        context.startActivity(Intent(context, BookNotesActivity::class.java)
-                                            .putExtra(BookNotesActivity.EXTRA_BOOK_ID, book.id))
-                                    },
-                                    showChevron = true
-                                )
+                            metaState.meta?.let { ReadingRecordBlock(it) }
+                            if (!book.isCloudOnly) {
+                                DetailRow(stringResource(R.string.book_detail_last_read), dateText(book.lastReadTime), false)
                             }
+                            DetailRow(
+                                stringResource(R.string.bookmarks_notes),
+                                stringResource(R.string.book_detail_open_annotations),
+                                clickable = true,
+                                onClick = {
+                                    context.startActivity(Intent(context, BookNotesActivity::class.java)
+                                        .putExtra(BookNotesActivity.EXTRA_BOOK_ID, book.id))
+                                },
+                                showChevron = true
+                            )
                         }
                     }
                 }
@@ -760,27 +766,28 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
         stringResource(R.string.book_detail_bookmarks) to AnnotatedString(bookmarks.toString()),
         stringResource(R.string.book_detail_active_days) to AnnotatedString(days.toString())
     )
-    LiquidGlassSurface(AppRoundedCornerShape(AppRadius.lg), AppColors.CardBg, Modifier.fillMaxWidth(), contentScrimColor = Color.Transparent) {
-        Column(Modifier.padding(AppSpace.sm)) {
-            metrics.chunked(2).forEach { row ->
-                Row(Modifier.fillMaxWidth()) {
-                    row.forEach { (label, value) ->
-                        Column(
-                            Modifier.weight(1f).padding(AppSpace.sm),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(value, fontSize = AppType.Section, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
-                            Text(label, fontSize = AppType.Caption, color = AppColors.TextSecondary)
-                        }
+    InformationCard(
+        contentPadding = PaddingValues(AppSpace.sm),
+        verticalArrangement = Arrangement.Top
+    ) {
+        metrics.chunked(2).forEach { row ->
+            Row(Modifier.fillMaxWidth()) {
+                row.forEach { (label, value) ->
+                    Column(
+                        Modifier.weight(1f).padding(AppSpace.sm),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(value, fontSize = AppType.Section, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                        Text(label, fontSize = AppType.Caption, color = AppColors.TextSecondary)
                     }
-                    if (row.size == 1) Spacer(Modifier.weight(1f))
                 }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
             }
         }
     }
 }
 
-@Composable private fun ContentInfoCard(
+@Composable internal fun ContentInfoCards(
     book: Book,
     folder: String,
     tags: String,
@@ -794,10 +801,28 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
     onMove: () -> Unit,
     onReview: () -> Unit
 ) {
-    LiquidGlassSurface(AppRoundedCornerShape(AppRadius.lg), AppColors.CardBg, Modifier.fillMaxWidth(), contentScrimColor = Color.Transparent) {
-        Column {
+    val serverBook = MyBooksConfig.isMyBooks(book)
+    val meta = metaState.meta.takeIf { serverBook }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
+        if (meta != null && hasMeaningfulSummary(meta.summary)) {
+            InformationCard(contentPadding = PaddingValues(0.dp), verticalArrangement = Arrangement.Top) {
+                SummaryRow(meta.summary.trim(), summaryExpanded, onSummaryExpandedChange)
+            }
+        }
+        InformationCard(
+            title = stringResource(R.string.book_detail_group_details),
+            contentPadding = PaddingValues(0.dp),
+            verticalArrangement = Arrangement.Top
+        ) {
             DetailRow(stringResource(R.string.book_title_label), book.title, true, onEdit)
             DetailRow(stringResource(R.string.book_author_label), book.author, true, onEdit)
+            meta?.let { MyBooksDetailRows(it) }
+        }
+        InformationCard(
+            title = stringResource(R.string.book_detail_group_library),
+            contentPadding = PaddingValues(0.dp),
+            verticalArrangement = Arrangement.Top
+        ) {
             DetailRow(stringResource(R.string.book_detail_folder), folder, true, onMove)
             DetailRow(
                 stringResource(R.string.tag_sheet_title),
@@ -812,12 +837,18 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
                 onReview,
                 showChevron = true
             )
-            if (MyBooksConfig.isMyBooks(book)) {
-                MyBooksContentRows(
-                    metaState, notesState, syncBadge, includeReadingRecords = false,
-                    summaryExpanded = summaryExpanded,
-                    onSummaryExpandedChange = onSummaryExpandedChange
-                )
+        }
+        val showRetry = serverBook && meta == null && !metaState.loading
+        val showSync = serverBook && (notesState != null ||
+            (syncBadge?.pendingCount ?: 0) > 0 || syncBadge?.lastError != null)
+        if (showRetry || showSync) {
+            InformationCard(
+                title = stringResource(R.string.mybooks_sync_state),
+                contentPadding = PaddingValues(0.dp),
+                verticalArrangement = Arrangement.Top
+            ) {
+                if (showRetry) MetaRetryRow(metaState.retry)
+                MyBooksSyncRows(notesState, syncBadge)
             }
         }
     }
@@ -836,41 +867,42 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
         RemoteBookFormats.isSupported(it.format)
     } == true
     val downloading = downloadState as? BookDownloadState.Downloading
-    LiquidGlassSurface(AppRoundedCornerShape(AppRadius.lg), AppColors.CardBg, Modifier.fillMaxWidth(), contentScrimColor = Color.Transparent) {
-        Column {
-            if (MyBooksConfig.isMyBooks(book)) {
-                MyBooksFileRows(book = book, metaState = metaState)
-            }
-            if (fileNameText.isNotBlank() && !(MyBooksConfig.isMyBooks(book) && book.isCloudOnly)) {
-                DetailRow(stringResource(R.string.book_detail_file_name), fileNameText, false)
-            }
-            if (!book.isCloudOnly || !MyBooksConfig.isMyBooks(book) || hasSupportedServerFile) {
-                DetailRow(stringResource(R.string.book_detail_format), book.format.name, false)
-            }
-            DetailRow(
-                stringResource(R.string.book_detail_storage),
-                when {
-                    downloading != null -> stringResource(
-                        R.string.book_download_progress,
-                        (downloading.progress * 100f).toInt().coerceIn(0, 100)
-                    )
-                    book.isCloudOnly -> stringResource(R.string.book_detail_cloud_only)
-                    book.remoteFileName != null -> stringResource(R.string.book_detail_synced)
-                    else -> stringResource(R.string.book_detail_local)
-                },
-                false
-            )
-            DetailRow(
-                stringResource(R.string.book_detail_file_size),
-                remember(book.filePath, book.remoteFileSize) { fileSize(context, book) },
-                false
-            )
-            if (!book.isCloudOnly) {
-                DetailRow(stringResource(R.string.book_detail_imported), dateText(book.createdAt), false)
-            }
-            if (!book.isCloudOnly && book.filePath.isNotBlank()) {
-                LocationDetailRow(book.filePath)
-            }
+    InformationCard(
+        contentPadding = PaddingValues(0.dp),
+        verticalArrangement = Arrangement.Top
+    ) {
+        if (MyBooksConfig.isMyBooks(book)) {
+            MyBooksFileRows(book = book, metaState = metaState)
+        }
+        if (fileNameText.isNotBlank() && !(MyBooksConfig.isMyBooks(book) && book.isCloudOnly)) {
+            DetailRow(stringResource(R.string.book_detail_file_name), fileNameText, false)
+        }
+        if (!book.isCloudOnly || !MyBooksConfig.isMyBooks(book) || hasSupportedServerFile) {
+            DetailRow(stringResource(R.string.book_detail_format), book.format.name, false)
+        }
+        DetailRow(
+            stringResource(R.string.book_detail_storage),
+            when {
+                downloading != null -> stringResource(
+                    R.string.book_download_progress,
+                    (downloading.progress * 100f).toInt().coerceIn(0, 100)
+                )
+                book.isCloudOnly -> stringResource(R.string.book_detail_cloud_only)
+                book.remoteFileName != null -> stringResource(R.string.book_detail_synced)
+                else -> stringResource(R.string.book_detail_local)
+            },
+            false
+        )
+        DetailRow(
+            stringResource(R.string.book_detail_file_size),
+            remember(book.filePath, book.remoteFileSize) { fileSize(context, book) },
+            false
+        )
+        if (!book.isCloudOnly) {
+            DetailRow(stringResource(R.string.book_detail_imported), dateText(book.createdAt), false)
+        }
+        if (!book.isCloudOnly && book.filePath.isNotBlank()) {
+            LocationDetailRow(book.filePath)
         }
     }
 }
