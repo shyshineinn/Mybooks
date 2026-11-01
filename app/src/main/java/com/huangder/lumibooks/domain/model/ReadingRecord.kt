@@ -1,5 +1,12 @@
 package com.huangder.lumibooks.domain.model
 
+/** Raw activity below this is kept for the log but never becomes a reading session. */
+const val MIN_READING_SESSION_MS = 5_000L
+/** Shorter sessions are stored verbatim but excluded from counts and habits. */
+const val MIN_EFFECTIVE_READING_SESSION_MS = 20_000L
+/** Background gaps up to this length continue the same logical session. */
+const val READING_SESSION_RESUME_GRACE_MS = 5 * 60_000L
+
 data class ReadingRecord(
     val id: Long = 0,
     val bookId: String,
@@ -22,6 +29,8 @@ data class DailyTotal(
  */
 data class ReadingSession(
     val id: Long = 0,
+    /** Stable local identity; repeated checkpoints upsert this row instead of adding duplicates. */
+    val sessionKey: String = "",
     val bookId: String,
     val date: String,
     val startTime: Long,
@@ -37,5 +46,10 @@ data class ReadingSession(
     val sourceDeviceId: String = "",
     val note: String? = null,
     val mood: String? = null,
+    /** Effective time already attributed to [reading_records], per calendar day. */
+    val dailyContributions: Map<String, Long> = emptyMap(),
+    val contributedDuration: Long = dailyContributions.values.sum(),
     val updatedAt: Long = endTime
-)
+) {
+    val isEffective: Boolean get() = duration >= MIN_EFFECTIVE_READING_SESSION_MS
+}

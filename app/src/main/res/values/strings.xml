@@ -2008,6 +2008,7 @@
     <string name="statistics_month_reading_label">本月阅读时长</string>
     <string name="statistics_year_reading_label">本年阅读时长</string>
     <string name="statistics_session_count">阅读次数</string>
+    <string name="statistics_legacy_coverage_hint">含历史每日汇总，逐次统计仅覆盖本机会话</string>
     <string name="statistics_average_session">平均每次</string>
     <string name="unit_hour">小时</string>
     <string name="unit_minute">分</string>
@@ -2042,6 +2043,8 @@
     <string name="book_reading_session_count_value">%1$d 次</string>
     <string name="book_reading_started">开始阅读</string>
     <string name="book_reading_journey">阅读历程</string>
+    <string name="book_reading_server_status">服务器阅读状态</string>
+    <string name="book_reading_legacy_hint">含历史每日汇总，会话计数不完整</string>
     <string name="book_reading_view_all">查看全部</string>
     <string name="book_reading_empty_journey">尚无阅读历程</string>
     <string name="book_reading_daily_summary">历史每日汇总</string>
@@ -2067,6 +2070,10 @@
     <string name="reading_history_period_month">本月</string>
     <string name="reading_history_period_year">本年</string>
     <string name="reading_history_reset">重置</string>
+    <string name="reading_history_apply">应用</string>
+    <string name="reading_history_search_books">搜索书籍</string>
+    <string name="reading_history_load_more">加载更多</string>
+    <string name="reading_duration_seconds">%1$d 秒</string>
     <string name="reading_history_empty">还没有阅读记录</string>
     <string name="reading_history_empty_hint">阅读后会自动记录每一次会话</string>
     <string name="reading_history_day_total">共 %1$s</string>
@@ -2096,6 +2103,9 @@
     <string name="reading_session_note">本次心得</string>
     <string name="reading_session_note_placeholder">记下这次阅读的收获……</string>
     <string name="reading_session_add_note">添加心得</string>
+    <string name="reading_session_edit_thought">编辑心得</string>
+    <string name="reading_session_no_note">暂无心得</string>
+    <string name="reading_session_save_failed">保存失败，请重试</string>
     <string name="reading_session_note_saved">心得已保存</string>
     <string name="reading_session_mood">心情</string>
     <string name="reading_session_close">关闭</string>

@@ -123,11 +123,12 @@ internal object PreviewSamples {
         mood: String? = null
     ): ReadingSessionItem {
         val start = epoch(daysAgo, startHour, startMinute)
+        val sessionDate = date(daysAgo)
         return ReadingSessionItem(
             session = ReadingSession(
                 id = id,
                 bookId = book.id,
-                date = date(daysAgo),
+                date = sessionDate,
                 startTime = start,
                 endTime = start + minutes * 60_000L,
                 duration = minutes * 60_000L,
@@ -139,7 +140,9 @@ internal object PreviewSamples {
                 endProgress = toProgress,
                 mode = "slide",
                 note = note,
-                mood = mood
+                mood = mood,
+                dailyContributions = mapOf(sessionDate to minutes * 60_000L),
+                contributedDuration = minutes * 60_000L
             ),
             bookTitle = book.title,
             bookAuthor = book.author,
@@ -403,7 +406,7 @@ private fun ReadingSessionDetailPreview() {
             ReadingSessionDetailContent(
                 item = PreviewSamples.sessions().first(),
                 onClose = {},
-                onSaveNote = { _, _ -> }
+                onSaveNote = { _, _ -> true }
             )
         }
     }

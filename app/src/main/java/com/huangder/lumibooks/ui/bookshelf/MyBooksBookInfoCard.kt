@@ -242,7 +242,7 @@ internal fun SummaryRow(summary: String, expanded: Boolean, onExpandedChange: (B
 }
 
 @Composable
-internal fun ReadingRecordBlock(meta: ServerBookMeta) {
+internal fun ReadingRecordBlock(meta: ServerBookMeta, title: String? = null) {
     val labels = readingLogLabels(meta)
     if (labels.isNotEmpty()) {
         Column(
@@ -255,7 +255,7 @@ internal fun ReadingRecordBlock(meta: ServerBookMeta) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    stringResource(R.string.server_meta_read_logs),
+                    title ?: stringResource(R.string.server_meta_read_logs),
                     fontSize = AppType.Body,
                     color = AppColors.TextPrimary,
                     modifier = Modifier.weight(1f)

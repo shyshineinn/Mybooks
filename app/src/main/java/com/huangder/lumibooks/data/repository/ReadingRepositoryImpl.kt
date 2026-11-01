@@ -16,13 +16,17 @@ import com.huangder.lumibooks.domain.model.AnnotationTags
 import com.huangder.lumibooks.domain.model.Bookmark
 import com.huangder.lumibooks.domain.model.DailyTotal
 import com.huangder.lumibooks.domain.model.Note
+import com.huangder.lumibooks.domain.model.MIN_EFFECTIVE_READING_SESSION_MS
 import com.huangder.lumibooks.domain.model.ReadingRecord
 import com.huangder.lumibooks.domain.model.ReadingSession
+import com.huangder.lumibooks.domain.model.ReadingSessionDayContribution
+import com.huangder.lumibooks.domain.model.splitReadingSessionDuration
 import com.huangder.lumibooks.domain.repository.ReadingRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
 import androidx.room.withTransaction
+import org.json.JSONObject
 import javax.inject.Inject
 import java.util.UUID
 import com.huangder.lumibooks.data.sync.SyncIdentityStore
@@ -89,21 +93,88 @@ class ReadingRepositoryImpl @Inject constructor(
     override fun observeReadingSessionsByBook(bookId: String): Flow<List<ReadingSession>> =
         readingSessionDao.getSessionsByBook(bookId).map { rows -> rows.map { it.toDomain() } }
 
+    override fun observeSessionBookIds(): Flow<List<String>> =
+        readingSessionDao.getBookIdsWithSessions()
+
+    override fun observeSessionsFiltered(
+        bookId: String?,
+        startDate: String?,
+        endDate: String?,
+        mode: String?,
+        limit: Int
+    ): Flow<List<ReadingSession>> =
+        readingSessionDao.observeSessionsFiltered(bookId, startDate, endDate, mode, limit)
+            .map { rows -> rows.map { it.toDomain() } }
+
     override suspend fun getReadingSession(id: Long): ReadingSession? =
         readingSessionDao.getSessionById(id)?.toDomain()
 
-    override suspend fun insertReadingSession(session: ReadingSession): Long =
-        readingSessionDao.insertSession(
-            session.copy(sourceDeviceId = session.sourceDeviceId.ifBlank { syncIdentityStore.deviceId() }).toEntity()
-        )
+    override suspend fun saveReadingSession(session: ReadingSession): ReadingSession =
+        database.withTransaction {
+            val deviceId = session.sourceDeviceId.ifBlank { syncIdentityStore.deviceId() }
+            val sessionKey = session.sessionKey.ifBlank { UUID.randomUUID().toString() }
+            val existing = readingSessionDao.getSessionByKey(sessionKey)
+            val oldContributions = existing?.contributionMap().orEmpty()
+            val newContributions = if (session.duration >= MIN_EFFECTIVE_READING_SESSION_MS) {
+                splitReadingSessionDuration(session.startTime, session.endTime, session.duration)
+                    .associateBy { it.date }
+            } else {
+                emptyMap()
+            }
+            val normalized = session.copy(
+                sessionKey = sessionKey,
+                sourceDeviceId = deviceId,
+                dailyContributions = newContributions.mapValues { it.value.duration },
+                contributedDuration = newContributions.values.sumOf { it.duration },
+                note = session.note ?: existing?.note,
+                mood = session.mood ?: existing?.mood
+            )
+            val row = normalized.toEntity().copy(id = existing?.id ?: 0L)
+            val sessionId = if (existing == null) {
+                readingSessionDao.insertSession(row)
+            } else {
+                readingSessionDao.updateSession(row)
+                existing.id
+            }
+            applyDailyContributionDelta(
+                bookId = normalized.bookId,
+                deviceId = deviceId,
+                oldContributions = oldContributions,
+                newContributions = newContributions,
+                session = normalized
+            )
+            normalized.copy(id = sessionId)
+        }
 
-    override suspend fun updateReadingSessionNote(id: Long, note: String?, mood: String?) {
-        readingSessionDao.updateSessionNote(id, note?.takeIf { it.isNotBlank() }, mood?.takeIf { it.isNotBlank() }, System.currentTimeMillis())
-    }
+    override suspend fun updateReadingSessionNote(id: Long, note: String?, mood: String?): Boolean =
+        runCatching {
+            readingSessionDao.updateSessionNote(
+                id,
+                note?.takeIf { it.isNotBlank() },
+                mood?.takeIf { it.isNotBlank() },
+                System.currentTimeMillis()
+            )
+            true
+        }.getOrDefault(false)
 
-    override suspend fun deleteReadingSession(id: Long) {
-        readingSessionDao.deleteSession(id)
-    }
+    override suspend fun deleteReadingSession(id: Long): ReadingSession? =
+        database.withTransaction {
+            val entity = readingSessionDao.getSessionById(id) ?: return@withTransaction null
+            val deviceId = entity.sourceDeviceId.ifBlank { syncIdentityStore.deviceId() }
+            val contributions = entity.contributionMap()
+            for ((date, contribution) in contributions) {
+                adjustDailyRecord(
+                    bookId = entity.bookId,
+                    date = date,
+                    deviceId = deviceId,
+                    delta = -contribution.duration,
+                    startTime = entity.startTime,
+                    endTime = entity.endTime
+                )
+            }
+            readingSessionDao.deleteSession(id)
+            entity.toDomain()
+        }
 
     override fun getBookmarksByBookId(bookId: String): Flow<List<Bookmark>> {
         return bookmarkDao.getBookmarksByBookId(bookId).map { entities ->
@@ -353,25 +424,121 @@ class ReadingRepositoryImpl @Inject constructor(
         )
     }
 
-    private fun ReadingSessionEntity.toDomain(): ReadingSession = ReadingSession(
-        id = id,
-        bookId = bookId,
-        date = date,
-        startTime = startTime,
-        endTime = endTime,
-        duration = duration,
-        startChapterIndex = startChapterIndex,
-        endChapterIndex = endChapterIndex,
-        startChapterTitle = startChapterTitle,
-        endChapterTitle = endChapterTitle,
-        startProgress = startProgress,
-        endProgress = endProgress,
-        mode = mode,
-        sourceDeviceId = sourceDeviceId,
-        note = note,
-        mood = mood,
-        updatedAt = updatedAt
-    )
+    private suspend fun applyDailyContributionDelta(
+        bookId: String,
+        deviceId: String,
+        oldContributions: Map<String, ReadingSessionDayContribution>,
+        newContributions: Map<String, ReadingSessionDayContribution>,
+        session: ReadingSession
+    ) {
+        val dates = oldContributions.keys + newContributions.keys
+        for (date in dates) {
+            val oldDuration = oldContributions[date]?.duration ?: 0L
+            val newContribution = newContributions[date]
+            val newDuration = newContribution?.duration ?: 0L
+            val delta = newDuration - oldDuration
+            if (delta == 0L) continue
+            adjustDailyRecord(
+                bookId = bookId,
+                date = date,
+                deviceId = deviceId,
+                delta = delta,
+                startTime = newContribution?.startTime ?: session.startTime,
+                endTime = newContribution?.endTime ?: session.endTime
+            )
+        }
+    }
+
+    private suspend fun adjustDailyRecord(
+        bookId: String,
+        date: String,
+        deviceId: String,
+        delta: Long,
+        startTime: Long,
+        endTime: Long
+    ) {
+        val existing = readingRecordDao.getRecordByBookAndDate(bookId, date, deviceId)
+        if (delta > 0L) {
+            if (existing != null) {
+                readingRecordDao.updateRecordDuration(existing.id, delta, endTime)
+            } else {
+                readingRecordDao.insertRecord(
+                    ReadingRecord(
+                        bookId = bookId,
+                        date = date,
+                        duration = delta,
+                        startTime = startTime,
+                        endTime = maxOf(startTime, endTime),
+                        sourceDeviceId = deviceId
+                    ).toEntity()
+                )
+            }
+        } else if (delta < 0L && existing != null) {
+            readingRecordDao.adjustRecordDuration(existing.id, delta, System.currentTimeMillis())
+        }
+    }
+
+    private fun ReadingSessionEntity.contributionMap(): Map<String, ReadingSessionDayContribution> {
+        val decoded = decodeContributions(contributionsJson).mapValues { (day, duration) ->
+            ReadingSessionDayContribution(date = day, duration = duration, startTime = startTime, endTime = endTime)
+        }
+        if (decoded.isNotEmpty()) return decoded
+        if (contributedDuration <= 0L) return emptyMap()
+        return mapOf(
+            date to ReadingSessionDayContribution(
+                date = date,
+                duration = contributedDuration,
+                startTime = startTime,
+                endTime = endTime
+            )
+        )
+    }
+
+    private fun decodeContributions(raw: String): Map<String, Long> = runCatching {
+        val json = JSONObject(raw)
+        buildMap {
+            for (key in json.keys()) {
+                val value = json.optLong(key, 0L)
+                if (value > 0L) put(key, value)
+            }
+        }
+    }.getOrDefault(emptyMap())
+
+    private fun encodeContributions(values: Map<String, Long>): String {
+        if (values.isEmpty()) return "{}"
+        return JSONObject(values.mapValues { it.value }).toString()
+    }
+
+    private fun ReadingSessionEntity.toDomain(): ReadingSession {
+        val decoded = decodeContributions(contributionsJson)
+        val contributions = if (decoded.isEmpty() && contributedDuration > 0L) {
+            mapOf(date to contributedDuration)
+        } else {
+            decoded
+        }
+        return ReadingSession(
+            id = id,
+            sessionKey = sessionKey,
+            bookId = bookId,
+            date = date,
+            startTime = startTime,
+            endTime = endTime,
+            duration = duration,
+            startChapterIndex = startChapterIndex,
+            endChapterIndex = endChapterIndex,
+            startChapterTitle = startChapterTitle,
+            endChapterTitle = endChapterTitle,
+            startProgress = startProgress,
+            endProgress = endProgress,
+            mode = mode,
+            sourceDeviceId = sourceDeviceId,
+            note = note,
+            mood = mood,
+            dailyContributions = contributions,
+            contributedDuration = if (contributedDuration > 0L) contributedDuration else contributions.values.sum(),
+            updatedAt = updatedAt
+        )
+    }
 
     private fun ReadingSession.toEntity(): ReadingSessionEntity = ReadingSessionEntity(
         id = id,
@@ -390,6 +557,9 @@ class ReadingRepositoryImpl @Inject constructor(
         sourceDeviceId = sourceDeviceId,
         note = note,
         mood = mood,
+        sessionKey = sessionKey,
+        contributedDuration = contributedDuration,
+        contributionsJson = encodeContributions(dailyContributions),
         updatedAt = updatedAt
     )
 

@@ -37,8 +37,11 @@ import com.huangder.lumibooks.domain.model.Bookmark
 import com.huangder.lumibooks.domain.model.Note
 import com.huangder.lumibooks.domain.model.HighlightRule
 import com.huangder.lumibooks.domain.model.RuleStyle
-import com.huangder.lumibooks.domain.model.ReadingRecord
+import com.huangder.lumibooks.domain.model.MIN_EFFECTIVE_READING_SESSION_MS
+import com.huangder.lumibooks.domain.model.MIN_READING_SESSION_MS
 import com.huangder.lumibooks.domain.model.ReadingSession
+import com.huangder.lumibooks.domain.reading.ReadingSessionSnapshot
+import com.huangder.lumibooks.domain.reading.ReadingSessionTracker
 import com.huangder.lumibooks.ui.reading.ReadingSessionSummary
 import com.huangder.lumibooks.domain.model.ReaderBackgroundPreset
 import com.huangder.lumibooks.domain.model.ReaderBackgroundType
@@ -880,45 +883,66 @@ class ReaderViewModel @Inject constructor(
     private var observedCacheGeneration = readerCacheStore.currentGeneration()
     private var cacheRecoveryJob: Job? = null
     private val bookLoadMutex = Mutex()
-    private var sessionStartTime: Long = System.currentTimeMillis()
-    private var sessionStartChapterIndex: Int = 0
-    private var sessionStartChapterTitle: String? = null
-    private var sessionStartProgress: Float = 0f
-    private var sessionStartMode: String = ""
-    private var pausedTime: Long = 0L  // 进入后台的时间戳
+    private val readingSessionTracker = ReadingSessionTracker()
+    private val sessionWriteMutex = Mutex()
+    private var sessionStartContext: ReaderSessionStart? = null
     private var isPaused: Boolean = false
 
-    /** 应用进入后台：暂停计时 */
+    private data class ReaderSessionStart(
+        val sessionKey: String,
+        val chapterIndex: Int,
+        val chapterTitle: String?,
+        val progress: Float,
+        val mode: String
+    )
+
+    /** 应用进入后台：暂停计时并保存检查点 */
     fun onAppBackgrounded() {
         flushNativePageIndex()
         if (!isPaused) {
-            pausedTime = System.currentTimeMillis()
             isPaused = true
-            // 保存当前会话，防止进程被杀丢失数据
+            readingSessionTracker.pause()
             saveReadingCheckpoint()
             android.util.Log.e("READING", "App backgrounded, session saved")
         }
     }
 
-    /** 应用回到前台：恢复计时 */
+    /** 应用回到前台：短暂切后台继续同一会话，长时间离开则结束旧会话 */
     fun onAppForegrounded() {
         if (isPaused) {
-            // 重置会话起始时间，不计入后台时间
-            sessionStartTime = System.currentTimeMillis()
-            captureSessionStartSnapshot()
+            val format = _uiState.value.book?.format?.name.orEmpty()
+            val resume = readingSessionTracker.resume(bookId, format)
+            resume.previous?.let { previous ->
+                persistSnapshotAsync(previous, sessionStartContext)
+                sessionStartContext = null
+            }
+            syncSessionStartContext()
             isPaused = false
-            pausedTime = 0L
-            android.util.Log.e("READING", "App foregrounded, timer reset")
+            android.util.Log.e("READING", "App foregrounded, session resumed")
         }
         recoverReaderAfterCacheClearIfNeeded()
     }
 
-    private fun captureSessionStartSnapshot() {
+    private fun beginSessionTracking(format: String) {
+        val previous = readingSessionTracker.begin(bookId, format)
+        if (previous != null) {
+            persistSnapshotAsync(previous, sessionStartContext)
+            sessionStartContext = null
+        }
+        syncSessionStartContext()
+    }
+
+    private fun syncSessionStartContext() {
+        val snapshot = readingSessionTracker.snapshot() ?: return
+        if (sessionStartContext?.sessionKey == snapshot.sessionKey) return
         val state = _uiState.value
-        sessionStartChapterIndex = state.currentChapterIndex
-        sessionStartChapterTitle = state.chapterTitles.getOrNull(state.currentChapterIndex)
-        sessionStartProgress = currentSessionProgress(state)
-        sessionStartMode = state.pageTransition
+        sessionStartContext = ReaderSessionStart(
+            sessionKey = snapshot.sessionKey,
+            chapterIndex = state.currentChapterIndex,
+            chapterTitle = state.chapterTitles.getOrNull(state.currentChapterIndex),
+            progress = currentSessionProgress(state),
+            mode = state.pageTransition
+        )
     }
 
     /** The in-memory page position can be ahead of the debounced Book row. */
@@ -3840,6 +3864,16 @@ class ReaderViewModel @Inject constructor(
     fun saveAndPause() {
         flushNativePageIndex()
         continuousProgressJob?.cancel()
+        val snapshot = readingSessionTracker.snapshot()
+        val start = sessionStartContext
+        if (snapshot != null && snapshot.duration >= MIN_READING_SESSION_MS) {
+            // The view model may be cleared immediately; finish this last write off the main thread.
+            kotlinx.coroutines.CoroutineScope(
+                Dispatchers.IO + kotlinx.coroutines.NonCancellable
+            ).launch {
+                runCatching { persistSnapshot(snapshot, start) }
+            }
+        }
         saveReadingCheckpoint()
         webdavAutoSyncScheduler.onReaderExited()
     }
@@ -4259,8 +4293,7 @@ class ReaderViewModel @Inject constructor(
                         isLoading = if (isContinuousReader && !isRasterPageFormat) false else _uiState.value.isLoading,
                         pageReady = if (isContinuousReader && !isRasterPageFormat) true else _uiState.value.pageReady
                     )
-                    sessionStartTime = System.currentTimeMillis()
-                    captureSessionStartSnapshot()
+                    beginSessionTracking(displayBook.format.name)
                     ReaderOpenPerformance.updateState(
                         bookId = bookId,
                         phase = "awaiting_first_page",
@@ -6602,11 +6635,11 @@ class ReaderViewModel @Inject constructor(
     private fun saveReadingCheckpoint() {
         if (!_uiState.value.book.let { it != null && MyBooksConfig.isMyBooks(it) }) {
             saveProgress()
-            saveReadingSession()
+            saveSessionCheckpoint()
             return
         }
         // Capture the session before dispatch so pause + disposal never count it twice.
-        saveReadingSession()
+        saveSessionCheckpoint()
         val state = _uiState.value
         val writeVersion = ++progressWriteVersion
         exitProgressSave = myBooksRealtimeSync.saveReaderState {
@@ -6865,92 +6898,67 @@ class ReaderViewModel @Inject constructor(
         } else 0
     }
 
-    private fun saveReadingSession() {
-        val endTime = if (isPaused) pausedTime else System.currentTimeMillis()
-        val duration = endTime - sessionStartTime
-        android.util.Log.e("READING", "saveReadingSession: duration=${duration}ms, bookId=$bookId")
-        if (duration < 5000) {
-            android.util.Log.e("READING", "Session too short, skipping")
-            return
-        }
-        try {
-            persistReadingSession(endTime)
-            // 重置会话起始时间，为下一段阅读做准备
-            sessionStartTime = endTime
-            captureSessionStartSnapshot()
-        } catch (e: Exception) {
-            android.util.Log.e("READING", "Save failed: ${e.message}")
+    private fun saveSessionCheckpoint() {
+        val snapshot = readingSessionTracker.snapshot() ?: return
+        persistSnapshotAsync(snapshot, sessionStartContext)
+    }
+
+    private fun persistSnapshotAsync(snapshot: ReadingSessionSnapshot, start: ReaderSessionStart?) {
+        if (snapshot.duration < MIN_READING_SESSION_MS) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { persistSnapshot(snapshot, start) }
+                .onFailure { android.util.Log.e("READING", "Session save failed: ${it.message}") }
         }
     }
 
-    private fun persistReadingSession(endTime: Long): ReadingSession {
-        val today = TimeUtils.getCurrentDate()
-        val state = _uiState.value
-        val endChapterIndex = state.currentChapterIndex
-        val endChapterTitle = state.chapterTitles.getOrNull(endChapterIndex)
-        val endProgress = currentSessionProgress(state)
-        val startTime = sessionStartTime
-        val duration = endTime - startTime
-        val session = ReadingSession(
-            bookId = bookId,
-            date = today,
-            startTime = startTime,
-            endTime = endTime,
-            duration = duration,
-            startChapterIndex = sessionStartChapterIndex,
-            endChapterIndex = endChapterIndex,
-            startChapterTitle = sessionStartChapterTitle,
-            endChapterTitle = endChapterTitle,
-            startProgress = sessionStartProgress,
-            endProgress = endProgress,
-            mode = sessionStartMode
-        )
-        var sessionId = 0L
-        kotlinx.coroutines.runBlocking {
-            val existing = readingRepository.getRecordByBookAndDate(bookId, today)
-            if (existing != null) {
-                readingRepository.updateRecordDuration(existing.id, duration, endTime)
-                android.util.Log.e("READING", "Record updated: +${duration}ms, total=${existing.duration + duration}ms")
-            } else {
-                val record = ReadingRecord(
-                    bookId = bookId,
-                    date = today,
-                    duration = duration,
-                    startTime = startTime,
-                    endTime = endTime
-                )
-                readingRepository.insertRecord(record)
-                android.util.Log.e("READING", "Record inserted: ${record.date} ${record.duration}ms")
-            }
-            sessionId = readingRepository.insertReadingSession(session)
+    private suspend fun persistSnapshot(
+        snapshot: ReadingSessionSnapshot,
+        start: ReaderSessionStart?
+    ): ReadingSession? {
+        if (snapshot.duration < MIN_READING_SESSION_MS) return null
+        sessionWriteMutex.withLock {
+            val state = _uiState.value
+            val sameBook = snapshot.bookId == bookId
+            val startContext = start?.takeIf { it.sessionKey == snapshot.sessionKey }
+            val session = ReadingSession(
+                sessionKey = snapshot.sessionKey,
+                bookId = snapshot.bookId,
+                date = snapshot.date,
+                startTime = snapshot.startWallTime,
+                endTime = snapshot.endWallTime,
+                duration = snapshot.duration,
+                startChapterIndex = startContext?.chapterIndex ?: 0,
+                endChapterIndex = if (sameBook) state.currentChapterIndex else startContext?.chapterIndex ?: 0,
+                startChapterTitle = startContext?.chapterTitle,
+                endChapterTitle = if (sameBook) {
+                    state.chapterTitles.getOrNull(state.currentChapterIndex)
+                } else {
+                    startContext?.chapterTitle
+                },
+                startProgress = startContext?.progress ?: 0f,
+                endProgress = if (sameBook) currentSessionProgress(state) else startContext?.progress ?: 0f,
+                mode = startContext?.mode ?: state.pageTransition
+            )
+            return readingRepository.saveReadingSession(session)
         }
-        return session.copy(id = sessionId)
     }
 
     /**
-     * Saves the current segment and returns the data the exit summary needs.
-     * Returns null for sessions the normal recorder would also discard.
+     * Ends the logical session, saves its raw detail, and returns summary data only for
+     * sessions that meet the effective-reading threshold.
      */
-    fun takeReadingSummary(): ReadingSessionSummary? {
-        val endTime = if (isPaused) pausedTime else System.currentTimeMillis()
-        val duration = endTime - sessionStartTime
-        if (duration < 5000) return null
-        val saved = runCatching { persistReadingSession(endTime) }.getOrNull()
-        if (saved == null) return null
-        sessionStartTime = endTime
-        captureSessionStartSnapshot()
-        val annotationCount = runCatching {
-            kotlinx.coroutines.runBlocking {
-                val notes = readingRepository.observeTextNotesCreatedBetween(saved.startTime, saved.endTime)
-                    .first()
-                val bookmarks = readingRepository.observeBookmarksCreatedBetween(saved.startTime, saved.endTime)
-                    .first()
-                notes.count { !it.isInkStroke && (!it.isGeneratedByHighlightRule || it.isNoteEntry) } + bookmarks.size
-            }
-        }.getOrDefault(0)
-        val startPercent = (saved.startProgress * 100f).toInt()
-        val endPercent = (saved.endProgress * 100f).toInt()
-        val delta = (endPercent - startPercent).takeIf { saved.startProgress > 0f || saved.endProgress > 0f }
+    suspend fun finishReadingSessionForExit(): ReadingSessionSummary? {
+        val snapshot = readingSessionTracker.finish() ?: return null
+        val start = sessionStartContext
+        sessionStartContext = null
+        val saved = withContext(Dispatchers.IO) {
+            runCatching { persistSnapshot(snapshot, start) }.getOrNull()
+        } ?: return null
+        if (saved.duration < MIN_EFFECTIVE_READING_SESSION_MS) return null
+        val annotationCount = withContext(Dispatchers.IO) {
+            runCatching { countSessionAnnotations(saved) }.getOrDefault(0)
+        }
+        val delta = com.huangder.lumibooks.ui.reading.sessionProgressDeltaPercent(saved)
         return ReadingSessionSummary(
             durationMillis = saved.duration,
             progressDeltaPercent = delta,
@@ -6959,13 +6967,16 @@ class ReaderViewModel @Inject constructor(
         )
     }
 
-    fun saveReadingSummaryNote(sessionId: Long, note: String?, mood: String?) {
-        runCatching {
-            kotlinx.coroutines.runBlocking {
-                readingRepository.updateReadingSessionNote(sessionId, note, mood)
-            }
-        }
+    private suspend fun countSessionAnnotations(session: ReadingSession): Int {
+        val notes = readingRepository.observeTextNotesCreatedBetween(session.startTime, session.endTime).first()
+        val bookmarks = readingRepository.observeBookmarksCreatedBetween(session.startTime, session.endTime).first()
+        return com.huangder.lumibooks.ui.reading.countSessionMarks(notes, bookmarks, session.bookId)
     }
+
+    suspend fun saveReadingSummaryNote(sessionId: Long, note: String?, mood: String?): Boolean =
+        withContext(Dispatchers.IO) {
+            readingRepository.updateReadingSessionNote(sessionId, note, mood)
+        }
 
     override fun onCleared() {
         flushNativePageIndex()

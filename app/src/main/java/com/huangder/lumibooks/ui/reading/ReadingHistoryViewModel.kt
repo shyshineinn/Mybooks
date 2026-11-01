@@ -1,13 +1,17 @@
 package com.huangder.lumibooks.ui.reading
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.huangder.lumibooks.R
 import com.huangder.lumibooks.domain.repository.BookRepository
 import com.huangder.lumibooks.domain.repository.ReadingRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -16,7 +20,13 @@ import java.time.LocalDate
 import java.time.temporal.TemporalAdjusters
 import javax.inject.Inject
 
-enum class ReadingHistoryPeriod { ALL, WEEK, MONTH, YEAR, DAY }
+enum class ReadingHistoryPeriod(@StringRes val labelRes: Int) {
+    ALL(R.string.reading_history_period_all),
+    WEEK(R.string.reading_history_period_week),
+    MONTH(R.string.reading_history_period_month),
+    YEAR(R.string.reading_history_period_year),
+    DAY(R.string.reading_history_period_all)
+}
 
 data class ReadingHistoryFilter(
     val bookId: String? = null,
@@ -27,13 +37,51 @@ data class ReadingHistoryFilter(
 
 enum class ReadingHistoryModeFilter { ALL, PAGED, SCROLL }
 
+data class ReadingHistoryQuery(
+    val bookId: String?,
+    val startDate: String?,
+    val endDate: String?,
+    /** SQL mode key: scroll, paged, or null for all. */
+    val mode: String?
+)
+
+fun ReadingHistoryFilter.toQuery(today: LocalDate = LocalDate.now()): ReadingHistoryQuery {
+    val exactDate = date?.takeIf { it.isNotBlank() }
+    val range = when {
+        exactDate != null -> exactDate to exactDate
+        period == ReadingHistoryPeriod.WEEK -> {
+            val start = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
+            start.toString() to start.plusDays(6).toString()
+        }
+        period == ReadingHistoryPeriod.MONTH -> {
+            val start = today.withDayOfMonth(1)
+            start.toString() to start.withDayOfMonth(today.lengthOfMonth()).toString()
+        }
+        period == ReadingHistoryPeriod.YEAR -> {
+            LocalDate.of(today.year, 1, 1).toString() to LocalDate.of(today.year, 12, 31).toString()
+        }
+        else -> null
+    }
+    return ReadingHistoryQuery(
+        bookId = bookId?.takeIf { it.isNotBlank() },
+        startDate = range?.first,
+        endDate = range?.second,
+        mode = when (mode) {
+            ReadingHistoryModeFilter.PAGED -> "paged"
+            ReadingHistoryModeFilter.SCROLL -> "scroll"
+            ReadingHistoryModeFilter.ALL -> null
+        }
+    )
+}
+
 data class ReadingHistoryBookOption(val id: String, val title: String)
 
 data class ReadingHistoryUiState(
     val sessions: List<ReadingSessionItem> = emptyList(),
     val books: List<ReadingHistoryBookOption> = emptyList(),
     val filter: ReadingHistoryFilter = ReadingHistoryFilter(),
-    val loading: Boolean = true
+    val loading: Boolean = true,
+    val hasMore: Boolean = false
 )
 
 data class ReadingDayGroup(
@@ -48,71 +96,88 @@ fun List<ReadingSessionItem>.groupByDay(): List<ReadingDayGroup> =
         .toSortedMap(compareByDescending { it })
         .map { (date, items) -> ReadingDayGroup(date, items.sortedByDescending { it.startTime }) }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ReadingHistoryViewModel @Inject constructor(
     private val readingRepository: ReadingRepository,
     private val bookRepository: BookRepository
 ) : ViewModel() {
 
-    private val filter = MutableStateFlow(ReadingHistoryFilter())
+    private data class HistoryRequest(
+        val filter: ReadingHistoryFilter,
+        val limit: Int
+    )
 
-    val uiState = combine(
-        readingRepository.observeAllReadingSessions(),
-        bookRepository.getAllBooks(),
-        filter
-    ) { sessions, books, currentFilter ->
-        val joined = sessions.joinBooks(books)
+    private val request = MutableStateFlow(HistoryRequest(ReadingHistoryFilter(), PAGE_SIZE))
+
+    private val books = combine(
+        readingRepository.observeSessionBookIds(),
+        bookRepository.getAllBooks()
+    ) { ids, allBooks ->
+        val byId = allBooks.associateBy { it.id }
+        ids.mapNotNull { id -> byId[id]?.let { ReadingHistoryBookOption(it.id, it.title) } }
+            .distinctBy { it.id }
+            .sortedBy { it.title }
+    }
+
+    private val results = request.flatMapLatest { current ->
+        val query = current.filter.toQuery()
+        readingRepository.observeSessionsFiltered(
+            bookId = query.bookId,
+            startDate = query.startDate,
+            endDate = query.endDate,
+            mode = query.mode,
+            limit = current.limit
+        ).combine(bookRepository.getAllBooks()) { rows, allBooks ->
+            current to rows.joinBooks(allBooks)
+        }
+    }
+
+    val uiState = combine(request, results, books) { current, (resultRequest, rows), options ->
+        val resultReady = resultRequest == current
         ReadingHistoryUiState(
-            sessions = joined.filter { item -> item.matches(currentFilter) },
-            books = joined.map { ReadingHistoryBookOption(it.bookId, it.bookTitle) }
-                .distinctBy { it.id }
-                .sortedBy { it.title },
-            filter = currentFilter,
-            loading = false
+            sessions = if (resultReady) rows else emptyList(),
+            books = options,
+            filter = current.filter,
+            loading = !resultReady,
+            hasMore = resultReady && rows.size >= current.limit
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReadingHistoryUiState())
 
     fun initialize(bookId: String?, date: String?) {
         if (bookId.isNullOrBlank() && date.isNullOrBlank()) return
-        filter.update {
-            it.copy(
-                bookId = bookId?.takeIf { id -> id.isNotBlank() },
-                date = date?.takeIf { value -> value.isNotBlank() },
-                period = if (date.isNullOrBlank()) it.period else ReadingHistoryPeriod.DAY
+        val current = request.value.filter
+        applyFilter(
+            current.copy(
+                bookId = bookId?.takeIf { it.isNotBlank() } ?: current.bookId,
+                date = date?.takeIf { it.isNotBlank() },
+                period = if (date.isNullOrBlank()) current.period else ReadingHistoryPeriod.DAY
             )
-        }
+        )
     }
 
-    fun setBook(bookId: String?) {
-        filter.update { it.copy(bookId = bookId) }
+    fun applyFilter(newFilter: ReadingHistoryFilter) {
+        request.value = HistoryRequest(newFilter, PAGE_SIZE)
     }
 
-    fun setPeriod(period: ReadingHistoryPeriod) {
-        filter.update { it.copy(period = period, date = null) }
-    }
+    fun reset() = applyFilter(ReadingHistoryFilter())
 
     fun setDate(date: String?) {
-        filter.update {
-            it.copy(
+        val current = request.value.filter
+        applyFilter(
+            current.copy(
                 date = date,
                 period = if (date == null) ReadingHistoryPeriod.ALL else ReadingHistoryPeriod.DAY
             )
-        }
+        )
     }
 
-    fun setMode(mode: ReadingHistoryModeFilter) {
-        filter.update { it.copy(mode = mode) }
+    fun loadMore() {
+        request.update { it.copy(limit = it.limit + PAGE_SIZE) }
     }
 
-    fun reset() {
-        filter.value = ReadingHistoryFilter()
-    }
-
-    fun updateNote(sessionId: Long, note: String?, mood: String?) {
-        viewModelScope.launch {
-            runCatching { readingRepository.updateReadingSessionNote(sessionId, note, mood) }
-        }
-    }
+    suspend fun saveNote(sessionId: Long, note: String?, mood: String?): Boolean =
+        readingRepository.updateReadingSessionNote(sessionId, note, mood)
 
     fun delete(sessionId: Long) {
         viewModelScope.launch {
@@ -120,27 +185,7 @@ class ReadingHistoryViewModel @Inject constructor(
         }
     }
 
-    private fun ReadingSessionItem.matches(filter: ReadingHistoryFilter): Boolean {
-        if (filter.bookId != null && bookId != filter.bookId) return false
-        if (filter.mode == ReadingHistoryModeFilter.PAGED && mode.isScrollMode()) return false
-        if (filter.mode == ReadingHistoryModeFilter.SCROLL && !mode.isScrollMode()) return false
-        val localDate = runCatching { LocalDate.parse(date) }.getOrNull() ?: return false
-        val today = LocalDate.now()
-        val exactDate = filter.date
-        if (exactDate != null) return date == exactDate
-        return when (filter.period) {
-            ReadingHistoryPeriod.ALL -> true
-            ReadingHistoryPeriod.WEEK -> {
-                val start = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
-                !localDate.isBefore(start) && !localDate.isAfter(start.plusDays(6))
-            }
-            ReadingHistoryPeriod.MONTH ->
-                localDate.year == today.year && localDate.monthValue == today.monthValue
-            ReadingHistoryPeriod.YEAR -> localDate.year == today.year
-            ReadingHistoryPeriod.DAY -> true
-        }
+    private companion object {
+        const val PAGE_SIZE = 100
     }
-
-    private fun String.isScrollMode(): Boolean =
-        this == "continuous" || this == "scroll" || this == "vertical"
 }

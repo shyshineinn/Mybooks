@@ -70,9 +70,18 @@ internal fun BookReadingTab(
     Column(verticalArrangement = Arrangement.spacedBy(AppSpace.lg)) {
         BookReadingOverviewCard(
             book = state.book ?: book,
-            state = state,
-            serverMeta = serverMeta
+            state = state
         )
+        if (serverMeta != null && serverMeta.hasReadingRecord()) {
+            InformationCard(
+                title = stringResource(R.string.book_reading_server_status),
+                titleFontSize = 18.sp,
+                contentPadding = PaddingValues(0.dp),
+                verticalArrangement = Arrangement.Top
+            ) {
+                ReadingRecordBlock(serverMeta)
+            }
+        }
         BookReadingJourneyCard(
             state = state,
             onOpenHistory = onOpenHistory,
@@ -90,11 +99,15 @@ internal fun BookReadingTab(
 @Composable
 private fun BookReadingOverviewCard(
     book: Book,
-    state: BookDetailsUiState,
-    serverMeta: ServerBookMeta?
+    state: BookDetailsUiState
 ) {
+    val dailyTotalMs = state.dailyTotals.sumOf { it.totalDuration }
+    val contributedMs = state.sessions.sumOf { it.contributedDuration }
+    val coverageComplete = dailyTotalMs - contributedMs <= 1_000L
+    val effectiveSessions = state.sessions.filter { it.isEffective }
     val sessionCount = when {
-        state.sessions.isNotEmpty() -> state.sessions.size
+        !coverageComplete && dailyTotalMs > 0L -> null
+        state.sessions.isNotEmpty() -> effectiveSessions.size
         state.dailyTotals.any { it.totalDuration > 0L } -> null
         else -> 0
     }
@@ -164,6 +177,14 @@ private fun BookReadingOverviewCard(
                     modifier = Modifier.weight(1f)
                 )
             }
+            if (!coverageComplete && dailyTotalMs > 0L) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.book_reading_legacy_hint),
+                    fontSize = AppType.Caption,
+                    color = AppColors.TextSecondary
+                )
+            }
         }
         Box(Modifier.fillMaxWidth().height(0.5.dp).background(AppColors.Divider))
         DetailRow(
@@ -177,9 +198,6 @@ private fun BookReadingOverviewCard(
                 lastDateValue,
                 false
             )
-        }
-        if (serverMeta != null) {
-            ReadingRecordBlock(serverMeta)
         }
     }
 }
@@ -211,7 +229,7 @@ private fun BookReadingJourneyCard(
     onOpenHistory: () -> Unit,
     onOpenSession: (ReadingSessionItem) -> Unit
 ) {
-    val sessions = state.sessions.take(3)
+    val sessions = state.sessions.filter { it.isEffective }.take(3)
     val daily = state.dailyTotals.filter { it.totalDuration > 0L }.take(3)
     InformationCard(contentPadding = PaddingValues(0.dp), verticalArrangement = Arrangement.Top) {
         Row(
@@ -227,7 +245,7 @@ private fun BookReadingJourneyCard(
                 color = AppColors.TextPrimary,
                 modifier = Modifier.weight(1f).semantics { heading() }
             )
-            if (sessions.isNotEmpty()) {
+            if (state.sessions.isNotEmpty()) {
                 ViewAllRow(onClick = onOpenHistory)
             }
         }
@@ -401,7 +419,7 @@ private fun ViewAllRow(onClick: () -> Unit) {
 
 @Composable
 private fun BookReadingProgressCard(sessions: List<ReadingSessionItem>) {
-    val points = remember(sessions) { buildProgressPoints(sessions) }
+    val points = remember(sessions) { buildProgressPoints(sessions.filter { it.isEffective }) }
     if (points.size < 2) return
 
     InformationCard(contentPadding = PaddingValues(AppSpace.md), verticalArrangement = Arrangement.Top) {
@@ -641,6 +659,9 @@ private fun AnnotationPreviewRow(note: Note, onClick: () -> Unit) {
         }
     }
 }
+
+private fun ServerBookMeta.hasReadingRecord(): Boolean =
+    readLogs.isNotEmpty() || startDate != null || finishDate != null || readCount > 0
 
 private fun dateText(timestamp: Long): String =
     if (timestamp <= 0L) "—"

@@ -1,5 +1,6 @@
 package com.huangder.lumibooks.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -9,7 +10,8 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["bookId", "startTime"]),
         Index(value = ["startTime"]),
-        Index(value = ["date"])
+        Index(value = ["date"]),
+        Index(value = ["sessionKey"])
     ]
 )
 data class ReadingSessionEntity(
@@ -30,5 +32,11 @@ data class ReadingSessionEntity(
     val sourceDeviceId: String = "",
     val note: String? = null,
     val mood: String? = null,
+    @ColumnInfo(defaultValue = "''")
+    val sessionKey: String = "",
+    @ColumnInfo(defaultValue = "0")
+    val contributedDuration: Long = 0,
+    @ColumnInfo(defaultValue = "'{}'")
+    val contributionsJson: String = "{}",
     val updatedAt: Long = endTime
 )

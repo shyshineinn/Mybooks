@@ -2321,8 +2321,14 @@ fun ReaderScreen(
             exitRequested = true
             viewModel.keepReadingPosition()
             viewModel.stopTts()
-            val summary = if (readingSummaryEnabled) viewModel.takeReadingSummary() else null
-            if (summary != null) pendingReadingSummary = summary else finishExit()
+            scope.launch {
+                val summary = viewModel.finishReadingSessionForExit()
+                if (readingSummaryEnabled && summary != null) {
+                    pendingReadingSummary = summary
+                } else {
+                    finishExit()
+                }
+            }
         }
     }
     ConfigurableBackHandler(
@@ -5492,9 +5498,17 @@ fun ReaderScreen(
         com.huangder.lumibooks.ui.reading.ReadingSessionSummarySheet(
             summary = summary,
             onDone = { note, mood ->
-                summary.sessionId?.let { id -> viewModel.saveReadingSummaryNote(id, note, mood) }
-                pendingReadingSummary = null
-                finishExit()
+                val sessionId = summary.sessionId
+                if (sessionId == null) {
+                    pendingReadingSummary = null
+                    finishExit()
+                } else {
+                    scope.launch {
+                        viewModel.saveReadingSummaryNote(sessionId, note, mood)
+                        pendingReadingSummary = null
+                        finishExit()
+                    }
+                }
             }
         )
     }

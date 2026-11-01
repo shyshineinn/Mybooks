@@ -312,11 +312,8 @@ class StatisticsViewModel @Inject constructor(
         }
     }
 
-    fun updateSessionNote(sessionId: Long, note: String?, mood: String?) {
-        viewModelScope.launch {
-            runCatching { readingRepository.updateReadingSessionNote(sessionId, note, mood) }
-        }
-    }
+    suspend fun saveSessionNote(sessionId: Long, note: String?, mood: String?): Boolean =
+        readingRepository.updateReadingSessionNote(sessionId, note, mood)
 
     fun clearError() {
         _uiState.update { it.copy(error = null) }
@@ -335,6 +332,6 @@ class StatisticsViewModel @Inject constructor(
     private companion object {
         const val READING_HISTORY_START_DATE = "1970-01-01"
         const val MOST_READ_LIMIT = 5
-        const val RECENT_SESSIONS_LIMIT = 12
+        const val RECENT_SESSIONS_LIMIT = 30
     }
 }

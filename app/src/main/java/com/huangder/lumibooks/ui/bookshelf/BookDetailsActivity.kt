@@ -287,11 +287,8 @@ class BookDetailsViewModel @Inject constructor(
         }
     }
 
-    fun updateSessionNote(sessionId: Long, note: String?, mood: String?) {
-        viewModelScope.launch {
-            runCatching { readingRepository.updateReadingSessionNote(sessionId, note, mood) }
-        }
-    }
+    suspend fun saveSessionNote(sessionId: Long, note: String?, mood: String?): Boolean =
+        readingRepository.updateReadingSessionNote(sessionId, note, mood)
 
     private companion object {
         const val READING_HISTORY_START = "1970-01-01"
@@ -621,10 +618,7 @@ fun BookDetailsScreen(
         ReadingSessionDetailSheet(
             item = item,
             onDismiss = { readingSessionDetail = null },
-            onSaveNote = { note, mood ->
-                detailsViewModel.updateSessionNote(item.id, note, mood)
-                readingSessionDetail = null
-            }
+            onSaveNote = { note, mood -> detailsViewModel.saveSessionNote(item.id, note, mood) }
         )
     }
 

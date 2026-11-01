@@ -1984,6 +1984,7 @@
     <string name="statistics_month_reading_label">This month</string>
     <string name="statistics_year_reading_label">This year</string>
     <string name="statistics_session_count">Sessions</string>
+    <string name="statistics_legacy_coverage_hint">Includes daily totals; session counts cover this device only</string>
     <string name="statistics_average_session">Avg. session</string>
     <string name="unit_hour">h</string>
     <string name="unit_minute">min</string>
@@ -2018,6 +2019,8 @@
     <string name="book_reading_session_count_value">%1$d sessions</string>
     <string name="book_reading_started">First read</string>
     <string name="book_reading_journey">Reading journey</string>
+    <string name="book_reading_server_status">Server reading status</string>
+    <string name="book_reading_legacy_hint">Includes daily totals; session counts are incomplete</string>
     <string name="book_reading_view_all">View all</string>
     <string name="book_reading_empty_journey">No reading journey yet</string>
     <string name="book_reading_daily_summary">Daily history</string>
@@ -2043,6 +2046,10 @@
     <string name="reading_history_period_month">This month</string>
     <string name="reading_history_period_year">This year</string>
     <string name="reading_history_reset">Reset</string>
+    <string name="reading_history_apply">Apply</string>
+    <string name="reading_history_search_books">Search books</string>
+    <string name="reading_history_load_more">Load more</string>
+    <string name="reading_duration_seconds">%1$d s</string>
     <string name="reading_history_empty">No reading records yet</string>
     <string name="reading_history_empty_hint">Each session is recorded automatically</string>
     <string name="reading_history_day_total">%1$s total</string>
@@ -2072,6 +2079,9 @@
     <string name="reading_session_note">Session note</string>
     <string name="reading_session_note_placeholder">What did you take from this session?</string>
     <string name="reading_session_add_note">Add a note</string>
+    <string name="reading_session_edit_thought">Edit note</string>
+    <string name="reading_session_no_note">No note yet</string>
+    <string name="reading_session_save_failed">Save failed. Try again.</string>
     <string name="reading_session_note_saved">Note saved</string>
     <string name="reading_session_mood">Mood</string>
     <string name="reading_session_close">Close</string>

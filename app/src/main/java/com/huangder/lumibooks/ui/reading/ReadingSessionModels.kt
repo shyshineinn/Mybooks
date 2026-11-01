@@ -11,11 +11,15 @@ data class ReadingSessionItem(
     val coverPath: String?
 ) {
     val id: Long get() = session.id
+    val sessionKey: String get() = session.sessionKey
     val bookId: String get() = session.bookId
     val date: String get() = session.date
     val startTime: Long get() = session.startTime
     val endTime: Long get() = session.endTime
     val duration: Long get() = session.duration
+    val dailyContributions: Map<String, Long> get() = session.dailyContributions
+    val contributedDuration: Long get() = session.contributedDuration
+    val isEffective: Boolean get() = session.isEffective
     val startProgress: Float get() = session.startProgress
     val endProgress: Float get() = session.endProgress
     val startChapterIndex: Int get() = session.startChapterIndex

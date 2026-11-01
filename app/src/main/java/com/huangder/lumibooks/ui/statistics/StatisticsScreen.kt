@@ -144,7 +144,6 @@ fun StatisticsScreen(
         !chartAnimationsPlayed[selectedPeriod]
     }
     var detailSession by remember { mutableStateOf<ReadingSessionItem?>(null) }
-    val noteSavedMessage = stringResource(R.string.reading_session_note_saved)
 
     LaunchedEffect(selectedPeriod) {
         chartAnimationsPlayed[selectedPeriod] = true
@@ -311,11 +310,7 @@ fun StatisticsScreen(
         ReadingSessionDetailSheet(
             item = item,
             onDismiss = { detailSession = null },
-            onSaveNote = { note, mood ->
-                viewModel.updateSessionNote(item.id, note, mood)
-                detailSession = null
-                onMessage(noteSavedMessage)
-            }
+            onSaveNote = { note, mood -> viewModel.saveSessionNote(item.id, note, mood) }
         )
     }
 }
@@ -416,17 +411,33 @@ internal fun ReadingSummary(uiState: StatisticsUiState, selectedPeriod: Int) {
         else -> uiState.yearlyLoading
     }
     val sessions = uiState.periodSessions
-    val sessionMinutes = sessions.sumOf { it.duration } / 1000L / 60L
-    // Legacy days only have daily totals; never present a partial session count as complete.
-    val sessionsCoverPeriod = sessions.isNotEmpty() && sessionMinutes + 1L >= totalMinutes
+    val dailyTotalMs = durations.sum()
+    val weekDates = uiState.weeklyData.map { it.date }.toSet()
+    val monthPrefix = String.format(Locale.US, "%04d-%02d-", uiState.displayYear, uiState.displayMonth + 1)
+    val yearPrefix = "${uiState.displayYear}-"
+    val periodContributedMs = sessions.sumOf { session ->
+        session.dailyContributions.entries.sumOf { (date, contributionMs) ->
+            val inPeriod = when (selectedPeriod) {
+                0 -> date in weekDates
+                1 -> date.startsWith(monthPrefix)
+                else -> date.startsWith(yearPrefix)
+            }
+            if (inPeriod) contributionMs else 0L
+        }
+    }
+    // Legacy aggregates and other devices are real time, but they have no local sessions.
+    val hasUndocumentedTime = dailyTotalMs - periodContributedMs > 1_000L
+    val coverageComplete = !uiState.sessionsLoading && !loading && !hasUndocumentedTime
+    val effectiveSessions = sessions.filter { it.isEffective }
     val sessionCount = when {
         uiState.sessionsLoading -> null
-        sessionsCoverPeriod -> sessions.size
+        coverageComplete -> effectiveSessions.size
         totalMinutes > 0 -> null
         else -> 0
     }
-    val averageMinutes = sessions.takeIf { sessionsCoverPeriod && !uiState.sessionsLoading }
-        ?.let { sessionMinutes / it.size }
+    val averageMinutes = effectiveSessions
+        .takeIf { coverageComplete && it.isNotEmpty() }
+        ?.let { it.sumOf { session -> session.duration } / 1000L / 60L / it.size }
     val label = when (selectedPeriod) {
         0 -> stringResource(R.string.statistics_week_reading_label)
         1 -> stringResource(R.string.statistics_month_reading_label)
@@ -459,6 +470,14 @@ internal fun ReadingSummary(uiState: StatisticsUiState, selectedPeriod: Int) {
                 value = averageMinutes?.let { minutes -> formatReadingDurationCompact(minutes * 60_000L) } ?: "—",
                 label = stringResource(R.string.statistics_average_session),
                 modifier = Modifier.weight(1f)
+            )
+        }
+        if (hasUndocumentedTime && !uiState.sessionsLoading && !loading) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = stringResource(R.string.statistics_legacy_coverage_hint),
+                fontSize = AppType.Caption,
+                color = AppColors.TextSecondary
             )
         }
     }
@@ -619,7 +638,7 @@ internal fun WeeklyOverview(
 
     val todayIndex = if (isCurrentWeek) Calendar.getInstance().get(Calendar.DAY_OF_WEEK) - 1 else -1
     val weeklyMinutes = MutableList(7) { 0f }
-    weekData.forEachIndexed { index, daily ->
+    weekData.take(7).forEachIndexed { index, daily ->
         weeklyMinutes[index] = (daily.duration / 1000f / 60f)
     }
     if (isCurrentWeek) {
@@ -744,7 +763,7 @@ internal fun WeeklyOverview(
 
 private fun sessionCountForDay(uiState: StatisticsUiState, date: String): Int? {
     if (uiState.periodSessions.isEmpty()) return null
-    return uiState.periodSessions.count { it.date == date }
+    return uiState.periodSessions.count { it.date == date && it.isEffective }
 }
 
 @Composable
@@ -839,7 +858,7 @@ internal fun MonthlyHeatmap(
     onOpenDay: (String) -> Unit
 ) {
     val year = uiState.displayYear
-    val month = uiState.displayMonth
+    val month = uiState.displayMonth.coerceIn(0, 11)
     val now = Calendar.getInstance()
     val isCurrentMonth = (year == now.get(Calendar.YEAR) && month == now.get(Calendar.MONTH))
     val today = if (isCurrentMonth) now.get(Calendar.DAY_OF_MONTH) else -1
@@ -1163,7 +1182,7 @@ internal fun YearlyHeatmap(
                             isAntiAlias = true
                         }
                         drawContext.canvas.nativeCanvas.drawText(
-                            monthLabels[month],
+                            monthLabels[month.coerceIn(0, 11)],
                             week * cellStepPx,
                             labelHeight.toPx() - 3.dp.toPx(),
                             paint
@@ -1272,6 +1291,7 @@ private fun RecentReadingSection(
     onOpenAll: () -> Unit,
     onOpenSession: (ReadingSessionItem) -> Unit
 ) {
+    val effectiveSessions = sessions.filter { it.isEffective }
     InformationCard(
         modifier = Modifier.padding(horizontal = AppSpace.lg),
         contentPadding = PaddingValues(0.dp),
@@ -1294,7 +1314,7 @@ private fun RecentReadingSection(
         }
 
         when {
-            loading && sessions.isEmpty() -> {
+            loading && effectiveSessions.isEmpty() -> {
                 Text(
                     text = stringResource(R.string.statistics_loading),
                     fontSize = AppType.BodySmall,
@@ -1302,7 +1322,7 @@ private fun RecentReadingSection(
                     modifier = Modifier.padding(horizontal = AppSpace.md, vertical = AppSpace.md)
                 )
             }
-            sessions.isEmpty() -> {
+            effectiveSessions.isEmpty() -> {
                 Text(
                     text = stringResource(R.string.recent_reading_empty),
                     fontSize = AppType.BodySmall,
@@ -1311,7 +1331,7 @@ private fun RecentReadingSection(
                 )
             }
             else -> {
-                sessions.take(3).forEachIndexed { index, item ->
+                effectiveSessions.take(3).forEachIndexed { index, item ->
                     if (index > 0) {
                         Box(
                             Modifier

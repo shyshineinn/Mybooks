@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,17 +17,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -43,6 +47,7 @@ import com.huangder.lumibooks.ui.theme.AppColors
 import com.huangder.lumibooks.ui.theme.AppRoundedCornerShape
 import com.huangder.lumibooks.ui.theme.AppSpace
 import com.huangder.lumibooks.ui.theme.AppType
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.ZoneId
@@ -68,6 +73,7 @@ private val moodOptions = listOf(
 @Composable
 fun formatReadingDuration(durationMillis: Long): String {
     val totalMinutes = (durationMillis / 60_000L).toInt()
+    val totalSeconds = (durationMillis / 1_000L).toInt()
     return when {
         totalMinutes >= 60 -> stringResource(
             R.string.reading_duration_hours_minutes,
@@ -75,6 +81,7 @@ fun formatReadingDuration(durationMillis: Long): String {
             totalMinutes % 60
         )
         totalMinutes > 0 -> stringResource(R.string.reading_duration_minutes, totalMinutes)
+        totalSeconds > 0 -> stringResource(R.string.reading_duration_seconds, totalSeconds)
         durationMillis > 0 -> stringResource(R.string.reading_duration_less_than_minute)
         else -> stringResource(R.string.reading_duration_minutes, 0)
     }
@@ -86,12 +93,14 @@ fun formatReadingDurationCompact(durationMillis: Long): String {
     val totalMinutes = (durationMillis / 60_000L).toInt()
     val hourUnit = stringResource(R.string.unit_hour)
     val minuteUnit = stringResource(R.string.unit_minute)
+    val totalSeconds = (durationMillis / 1_000L).toInt()
     return when {
         totalMinutes >= 60 -> {
             val hours = totalMinutes / 60
             "$hours$hourUnit${totalMinutes % 60}$minuteUnit"
         }
         totalMinutes > 0 -> "$totalMinutes$minuteUnit"
+        totalSeconds > 0 -> stringResource(R.string.reading_duration_seconds, totalSeconds)
         durationMillis > 0 -> stringResource(R.string.reading_duration_less_than_minute)
         else -> "0$minuteUnit"
     }
@@ -179,20 +188,18 @@ fun progressRangeLabel(item: ReadingSessionItem): String {
     }
 }
 
-/** One session's read-only detail, with an optional note editor. */
+/** One session's detail. Reading is the default; edits are an explicit mode. */
 @Composable
 fun ReadingSessionDetailSheet(
     item: ReadingSessionItem,
     onDismiss: () -> Unit,
-    onSaveNote: (note: String?, mood: String?) -> Unit
+    onSaveNote: suspend (note: String?, mood: String?) -> Boolean
 ) {
     LiquidGlassBottomSheetScaffold(
         onDismiss = onDismiss,
         maxHeightFraction = 0.8f,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            horizontal = AppSpace.lg,
-            vertical = AppSpace.md
-        )
+        contentSurfaceColor = AppColors.CardBg,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
     ) { requestDismiss ->
         ReadingSessionDetailContent(
             item = item,
@@ -206,34 +213,47 @@ fun ReadingSessionDetailSheet(
 internal fun ReadingSessionDetailContent(
     item: ReadingSessionItem,
     onClose: () -> Unit,
-    onSaveNote: (note: String?, mood: String?) -> Unit
+    onSaveNote: suspend (note: String?, mood: String?) -> Boolean
 ) {
-    var editing by rememberSaveable(item.id) { mutableStateOf(item.note.isNullOrBlank()) }
-    var noteText by rememberSaveable(item.id) { mutableStateOf(item.note.orEmpty()) }
-    var mood by rememberSaveable(item.id) { mutableStateOf(item.mood.orEmpty()) }
+    var editing by rememberSaveable(item.id) { mutableStateOf(false) }
+    var committedNote by rememberSaveable(item.id) { mutableStateOf(item.note.orEmpty()) }
+    var committedMood by rememberSaveable(item.id) { mutableStateOf(item.mood.orEmpty()) }
+    var draftNote by rememberSaveable(item.id) { mutableStateOf(item.note.orEmpty()) }
+    var draftMood by rememberSaveable(item.id) { mutableStateOf(item.mood.orEmpty()) }
+    var saving by remember { mutableStateOf(false) }
+    var saveFailed by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-    ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.reading_session_sheet_title),
-                    fontSize = AppType.Section,
-                    fontWeight = FontWeight.SemiBold,
-                    color = AppColors.TextPrimary,
-                    modifier = Modifier.weight(1f)
-                )
-                LiquidGlassIconButton(
-                    imageVector = AppIcons.X,
-                    contentDescription = stringResource(R.string.reading_session_close),
-                    onClick = onClose,
-                    size = 44.dp,
-                    iconSize = 18.dp
-                )
-            }
-            Spacer(Modifier.height(AppSpace.sm))
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = AppSpace.lg, end = AppSpace.md, top = AppSpace.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                stringResource(R.string.reading_session_sheet_title),
+                fontSize = AppType.Section,
+                fontWeight = FontWeight.SemiBold,
+                color = AppColors.TextPrimary,
+                modifier = Modifier.weight(1f)
+            )
+            LiquidGlassIconButton(
+                imageVector = AppIcons.X,
+                contentDescription = stringResource(R.string.reading_session_close),
+                onClick = onClose,
+                size = 44.dp,
+                iconSize = 18.dp
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = AppSpace.lg)
+        ) {
             Text(
                 text = formatReadingDuration(item.duration),
                 fontSize = 32.sp,
@@ -264,7 +284,14 @@ internal fun ReadingSessionDetailContent(
                 color = AppColors.TextPrimary
             )
             Spacer(Modifier.height(AppSpace.sm))
-            MoodSelector(selected = mood, onSelected = { mood = it })
+            MoodSelector(
+                selected = if (editing) draftMood else committedMood,
+                enabled = editing,
+                onSelected = {
+                    draftMood = it
+                    saveFailed = false
+                }
+            )
 
             Spacer(Modifier.height(AppSpace.md))
             Text(
@@ -276,66 +303,101 @@ internal fun ReadingSessionDetailContent(
             Spacer(Modifier.height(AppSpace.sm))
             if (editing) {
                 SessionNoteField(
-                    value = noteText,
-                    onValueChange = { noteText = it },
+                    value = draftNote,
+                    onValueChange = {
+                        draftNote = it
+                        saveFailed = false
+                    },
                     placeholder = stringResource(R.string.reading_session_note_placeholder)
                 )
-                Spacer(Modifier.height(AppSpace.sm))
-                Row(horizontalArrangement = Arrangement.spacedBy(AppSpace.sm)) {
-                    LiquidGlassTextButton(
-                        text = stringResource(R.string.save),
-                        onClick = {
-                            onSaveNote(noteText.trim().ifBlank { null }, mood.ifBlank { null })
-                            editing = false
-                        },
-                        tintedColor = AppColors.Accent,
-                        contentColor = AppColors.OnAccent
-                    )
-                    LiquidGlassTextButton(
-                        text = stringResource(R.string.cancel),
-                        onClick = {
-                            noteText = item.note.orEmpty()
-                            mood = item.mood.orEmpty()
-                            editing = false
-                        }
-                    )
-                }
+            } else if (committedNote.isBlank()) {
+                Text(
+                    text = stringResource(R.string.reading_session_no_note),
+                    fontSize = AppType.BodySmall,
+                    color = AppColors.TextSecondary
+                )
             } else {
-                if (item.note.isNullOrBlank()) {
-                    Text(
-                        text = stringResource(R.string.reading_session_add_note),
-                        fontSize = AppType.BodySmall,
-                        color = AppColors.Accent,
-                        modifier = Modifier
-                            .clip(AppRoundedCornerShape(12.dp))
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) { editing = true }
-                            .padding(vertical = 10.dp)
-                    )
-                } else {
-                    Text(
-                        text = noteText,
-                        fontSize = AppType.BodySmall,
-                        lineHeight = 22.sp,
-                        color = AppColors.TextPrimary
-                    )
-                    Spacer(Modifier.height(AppSpace.xs))
-                    Text(
-                        text = stringResource(R.string.reading_session_add_note),
-                        fontSize = AppType.Caption,
-                        color = AppColors.Accent,
-                        modifier = Modifier
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) { editing = true }
-                            .padding(vertical = 8.dp)
-                    )
-                }
+                Text(
+                    text = committedNote,
+                    fontSize = AppType.BodySmall,
+                    lineHeight = 22.sp,
+                    color = AppColors.TextPrimary
+                )
             }
-            Spacer(Modifier.height(AppSpace.sm))
+            Spacer(Modifier.height(AppSpace.md))
+        }
+
+        Box(Modifier.fillMaxWidth().height(0.5.dp).background(AppColors.Divider))
+        if (editing && saveFailed) {
+            Text(
+                text = stringResource(R.string.reading_session_save_failed),
+                fontSize = AppType.Caption,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(
+                    start = AppSpace.lg,
+                    end = AppSpace.lg,
+                    top = AppSpace.sm
+                )
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = AppSpace.lg, vertical = AppSpace.md),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AppSpace.sm)
+        ) {
+            if (editing) {
+                LiquidGlassTextButton(
+                    text = stringResource(R.string.cancel),
+                    onClick = {
+                        draftNote = committedNote
+                        draftMood = committedMood
+                        saveFailed = false
+                        editing = false
+                    },
+                    enabled = !saving,
+                    modifier = Modifier.weight(1f)
+                )
+                LiquidGlassTextButton(
+                    text = stringResource(R.string.save),
+                    onClick = {
+                        if (saving) return@LiquidGlassTextButton
+                        val note = draftNote.trim().ifBlank { null }
+                        val mood = draftMood.ifBlank { null }
+                        scope.launch {
+                            saving = true
+                            saveFailed = false
+                            val ok = runCatching { onSaveNote(note, mood) }.getOrDefault(false)
+                            saving = false
+                            if (ok) {
+                                committedNote = note.orEmpty()
+                                committedMood = mood.orEmpty()
+                                editing = false
+                            } else {
+                                saveFailed = true
+                            }
+                        }
+                    },
+                    enabled = !saving,
+                    modifier = Modifier.weight(1f),
+                    tintedColor = AppColors.Accent,
+                    contentColor = AppColors.OnAccent
+                )
+            } else {
+                LiquidGlassTextButton(
+                    text = stringResource(R.string.reading_session_edit_thought),
+                    onClick = {
+                        draftNote = committedNote
+                        draftMood = committedMood
+                        saveFailed = false
+                        editing = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    contentColor = AppColors.Accent
+                )
+            }
+        }
     }
 }
 
@@ -364,7 +426,11 @@ private fun SessionInfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun MoodSelector(selected: String, onSelected: (String) -> Unit) {
+private fun MoodSelector(
+    selected: String,
+    enabled: Boolean = true,
+    onSelected: (String) -> Unit
+) {
     androidx.compose.foundation.layout.FlowRow(
         horizontalArrangement = Arrangement.spacedBy(AppSpace.sm),
         verticalArrangement = Arrangement.spacedBy(AppSpace.sm)
@@ -375,11 +441,16 @@ private fun MoodSelector(selected: String, onSelected: (String) -> Unit) {
                 text = stringResource(option.label),
                 fontSize = AppType.BodySmall,
                 fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
-                color = if (active) AppColors.TextPrimary else AppColors.TextSecondary,
+                color = when {
+                    !enabled && !active -> AppColors.TextSecondary.copy(alpha = 0.6f)
+                    active -> AppColors.TextPrimary
+                    else -> AppColors.TextSecondary
+                },
                 modifier = Modifier
                     .clip(AppRoundedCornerShape(20.dp))
                     .background(if (active) AppColors.BgGray else AppColors.PageBg)
                     .clickable(
+                        enabled = enabled,
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() }
                     ) { onSelected(if (active) "" else option.key) }
@@ -413,7 +484,7 @@ private fun SessionNoteField(
         BasicTextField(
             value = value,
             onValueChange = { onValueChange(it.take(500)) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().testTag("reading_session_note_field"),
             textStyle = TextStyle(
                 color = AppColors.TextPrimary,
                 fontSize = AppType.BodySmall,
@@ -433,10 +504,8 @@ fun ReadingSessionSummarySheet(
     LiquidGlassBottomSheetScaffold(
         onDismiss = { onDone(null, null) },
         maxHeightFraction = 0.7f,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            horizontal = AppSpace.lg,
-            vertical = AppSpace.md
-        )
+        contentSurfaceColor = AppColors.CardBg,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
     ) { _ ->
         ReadingSessionSummaryContent(
             summary = summary,
@@ -455,47 +524,54 @@ internal fun ReadingSessionSummaryContent(
     var noteText by rememberSaveable { mutableStateOf("") }
     var mood by rememberSaveable { mutableStateOf("") }
 
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = AppSpace.lg, end = AppSpace.md, top = AppSpace.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                stringResource(R.string.reading_summary_title),
+                fontSize = AppType.Section,
+                fontWeight = FontWeight.SemiBold,
+                color = AppColors.TextPrimary,
+                modifier = Modifier.weight(1f)
+            )
+            LiquidGlassIconButton(
+                imageVector = AppIcons.X,
+                contentDescription = stringResource(R.string.reading_session_close),
+                onClick = onClose,
+                size = 44.dp,
+                iconSize = 18.dp
+            )
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = AppSpace.lg)) {
+            SummaryMetric(
+                value = formatReadingDuration(summary.durationMillis),
+                label = stringResource(R.string.reading_session_duration),
+                modifier = Modifier.weight(1f)
+            )
+            SummaryMetric(
+                value = summary.progressDeltaPercent?.let { delta ->
+                    if (delta > 0) "+$delta%" else "$delta%"
+                } ?: "—",
+                label = stringResource(R.string.reading_summary_progress),
+                modifier = Modifier.weight(1f)
+            )
+            SummaryMetric(
+                value = stringResource(R.string.reading_summary_count, summary.annotationCount),
+                label = stringResource(R.string.reading_summary_annotations),
+                modifier = Modifier.weight(1f)
+            )
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f, fill = false)
                 .verticalScroll(rememberScrollState())
+                .padding(horizontal = AppSpace.lg)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.reading_summary_title),
-                    fontSize = AppType.Section,
-                    fontWeight = FontWeight.SemiBold,
-                    color = AppColors.TextPrimary,
-                    modifier = Modifier.weight(1f)
-                )
-                LiquidGlassIconButton(
-                    imageVector = AppIcons.X,
-                    contentDescription = stringResource(R.string.reading_session_close),
-                    onClick = onClose,
-                    size = 44.dp,
-                    iconSize = 18.dp
-                )
-            }
-            Spacer(Modifier.height(AppSpace.md))
-            Row(Modifier.fillMaxWidth()) {
-                SummaryMetric(
-                    value = formatReadingDuration(summary.durationMillis),
-                    label = stringResource(R.string.reading_session_duration),
-                    modifier = Modifier.weight(1f)
-                )
-                SummaryMetric(
-                    value = summary.progressDeltaPercent?.let { delta ->
-                        if (delta > 0) "+$delta%" else "$delta%"
-                    } ?: "—",
-                    label = stringResource(R.string.reading_summary_progress),
-                    modifier = Modifier.weight(1f)
-                )
-                SummaryMetric(
-                    value = stringResource(R.string.reading_summary_count, summary.annotationCount),
-                    label = stringResource(R.string.reading_summary_annotations),
-                    modifier = Modifier.weight(1f)
-                )
-            }
             Spacer(Modifier.height(AppSpace.md))
             Text(
                 stringResource(R.string.reading_session_mood),
@@ -512,15 +588,18 @@ internal fun ReadingSessionSummaryContent(
                 placeholder = stringResource(R.string.reading_session_note_placeholder)
             )
             Spacer(Modifier.height(AppSpace.md))
-            LiquidGlassTextButton(
-                text = stringResource(R.string.reading_summary_done),
-                onClick = { onDone(noteText.trim().ifBlank { null }, mood.ifBlank { null }) },
-                modifier = Modifier.fillMaxWidth(),
-                tintedColor = AppColors.Accent,
-                contentColor = AppColors.OnAccent
-            )
-            Spacer(Modifier.height(AppSpace.sm))
         }
+        Box(Modifier.fillMaxWidth().height(0.5.dp).background(AppColors.Divider))
+        LiquidGlassTextButton(
+            text = stringResource(R.string.reading_summary_done),
+            onClick = { onDone(noteText.trim().ifBlank { null }, mood.ifBlank { null }) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = AppSpace.lg, vertical = AppSpace.md),
+            tintedColor = AppColors.Accent,
+            contentColor = AppColors.OnAccent
+        )
+    }
 }
 
 @Composable

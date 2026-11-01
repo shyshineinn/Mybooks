@@ -26,8 +26,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -44,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -51,6 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -84,6 +88,7 @@ fun ReadingHistoryScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     var filterOpen by rememberSaveable { mutableStateOf(false) }
+    var filterDraft by remember { mutableStateOf(ReadingHistoryFilter()) }
     var datePickerOpen by rememberSaveable { mutableStateOf(false) }
     var detailSession by remember { mutableStateOf<ReadingSessionItem?>(null) }
     var actionSession by remember { mutableStateOf<ReadingSessionItem?>(null) }
@@ -97,13 +102,8 @@ fun ReadingHistoryScreen(
     val bookLabel = filter.bookId
         ?.let { id -> uiState.books.firstOrNull { it.id == id }?.title }
         ?: stringResource(R.string.reading_history_all_books)
-    val periodLabel = when {
-        filter.date != null -> sessionDayLabel(filter.date)
-        filter.period == ReadingHistoryPeriod.WEEK -> stringResource(R.string.reading_history_period_week)
-        filter.period == ReadingHistoryPeriod.MONTH -> stringResource(R.string.reading_history_period_month)
-        filter.period == ReadingHistoryPeriod.YEAR -> stringResource(R.string.reading_history_period_year)
-        else -> stringResource(R.string.reading_history_this_month)
-    }
+    val periodLabel = filter.date?.let { sessionDayLabel(it) }
+        ?: stringResource(filter.period.labelRes)
     val modeLabel = when (filter.mode) {
         ReadingHistoryModeFilter.PAGED -> stringResource(R.string.reading_mode_paged)
         ReadingHistoryModeFilter.SCROLL -> stringResource(R.string.reading_mode_scroll)
@@ -117,23 +117,31 @@ fun ReadingHistoryScreen(
             selectedBookLabel = bookLabel,
             selectedModeLabel = modeLabel,
             onBack = onBack,
-            onFilter = { filterOpen = true },
+            onFilter = {
+                filterDraft = uiState.filter
+                filterOpen = true
+            },
             onCalendar = { datePickerOpen = true },
             onOpenDay = viewModel::setDate,
             onOpenSession = { detailSession = it },
             onOpenBook = { BookDetailsActivity.start(context, it) },
-            onLongPressSession = { actionSession = it }
+            onLongPressSession = { actionSession = it },
+            hasMore = uiState.hasMore,
+            onLoadMore = viewModel::loadMore
         )
     }
 
     if (filterOpen) {
         ReadingHistoryFilterSheet(
-            state = uiState,
+            books = uiState.books,
+            draft = filterDraft,
+            onDraftChange = { filterDraft = it },
             onDismiss = { filterOpen = false },
-            onBook = viewModel::setBook,
-            onPeriod = viewModel::setPeriod,
-            onMode = viewModel::setMode,
-            onReset = viewModel::reset
+            onApply = {
+                viewModel.applyFilter(filterDraft)
+                filterOpen = false
+            },
+            onReset = { filterDraft = ReadingHistoryFilter() }
         )
     }
 
@@ -154,15 +162,33 @@ fun ReadingHistoryScreen(
                         }
                         datePickerOpen = false
                     }
-                ) { Text(stringResource(R.string.confirm)) }
+                ) { Text(stringResource(R.string.confirm), color = AppColors.Accent) }
             },
             dismissButton = {
                 TextButton(onClick = { datePickerOpen = false }) {
-                    Text(stringResource(R.string.cancel))
+                    Text(stringResource(R.string.cancel), color = AppColors.TextPrimary)
                 }
             }
         ) {
-            DatePicker(state = pickerState)
+            DatePicker(
+                state = pickerState,
+                colors = DatePickerDefaults.colors().copy(
+                    containerColor = AppColors.CardBg,
+                    titleContentColor = AppColors.TextPrimary,
+                    headlineContentColor = AppColors.TextPrimary,
+                    weekdayContentColor = AppColors.TextSecondary,
+                    subheadContentColor = AppColors.TextSecondary,
+                    navigationContentColor = AppColors.TextPrimary,
+                    yearContentColor = AppColors.TextPrimary,
+                    selectedYearContentColor = AppColors.OnAccent,
+                    selectedYearContainerColor = AppColors.Accent,
+                    dayContentColor = AppColors.TextPrimary,
+                    selectedDayContentColor = AppColors.OnAccent,
+                    selectedDayContainerColor = AppColors.Accent,
+                    todayDateBorderColor = AppColors.Accent,
+                    dividerColor = AppColors.Divider
+                )
+            )
         }
     }
 
@@ -170,10 +196,7 @@ fun ReadingHistoryScreen(
         ReadingSessionDetailSheet(
             item = item,
             onDismiss = { detailSession = null },
-            onSaveNote = { note, mood ->
-                viewModel.updateNote(item.id, note, mood)
-                detailSession = null
-            }
+            onSaveNote = { note, mood -> viewModel.saveNote(item.id, note, mood) }
         )
     }
 
@@ -312,25 +335,33 @@ internal fun ReadingHistoryRow(
 }
 
 @Composable
-private fun ReadingHistoryFilterSheet(
-    state: ReadingHistoryUiState,
+internal fun ReadingHistoryFilterSheet(
+    books: List<ReadingHistoryBookOption>,
+    draft: ReadingHistoryFilter,
+    onDraftChange: (ReadingHistoryFilter) -> Unit,
     onDismiss: () -> Unit,
-    onBook: (String?) -> Unit,
-    onPeriod: (ReadingHistoryPeriod) -> Unit,
-    onMode: (ReadingHistoryModeFilter) -> Unit,
+    onApply: () -> Unit,
     onReset: () -> Unit
 ) {
+    var bookQuery by rememberSaveable { mutableStateOf("") }
+    val visibleBooks = books.filter { it.title.contains(bookQuery, ignoreCase = true) }
+
     LiquidGlassBottomSheetScaffold(
         onDismiss = onDismiss,
-        maxHeightFraction = 0.8f,
-        contentPadding = PaddingValues(horizontal = AppSpace.lg, vertical = AppSpace.md)
+        maxHeightFraction = 0.82f,
+        contentSurfaceColor = AppColors.CardBg,
+        contentPadding = PaddingValues(0.dp)
     ) { requestDismiss ->
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(
+                    start = AppSpace.lg,
+                    end = AppSpace.md,
+                    top = AppSpace.md,
+                    bottom = AppSpace.sm
+                ),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
                     text = stringResource(R.string.reading_history_filter_title),
                     fontSize = AppType.Section,
@@ -346,50 +377,129 @@ private fun ReadingHistoryFilterSheet(
                     iconSize = 18.dp
                 )
             }
-            Spacer(Modifier.height(AppSpace.md))
-            FilterSectionTitle(stringResource(R.string.reading_history_filter_book))
-            FilterOptionRow(
-                label = stringResource(R.string.reading_history_all_books),
-                selected = state.filter.bookId == null,
-                onClick = { onBook(null) }
-            )
-            state.books.forEach { book ->
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = AppSpace.lg)
+            ) {
+                FilterSectionTitle(stringResource(R.string.reading_history_filter_book))
+                BasicTextField(
+                    value = bookQuery,
+                    onValueChange = { bookQuery = it },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        fontSize = AppType.BodySmall,
+                        color = AppColors.TextPrimary
+                    ),
+                    cursorBrush = SolidColor(AppColors.Accent),
+                    modifier = Modifier.fillMaxWidth(),
+                    decorationBox = { inner ->
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(AppRoundedCornerShape(12.dp))
+                                .background(AppColors.BgGray)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            if (bookQuery.isEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.reading_history_search_books),
+                                    fontSize = AppType.BodySmall,
+                                    color = AppColors.TextSecondary
+                                )
+                            }
+                            inner()
+                        }
+                    }
+                )
+                Spacer(Modifier.height(AppSpace.sm))
                 FilterOptionRow(
-                    label = book.title,
-                    selected = state.filter.bookId == book.id,
-                    onClick = { onBook(book.id) }
+                    label = stringResource(R.string.reading_history_all_books),
+                    selected = draft.bookId == null,
+                    onClick = { onDraftChange(draft.copy(bookId = null)) }
+                )
+                visibleBooks.forEach { book ->
+                    FilterOptionRow(
+                        label = book.title,
+                        selected = draft.bookId == book.id,
+                        onClick = { onDraftChange(draft.copy(bookId = book.id)) }
+                    )
+                }
+
+                Spacer(Modifier.height(AppSpace.md))
+                FilterSectionTitle(stringResource(R.string.reading_history_filter_period))
+                if (draft.date != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = sessionDayLabel(draft.date),
+                            fontSize = AppType.BodySmall,
+                            color = AppColors.TextPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = stringResource(R.string.reading_history_clear_date),
+                            fontSize = AppType.Caption,
+                            color = AppColors.Accent,
+                            modifier = Modifier
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() }
+                                ) {
+                                    onDraftChange(draft.copy(date = null, period = ReadingHistoryPeriod.ALL))
+                                }
+                                .padding(8.dp)
+                        )
+                    }
+                }
+                FilterChips(
+                    options = ReadingHistoryPeriod.entries
+                        .filter { it != ReadingHistoryPeriod.DAY }
+                        .map { stringResource(it.labelRes) to it },
+                    selected = draft.period,
+                    onSelected = { onDraftChange(draft.copy(period = it, date = null)) }
+                )
+
+                Spacer(Modifier.height(AppSpace.md))
+                FilterSectionTitle(stringResource(R.string.reading_history_filter_mode))
+                FilterChips(
+                    options = listOf(
+                        stringResource(R.string.reading_history_all_modes) to ReadingHistoryModeFilter.ALL,
+                        stringResource(R.string.reading_mode_paged) to ReadingHistoryModeFilter.PAGED,
+                        stringResource(R.string.reading_mode_scroll) to ReadingHistoryModeFilter.SCROLL
+                    ),
+                    selected = draft.mode,
+                    onSelected = { onDraftChange(draft.copy(mode = it)) }
+                )
+                Spacer(Modifier.height(AppSpace.md))
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(
+                    horizontal = AppSpace.lg,
+                    vertical = AppSpace.md
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(AppSpace.sm)
+            ) {
+                LiquidGlassTextButton(
+                    text = stringResource(R.string.reading_history_reset),
+                    onClick = onReset,
+                    modifier = Modifier.weight(1f)
+                )
+                LiquidGlassTextButton(
+                    text = stringResource(R.string.reading_history_apply),
+                    onClick = onApply,
+                    modifier = Modifier.weight(1f),
+                    tintedColor = AppColors.Accent,
+                    contentColor = AppColors.OnAccent
                 )
             }
-            Spacer(Modifier.height(AppSpace.md))
-            FilterSectionTitle(stringResource(R.string.reading_history_filter_period))
-            FilterChips(
-                options = listOf(
-                    stringResource(R.string.reading_history_period_all) to ReadingHistoryPeriod.ALL,
-                    stringResource(R.string.reading_history_period_week) to ReadingHistoryPeriod.WEEK,
-                    stringResource(R.string.reading_history_period_month) to ReadingHistoryPeriod.MONTH,
-                    stringResource(R.string.reading_history_period_year) to ReadingHistoryPeriod.YEAR
-                ),
-                selected = state.filter.period,
-                onSelected = onPeriod
-            )
-            Spacer(Modifier.height(AppSpace.md))
-            FilterSectionTitle(stringResource(R.string.reading_history_filter_mode))
-            FilterChips(
-                options = listOf(
-                    stringResource(R.string.reading_history_all_modes) to ReadingHistoryModeFilter.ALL,
-                    stringResource(R.string.reading_mode_paged) to ReadingHistoryModeFilter.PAGED,
-                    stringResource(R.string.reading_mode_scroll) to ReadingHistoryModeFilter.SCROLL
-                ),
-                selected = state.filter.mode,
-                onSelected = onMode
-            )
-            Spacer(Modifier.height(AppSpace.lg))
-            LiquidGlassTextButton(
-                text = stringResource(R.string.reading_history_reset),
-                onClick = onReset,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(AppSpace.sm))
         }
     }
 }
@@ -551,8 +661,14 @@ internal fun ReadingHistoryTimelineContent(
     onOpenDay: (String) -> Unit,
     onOpenSession: (ReadingSessionItem) -> Unit,
     onOpenBook: (String) -> Unit,
-    onLongPressSession: (ReadingSessionItem) -> Unit
+    onLongPressSession: (ReadingSessionItem) -> Unit,
+    hasMore: Boolean = false,
+    onLoadMore: () -> Unit = {}
 ) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(state.filter) {
+        if (listState.firstVisibleItemIndex > 0) listState.scrollToItem(0)
+    }
     Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -633,7 +749,7 @@ internal fun ReadingHistoryTimelineContent(
             return@Column
         }
         LazyColumn(
-            state = rememberLazyListState(),
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = AppSpace.lg,
@@ -673,7 +789,9 @@ internal fun ReadingHistoryTimelineContent(
                 }
                 items(
                     count = group.sessions.size,
-                    key = { index -> "${group.date}_${group.sessions[index].id}" }
+                    key = { index ->
+                        group.sessions[index].sessionKey.ifBlank { "id-${group.sessions[index].id}" }
+                    }
                 ) { index ->
                     val item = group.sessions[index]
                     if (index > 0) {
@@ -691,6 +809,22 @@ internal fun ReadingHistoryTimelineContent(
                         onOpenBook = { onOpenBook(item.bookId) },
                         onLongClick = { onLongPressSession(item) }
                     )
+                }
+            }
+            if (hasMore) {
+                item(key = "load_more") {
+                    Box(
+                        Modifier.fillMaxWidth().padding(vertical = AppSpace.md),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        TextButton(onClick = onLoadMore) {
+                            Text(
+                                text = stringResource(R.string.reading_history_load_more),
+                                fontSize = AppType.BodySmall,
+                                color = AppColors.Accent
+                            )
+                        }
+                    }
                 }
             }
         }
