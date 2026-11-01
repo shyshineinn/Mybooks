@@ -296,6 +296,43 @@ object DatabaseMigrations {
         }
     }
 
+    val MIGRATION_22_23 = object : Migration(22, 23) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `reading_sessions` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`bookId` TEXT NOT NULL, " +
+                    "`date` TEXT NOT NULL, " +
+                    "`startTime` INTEGER NOT NULL, " +
+                    "`endTime` INTEGER NOT NULL, " +
+                    "`duration` INTEGER NOT NULL, " +
+                    "`startChapterIndex` INTEGER NOT NULL, " +
+                    "`endChapterIndex` INTEGER NOT NULL, " +
+                    "`startChapterTitle` TEXT, " +
+                    "`endChapterTitle` TEXT, " +
+                    "`startProgress` REAL NOT NULL, " +
+                    "`endProgress` REAL NOT NULL, " +
+                    "`mode` TEXT NOT NULL, " +
+                    "`sourceDeviceId` TEXT NOT NULL, " +
+                    "`note` TEXT, " +
+                    "`mood` TEXT, " +
+                    "`updatedAt` INTEGER NOT NULL)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_reading_sessions_bookId_startTime` " +
+                    "ON `reading_sessions` (`bookId`, `startTime`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_reading_sessions_startTime` " +
+                    "ON `reading_sessions` (`startTime`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_reading_sessions_date` " +
+                    "ON `reading_sessions` (`date`)"
+            )
+        }
+    }
+
     val MIGRATION_19_20 = object : Migration(19, 20) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL(

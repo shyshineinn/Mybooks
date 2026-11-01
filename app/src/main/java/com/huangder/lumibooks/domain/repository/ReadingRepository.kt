@@ -6,6 +6,7 @@ import com.huangder.lumibooks.domain.model.Bookmark
 import com.huangder.lumibooks.domain.model.DailyTotal
 import com.huangder.lumibooks.domain.model.Note
 import com.huangder.lumibooks.domain.model.ReadingRecord
+import com.huangder.lumibooks.domain.model.ReadingSession
 import kotlinx.coroutines.flow.Flow
 
 interface ReadingRepository {
@@ -16,6 +17,15 @@ interface ReadingRepository {
     suspend fun insertRecord(record: ReadingRecord)
     suspend fun getRecordByBookAndDate(bookId: String, date: String): ReadingRecord?
     suspend fun updateRecordDuration(recordId: Long, additionalDuration: Long, endTime: Long)
+    /** Per-session detail is local-only; daily aggregates above remain the sync unit. */
+    fun observeReadingSessions(startMs: Long, endMs: Long): Flow<List<ReadingSession>>
+    fun observeAllReadingSessions(): Flow<List<ReadingSession>>
+    fun observeRecentReadingSessions(limit: Int = 20): Flow<List<ReadingSession>>
+    fun observeReadingSessionsByBook(bookId: String): Flow<List<ReadingSession>>
+    suspend fun getReadingSession(id: Long): ReadingSession?
+    suspend fun insertReadingSession(session: ReadingSession): Long
+    suspend fun updateReadingSessionNote(id: Long, note: String?, mood: String?)
+    suspend fun deleteReadingSession(id: Long)
     fun getBookmarksByBookId(bookId: String): Flow<List<Bookmark>>
     /** Every book's bookmarks, newest first. */
     fun observeAllBookmarks(): Flow<List<Bookmark>>

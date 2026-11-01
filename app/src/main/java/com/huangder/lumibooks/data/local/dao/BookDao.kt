@@ -115,6 +115,9 @@ interface BookDao {
     @Query("DELETE FROM reading_records WHERE bookId = :bookId")
     suspend fun deleteReadingRecordsByBookId(bookId: String)
 
+    @Query("DELETE FROM reading_sessions WHERE bookId = :bookId")
+    suspend fun deleteReadingSessionsByBookId(bookId: String)
+
     @Query("DELETE FROM book_tag_cross_refs WHERE bookId = :bookId")
     suspend fun deleteTagLinksByBookId(bookId: String)
 
@@ -126,6 +129,7 @@ interface BookDao {
         deleteBookmarksByBookId(bookId)
         deleteNotesByBookId(bookId)
         deleteReadingRecordsByBookId(bookId)
+        deleteReadingSessionsByBookId(bookId)
         deleteTagLinksByBookId(bookId)
         deleteBookById(bookId)
     }

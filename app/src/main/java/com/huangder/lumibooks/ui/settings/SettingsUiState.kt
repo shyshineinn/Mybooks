@@ -117,6 +117,7 @@ data class SettingsUiState(
 
     // 阅读目标
     val dailyGoal: Int = 30,               // 分钟
+    val readingSummaryEnabled: Boolean = true,
 
     // 存储
     val storageInfo: StorageInfo = StorageInfo(),

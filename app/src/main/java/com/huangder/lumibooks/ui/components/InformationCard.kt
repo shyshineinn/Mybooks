@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.huangder.lumibooks.ui.theme.AppColors
 import com.huangder.lumibooks.ui.theme.AppRadius
@@ -39,6 +40,7 @@ import com.huangder.lumibooks.ui.theme.LocalLiquidGlassCapability
 fun InformationCard(
     modifier: Modifier = Modifier,
     title: String? = null,
+    titleFontSize: TextUnit = AppType.Body,
     contentPadding: PaddingValues = PaddingValues(AppSpace.md),
     verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(AppSpace.sm),
     content: @Composable ColumnScope.() -> Unit
@@ -89,7 +91,7 @@ fun InformationCard(
                             text = title,
                             modifier = Modifier.padding(horizontal = AppSpace.md)
                                 .padding(top = AppSpace.md).semantics { heading() },
-                            fontSize = AppType.Body,
+                            fontSize = titleFontSize,
                             fontWeight = FontWeight.SemiBold,
                             color = AppColors.TextPrimary
                         )

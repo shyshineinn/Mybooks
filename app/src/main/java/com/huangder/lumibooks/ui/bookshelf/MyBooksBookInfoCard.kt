@@ -233,9 +233,9 @@ internal fun SummaryRow(summary: String, expanded: Boolean, onExpandedChange: (B
             summary,
             modifier = Modifier.padding(horizontal = AppSpace.md).padding(bottom = 14.dp),
             fontSize = AppType.BodySmall,
-            lineHeight = 20.sp,
+            lineHeight = 22.sp,
             color = AppColors.TextSecondary,
-            maxLines = if (expanded) Int.MAX_VALUE else 4,
+            maxLines = if (expanded) Int.MAX_VALUE else 5,
             overflow = TextOverflow.Ellipsis
         )
     }

@@ -4,17 +4,20 @@ import com.huangder.lumibooks.data.local.dao.BookDuration
 import com.huangder.lumibooks.data.local.dao.BookmarkDao
 import com.huangder.lumibooks.data.local.dao.NoteDao
 import com.huangder.lumibooks.data.local.dao.ReadingRecordDao
+import com.huangder.lumibooks.data.local.dao.ReadingSessionDao
 import com.huangder.lumibooks.data.local.database.AppDatabase
 import com.huangder.lumibooks.data.local.entity.BookmarkEntity
 import com.huangder.lumibooks.data.local.entity.AnnotationTagEntity
 import com.huangder.lumibooks.data.local.entity.NoteEntity
 import com.huangder.lumibooks.data.local.entity.ReadingRecordEntity
+import com.huangder.lumibooks.data.local.entity.ReadingSessionEntity
 import com.huangder.lumibooks.domain.model.AnnotationEditPlan
 import com.huangder.lumibooks.domain.model.AnnotationTags
 import com.huangder.lumibooks.domain.model.Bookmark
 import com.huangder.lumibooks.domain.model.DailyTotal
 import com.huangder.lumibooks.domain.model.Note
 import com.huangder.lumibooks.domain.model.ReadingRecord
+import com.huangder.lumibooks.domain.model.ReadingSession
 import com.huangder.lumibooks.domain.repository.ReadingRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -34,6 +37,8 @@ class ReadingRepositoryImpl @Inject constructor(
     private val syncIdentityStore: SyncIdentityStore,
     private val database: AppDatabase
 ) : ReadingRepository {
+
+    private val readingSessionDao: ReadingSessionDao get() = database.readingSessionDao()
 
     override fun getRecordsByDate(date: String): Flow<List<ReadingRecord>> {
         return readingRecordDao.getRecordsByDate(date).map { entities ->
@@ -70,6 +75,34 @@ class ReadingRepositoryImpl @Inject constructor(
 
     override suspend fun updateRecordDuration(recordId: Long, additionalDuration: Long, endTime: Long) {
         readingRecordDao.updateRecordDuration(recordId, additionalDuration, endTime)
+    }
+
+    override fun observeReadingSessions(startMs: Long, endMs: Long): Flow<List<ReadingSession>> =
+        readingSessionDao.getSessionsBetween(startMs, endMs).map { rows -> rows.map { it.toDomain() } }
+
+    override fun observeAllReadingSessions(): Flow<List<ReadingSession>> =
+        readingSessionDao.getAllSessions().map { rows -> rows.map { it.toDomain() } }
+
+    override fun observeRecentReadingSessions(limit: Int): Flow<List<ReadingSession>> =
+        readingSessionDao.getRecentSessions(limit).map { rows -> rows.map { it.toDomain() } }
+
+    override fun observeReadingSessionsByBook(bookId: String): Flow<List<ReadingSession>> =
+        readingSessionDao.getSessionsByBook(bookId).map { rows -> rows.map { it.toDomain() } }
+
+    override suspend fun getReadingSession(id: Long): ReadingSession? =
+        readingSessionDao.getSessionById(id)?.toDomain()
+
+    override suspend fun insertReadingSession(session: ReadingSession): Long =
+        readingSessionDao.insertSession(
+            session.copy(sourceDeviceId = session.sourceDeviceId.ifBlank { syncIdentityStore.deviceId() }).toEntity()
+        )
+
+    override suspend fun updateReadingSessionNote(id: Long, note: String?, mood: String?) {
+        readingSessionDao.updateSessionNote(id, note?.takeIf { it.isNotBlank() }, mood?.takeIf { it.isNotBlank() }, System.currentTimeMillis())
+    }
+
+    override suspend fun deleteReadingSession(id: Long) {
+        readingSessionDao.deleteSession(id)
     }
 
     override fun getBookmarksByBookId(bookId: String): Flow<List<Bookmark>> {
@@ -319,6 +352,46 @@ class ReadingRepositoryImpl @Inject constructor(
             updatedAt = updatedAt
         )
     }
+
+    private fun ReadingSessionEntity.toDomain(): ReadingSession = ReadingSession(
+        id = id,
+        bookId = bookId,
+        date = date,
+        startTime = startTime,
+        endTime = endTime,
+        duration = duration,
+        startChapterIndex = startChapterIndex,
+        endChapterIndex = endChapterIndex,
+        startChapterTitle = startChapterTitle,
+        endChapterTitle = endChapterTitle,
+        startProgress = startProgress,
+        endProgress = endProgress,
+        mode = mode,
+        sourceDeviceId = sourceDeviceId,
+        note = note,
+        mood = mood,
+        updatedAt = updatedAt
+    )
+
+    private fun ReadingSession.toEntity(): ReadingSessionEntity = ReadingSessionEntity(
+        id = id,
+        bookId = bookId,
+        date = date,
+        startTime = startTime,
+        endTime = endTime,
+        duration = duration,
+        startChapterIndex = startChapterIndex,
+        endChapterIndex = endChapterIndex,
+        startChapterTitle = startChapterTitle,
+        endChapterTitle = endChapterTitle,
+        startProgress = startProgress,
+        endProgress = endProgress,
+        mode = mode,
+        sourceDeviceId = sourceDeviceId,
+        note = note,
+        mood = mood,
+        updatedAt = updatedAt
+    )
 
     private fun ReadingRecord.toEntity(): ReadingRecordEntity {
         return ReadingRecordEntity(

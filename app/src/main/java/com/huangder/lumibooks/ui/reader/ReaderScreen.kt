@@ -1217,6 +1217,7 @@ fun ReaderScreen(
 ) {
     val backgroundPreparationEnabled = LocalReaderOpeningComplete.current
     val rawUiState by viewModel.uiState.collectAsState()
+    val readingSummaryEnabled by viewModel.readingSummaryEnabled.collectAsState()
     val nativeBookPages by viewModel.pageLayoutEngine.bookPages.collectAsState()
     val ttsState by viewModel.ttsState.collectAsState()
     val ttsCurrentPage by viewModel.ttsCurrentPage.collectAsState()
@@ -2307,14 +2308,21 @@ fun ReaderScreen(
         }
     }
     var exitRequested by remember(bookId) { mutableStateOf(false) }
+    var pendingReadingSummary by remember(bookId) {
+        mutableStateOf<com.huangder.lumibooks.ui.reading.ReadingSessionSummary?>(null)
+    }
     var epubReleaseHandler by remember(bookId) { mutableStateOf<((() -> Unit) -> Unit)?>(null) }
+    val finishExit: () -> Unit = {
+        val release = epubReleaseHandler.takeIf { isBookLayout }
+        if (release != null) release(onNavigateBack) else onNavigateBack()
+    }
     val exitReader: () -> Unit = {
         if (!exitRequested) {
             exitRequested = true
             viewModel.keepReadingPosition()
             viewModel.stopTts()
-            val release = epubReleaseHandler.takeIf { isBookLayout }
-            if (release != null) release(onNavigateBack) else onNavigateBack()
+            val summary = if (readingSummaryEnabled) viewModel.takeReadingSummary() else null
+            if (summary != null) pendingReadingSummary = summary else finishExit()
         }
     }
     ConfigurableBackHandler(
@@ -5478,6 +5486,17 @@ fun ReaderScreen(
                 onDismissRequest = dismissReaderImagePreview
             )
         }
+    }
+
+    pendingReadingSummary?.let { summary ->
+        com.huangder.lumibooks.ui.reading.ReadingSessionSummarySheet(
+            summary = summary,
+            onDone = { note, mood ->
+                summary.sessionId?.let { id -> viewModel.saveReadingSummaryNote(id, note, mood) }
+                pendingReadingSummary = null
+                finishExit()
+            }
+        )
     }
 }
 }

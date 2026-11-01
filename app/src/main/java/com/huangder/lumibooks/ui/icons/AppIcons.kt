@@ -72,6 +72,8 @@ object AppIcons {
     val Info = FluentIcons.Regular.Info
     val ArrowCounterClockwise = FluentIcons.Regular.ArrowCounterclockwise
     val ArrowClockwise = FluentIcons.Regular.ArrowClockwise
+    val Calendar = AppCalendarIcon
+    val Funnel = AppFilterIcon
     val SortAscending = FluentIcons.Regular.TextSortAscending
     val DotsThreeVertical = FluentIcons.Regular.MoreVertical
     val DotsSixVertical = FluentIcons.Regular.ReOrderDotsVertical

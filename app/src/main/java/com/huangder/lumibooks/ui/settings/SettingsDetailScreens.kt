@@ -1552,6 +1552,13 @@ fun ReadingGoalDetail(viewModel: SettingsViewModel) {
 
     DetailCard {
         SettingsSliderItem(label = stringResource(R.string.label_daily_goal), value = uiState.dailyGoal.toFloat(), range = 10f..120f, valueText = stringResource(R.string.goal_minutes, uiState.dailyGoal), steps = 21) { viewModel.saveDailyGoal(it.toInt()) }
+        SettingsDivider()
+        SettingsSwitchRow(
+            label = stringResource(R.string.setting_reading_summary),
+            supportingText = stringResource(R.string.setting_reading_summary_desc),
+            checked = uiState.readingSummaryEnabled,
+            onCheckedChange = viewModel::saveReadingSummaryEnabled
+        )
     }
 }
 

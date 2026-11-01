@@ -6,6 +6,8 @@ import com.huangder.lumibooks.data.local.DataStoreManager
 import com.huangder.lumibooks.domain.repository.BookRepository
 import com.huangder.lumibooks.domain.repository.ReadingRepository
 import com.huangder.lumibooks.ui.home.ReadingStreakCalculator
+import com.huangder.lumibooks.ui.reading.ReadingSessionItem
+import com.huangder.lumibooks.ui.reading.joinBooks
 import com.huangder.lumibooks.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -57,6 +60,13 @@ data class StatisticsUiState(
     val displayMonth: Int = Calendar.getInstance().get(Calendar.MONTH),
     val displayYear: Int = Calendar.getInstance().get(Calendar.YEAR),
     val displayWeekOffset: Int = 0,
+    val periodSessions: List<ReadingSessionItem> = emptyList(),
+    val recentSessions: List<ReadingSessionItem> = emptyList(),
+    val weeklyLoading: Boolean = true,
+    val monthlyLoading: Boolean = true,
+    val yearlyLoading: Boolean = true,
+    val sessionsLoading: Boolean = true,
+    val recentSessionsLoading: Boolean = true,
     val error: String? = null
 )
 
@@ -84,6 +94,7 @@ class StatisticsViewModel @Inject constructor(
         observeMonth()
         observeYear()
         observeSelectedPeriod()
+        observeSessions()
     }
 
     private fun observeDailyGoal() {
@@ -135,8 +146,11 @@ class StatisticsViewModel @Inject constructor(
                         }
                     }
                 }
+                .onStart { _uiState.update { it.copy(weeklyLoading = true) } }
                 .reportErrors()
-                .collect { weeklyData -> _uiState.update { it.copy(weeklyData = weeklyData) } }
+                .collect { weeklyData ->
+                    _uiState.update { it.copy(weeklyData = weeklyData, weeklyLoading = false) }
+                }
         }
     }
 
@@ -148,12 +162,14 @@ class StatisticsViewModel @Inject constructor(
                     val period = StatisticsPeriod.month(year, month)
                     readingRepository.getDailyTotalsBetween(period.startDate, period.endDate)
                 }
+                .onStart { _uiState.update { it.copy(monthlyLoading = true) } }
                 .reportErrors()
                 .collect { dailyTotals ->
                     _uiState.update {
                         it.copy(
                             monthlyDailyData = dailyTotals.associate { total -> total.date to total.totalDuration },
-                            monthlyReadingTime = dailyTotals.sumOf { total -> total.totalDuration }
+                            monthlyReadingTime = dailyTotals.sumOf { total -> total.totalDuration },
+                            monthlyLoading = false
                         )
                     }
                 }
@@ -167,11 +183,44 @@ class StatisticsViewModel @Inject constructor(
                     val period = StatisticsPeriod.year(year)
                     readingRepository.getDailyTotalsBetween(period.startDate, period.endDate)
                 }
+                .onStart { _uiState.update { it.copy(yearlyLoading = true) } }
                 .reportErrors()
                 .collect { dailyTotals ->
                     _uiState.update {
-                        it.copy(yearlyDailyData = dailyTotals.associate { total -> total.date to total.totalDuration })
+                        it.copy(
+                            yearlyDailyData = dailyTotals.associate { total -> total.date to total.totalDuration },
+                            yearlyLoading = false
+                        )
                     }
+                }
+        }
+    }
+
+    /** Detail rows behind the charts. Legacy daily totals never invent session counts. */
+    private fun observeSessions() {
+        viewModelScope.launch {
+            _uiState.map { it.selectedPeriod() }
+                .distinctUntilChanged()
+                .flatMapLatest { period ->
+                    _uiState.update { it.copy(sessionsLoading = true) }
+                    readingRepository.observeReadingSessions(
+                        period.startMillis(ZoneId.systemDefault()),
+                        period.endMillis(ZoneId.systemDefault())
+                    ).combine(bookRepository.getAllBooks()) { sessions, books -> sessions.joinBooks(books) }
+                }
+                .reportErrors()
+                .collect { sessions ->
+                    _uiState.update { it.copy(periodSessions = sessions, sessionsLoading = false) }
+                }
+        }
+        viewModelScope.launch {
+            combine(
+                readingRepository.observeRecentReadingSessions(RECENT_SESSIONS_LIMIT),
+                bookRepository.getAllBooks()
+            ) { sessions, books -> sessions.joinBooks(books) }
+                .reportErrors()
+                .collect { sessions ->
+                    _uiState.update { it.copy(recentSessions = sessions, recentSessionsLoading = false) }
                 }
         }
     }
@@ -263,6 +312,12 @@ class StatisticsViewModel @Inject constructor(
         }
     }
 
+    fun updateSessionNote(sessionId: Long, note: String?, mood: String?) {
+        viewModelScope.launch {
+            runCatching { readingRepository.updateReadingSessionNote(sessionId, note, mood) }
+        }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(error = null) }
     }
@@ -280,5 +335,6 @@ class StatisticsViewModel @Inject constructor(
     private companion object {
         const val READING_HISTORY_START_DATE = "1970-01-01"
         const val MOST_READ_LIMIT = 5
+        const val RECENT_SESSIONS_LIMIT = 12
     }
 }

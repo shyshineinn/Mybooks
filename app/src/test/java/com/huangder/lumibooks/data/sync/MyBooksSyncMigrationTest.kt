@@ -37,7 +37,10 @@ class MyBooksSyncMigrationTest {
             sql.version = 21
             db.close()
             db = Room.databaseBuilder(context, AppDatabase::class.java, name)
-                .addMigrations(DatabaseMigrations.MIGRATION_21_22).allowMainThreadQueries().build()
+                .addMigrations(
+                    DatabaseMigrations.MIGRATION_21_22,
+                    DatabaseMigrations.MIGRATION_22_23
+                ).allowMainThreadQueries().build()
             assertEquals("{\"title\":\"pending\"}", db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
             assertFalse(db.myBooksSyncStateDao().get("mybooks-1")!!.remoteDeleted)
             assertNull(db.myBooksSyncStateDao().getPendingDelete(2)!!.expectedRevision)

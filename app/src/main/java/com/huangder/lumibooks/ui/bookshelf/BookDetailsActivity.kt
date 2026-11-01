@@ -19,6 +19,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -64,14 +66,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -82,6 +80,8 @@ import com.huangder.lumibooks.R
 import com.huangder.lumibooks.data.local.DataStoreManager
 import com.huangder.lumibooks.domain.model.Book
 import com.huangder.lumibooks.domain.model.BookDeleteMode
+import com.huangder.lumibooks.domain.model.DailyTotal
+import com.huangder.lumibooks.domain.model.Note
 import com.huangder.lumibooks.domain.model.DEFAULT_APP_ACCENT_HEX
 import com.huangder.lumibooks.ui.components.ConfigurableActivityBack
 import com.huangder.lumibooks.ui.components.CloudAwareBookDeleteDialog
@@ -101,6 +101,9 @@ import com.huangder.lumibooks.ui.components.LocalLiquidGlassMenuHost
 import com.huangder.lumibooks.ui.components.ProvideLiquidGlassBackdrop
 import com.huangder.lumibooks.ui.components.liquidGlassMenuAnchor
 import com.huangder.lumibooks.ui.home.HomeViewModel
+import com.huangder.lumibooks.ui.reading.ReadingHistoryActivity
+import com.huangder.lumibooks.ui.reading.ReadingSessionDetailSheet
+import com.huangder.lumibooks.ui.reading.ReadingSessionItem
 import com.huangder.lumibooks.ui.theme.AppColors
 import com.huangder.lumibooks.ui.theme.AppRadius
 import com.huangder.lumibooks.ui.theme.AppSpace
@@ -220,6 +223,10 @@ data class BookDetailsUiState(
     val activeDays: Int = 0,
     val bookmarkCount: Int = 0,
     val noteCount: Int = 0,
+    val sessions: List<ReadingSessionItem> = emptyList(),
+    val dailyTotals: List<DailyTotal> = emptyList(),
+    val notes: List<Note> = emptyList(),
+    val sessionsLoaded: Boolean = false,
     val isLoading: Boolean = true
 )
 
@@ -230,17 +237,64 @@ class BookDetailsViewModel @Inject constructor(
 ) : androidx.lifecycle.ViewModel() {
     private val _uiState = kotlinx.coroutines.flow.MutableStateFlow(BookDetailsUiState())
     val uiState = _uiState.asStateFlow()
+
+    private data class DetailsBase(
+        val book: Book?,
+        val duration: Long,
+        val activeDays: Int,
+        val bookmarkCount: Int,
+        val notes: List<Note>
+    )
+
     fun load(bookId: String) {
         viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(
+            val base = kotlinx.coroutines.flow.combine(
                 bookRepository.getAllBooks(),
                 readingRepository.getTotalDurationByBookId(bookId),
                 readingRepository.getActiveDaysByBookId(bookId),
                 readingRepository.getBookmarksByBookId(bookId),
                 readingRepository.getNotesByBookId(bookId)
-            ) { books, duration, days, bookmarks, notes -> BookDetailsUiState(books.firstOrNull { it.id == bookId }, duration ?: 0L, days, bookmarks.size, notes.count { !it.isInkStroke }, false) }
-                .collect { _uiState.value = it }
+            ) { books, duration, days, bookmarks, notes ->
+                DetailsBase(
+                    book = books.firstOrNull { it.id == bookId },
+                    duration = duration ?: 0L,
+                    activeDays = days,
+                    bookmarkCount = bookmarks.size,
+                    notes = notes
+                )
+            }
+            kotlinx.coroutines.flow.combine(
+                base,
+                readingRepository.observeReadingSessionsByBook(bookId),
+                readingRepository.getDailyTotalsBetween(READING_HISTORY_START, TimeUtils.getCurrentDate())
+            ) { data, sessions, dailyTotals ->
+                val book = data.book
+                BookDetailsUiState(
+                    book = book,
+                    totalReadingTime = data.duration,
+                    activeDays = data.activeDays,
+                    bookmarkCount = data.bookmarkCount,
+                    noteCount = data.notes.count { !it.isInkStroke },
+                    sessions = if (book == null) emptyList() else sessions.map {
+                        ReadingSessionItem(it, book.title, book.author, book.coverPath)
+                    },
+                    dailyTotals = dailyTotals.sortedByDescending { it.date },
+                    notes = data.notes,
+                    sessionsLoaded = true,
+                    isLoading = false
+                )
+            }.collect { _uiState.value = it }
         }
+    }
+
+    fun updateSessionNote(sessionId: Long, note: String?, mood: String?) {
+        viewModelScope.launch {
+            runCatching { readingRepository.updateReadingSessionNote(sessionId, note, mood) }
+        }
+    }
+
+    private companion object {
+        const val READING_HISTORY_START = "1970-01-01"
     }
 }
 
@@ -268,6 +322,7 @@ fun BookDetailsScreen(
     val book = details.book ?: return
     // Save outside the lazy content so item recycling cannot prune the expanded state.
     var summaryExpanded by rememberSaveable(book.id) { mutableStateOf(false) }
+    var readingSessionDetail by remember { mutableStateOf<ReadingSessionItem?>(null) }
     val metaState by editViewModel.metaState.collectAsState()
     val syncBadge by editViewModel.syncBadge.collectAsState()
     val myBooksSyncing by homeViewModel.myBooksSyncing.collectAsState()
@@ -540,37 +595,37 @@ fun BookDetailsScreen(
                         onReview = { BookReviewActivity.start(context, book.id, book.title, book.coverPath) }
                     )
                 }
-                BookDetailsPage.Reading -> {
-                    item {
-                        MetricGrid(book, details.totalReadingTime, details.activeDays, details.bookmarkCount, details.noteCount)
-                    }
-                    item {
-                        InformationCard(
-                            contentPadding = PaddingValues(0.dp),
-                            verticalArrangement = Arrangement.Top
-                        ) {
-                            metaState.meta?.let { ReadingRecordBlock(it) }
-                            if (!book.isCloudOnly) {
-                                DetailRow(stringResource(R.string.book_detail_last_read), dateText(book.lastReadTime), false)
-                            }
-                            DetailRow(
-                                stringResource(R.string.bookmarks_notes),
-                                stringResource(R.string.book_detail_open_annotations),
-                                clickable = true,
-                                onClick = {
-                                    context.startActivity(Intent(context, BookNotesActivity::class.java)
-                                        .putExtra(BookNotesActivity.EXTRA_BOOK_ID, book.id))
-                                },
-                                showChevron = true
+                BookDetailsPage.Reading -> item {
+                    BookReadingTab(
+                        book = book,
+                        state = details,
+                        serverMeta = metaState.meta,
+                        onOpenHistory = { ReadingHistoryActivity.start(context, bookId = book.id) },
+                        onOpenAnnotations = {
+                            context.startActivity(
+                                Intent(context, BookNotesActivity::class.java)
+                                    .putExtra(BookNotesActivity.EXTRA_BOOK_ID, book.id)
                             )
-                        }
-                    }
+                        },
+                        onOpenSession = { readingSessionDetail = it }
+                    )
                 }
                 BookDetailsPage.Files -> item {
                     FileInfoCard(book = book, metaState = metaState, downloadState = downloadState)
                 }
             }
         }
+    }
+
+    readingSessionDetail?.let { item ->
+        ReadingSessionDetailSheet(
+            item = item,
+            onDismiss = { readingSessionDetail = null },
+            onSaveNote = { note, mood ->
+                detailsViewModel.updateSessionNote(item.id, note, mood)
+                readingSessionDetail = null
+            }
+        )
     }
 
     if (editing) EditBookDialog(book, homeViewModel) { editing = false }
@@ -758,35 +813,6 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
     }
 }
 
-@Composable private fun MetricGrid(book: Book, duration: Long, days: Int, bookmarks: Int, notes: Int) {
-    val metrics = listOf(
-        stringResource(R.string.book_detail_progress) to AnnotatedString("${(book.readingProgress * 100).toInt()}%"),
-        stringResource(R.string.book_detail_reading_time) to compactReadingDuration(duration, AppColors.TextSecondary),
-        stringResource(R.string.book_detail_notes) to AnnotatedString(notes.toString()),
-        stringResource(R.string.book_detail_bookmarks) to AnnotatedString(bookmarks.toString()),
-        stringResource(R.string.book_detail_active_days) to AnnotatedString(days.toString())
-    )
-    InformationCard(
-        contentPadding = PaddingValues(AppSpace.sm),
-        verticalArrangement = Arrangement.Top
-    ) {
-        metrics.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
-                row.forEach { (label, value) ->
-                    Column(
-                        Modifier.weight(1f).padding(AppSpace.sm),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(value, fontSize = AppType.Section, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
-                        Text(label, fontSize = AppType.Caption, color = AppColors.TextSecondary)
-                    }
-                }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
-            }
-        }
-    }
-}
-
 @Composable internal fun ContentInfoCards(
     book: Book,
     folder: String,
@@ -811,6 +837,7 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
         }
         InformationCard(
             title = stringResource(R.string.book_detail_group_details),
+            titleFontSize = 18.sp,
             contentPadding = PaddingValues(0.dp),
             verticalArrangement = Arrangement.Top
         ) {
@@ -820,6 +847,7 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
         }
         InformationCard(
             title = stringResource(R.string.book_detail_group_library),
+            titleFontSize = 18.sp,
             contentPadding = PaddingValues(0.dp),
             verticalArrangement = Arrangement.Top
         ) {
@@ -844,6 +872,7 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
         if (showRetry || showSync) {
             InformationCard(
                 title = stringResource(R.string.mybooks_sync_state),
+                titleFontSize = 18.sp,
                 contentPadding = PaddingValues(0.dp),
                 verticalArrangement = Arrangement.Top
             ) {
@@ -854,7 +883,7 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
     }
 }
 
-@Composable private fun FileInfoCard(
+@Composable internal fun FileInfoCard(
     book: Book,
     metaState: MyBooksMetaUiState,
     downloadState: BookDownloadState?
@@ -867,10 +896,22 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
         RemoteBookFormats.isSupported(it.format)
     } == true
     val downloading = downloadState as? BookDownloadState.Downloading
+    var advancedExpanded by rememberSaveable(book.id) { mutableStateOf(false) }
+    var pathExpanded by remember { mutableStateOf(false) }
+    val location = if (!book.isCloudOnly && book.filePath.isNotBlank()) {
+        readableBookLocation(
+            filePath = book.filePath,
+            internalStorageLabel = stringResource(R.string.book_detail_internal_storage),
+            unknownLabel = stringResource(R.string.book_detail_unknown)
+        )
+    } else null
+    val copiedLabel = stringResource(R.string.book_file_path_copied)
+
     InformationCard(
         contentPadding = PaddingValues(0.dp),
         verticalArrangement = Arrangement.Top
     ) {
+        SectionLabel(stringResource(R.string.book_file_main_info))
         if (MyBooksConfig.isMyBooks(book)) {
             MyBooksFileRows(book = book, metaState = metaState)
         }
@@ -880,6 +921,11 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
         if (!book.isCloudOnly || !MyBooksConfig.isMyBooks(book) || hasSupportedServerFile) {
             DetailRow(stringResource(R.string.book_detail_format), book.format.name, false)
         }
+        DetailRow(
+            stringResource(R.string.book_detail_file_size),
+            remember(book.filePath, book.remoteFileSize) { fileSize(context, book) },
+            false
+        )
         DetailRow(
             stringResource(R.string.book_detail_storage),
             when {
@@ -893,44 +939,125 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
             },
             false
         )
-        DetailRow(
-            stringResource(R.string.book_detail_file_size),
-            remember(book.filePath, book.remoteFileSize) { fileSize(context, book) },
-            false
+
+        Box(Modifier.fillMaxWidth().height(0.5.dp).background(AppColors.Divider))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { advancedExpanded = !advancedExpanded }
+                .heightIn(min = 48.dp)
+                .padding(horizontal = AppSpace.md, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.book_file_advanced_info),
+                fontSize = AppType.Body,
+                color = AppColors.TextPrimary,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (advancedExpanded) AppIcons.CaretUp else AppIcons.CaretDown,
+                contentDescription = null,
+                tint = AppColors.TextSecondary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        if (advancedExpanded) {
+            if (!book.isCloudOnly) {
+                DetailRow(stringResource(R.string.book_detail_imported), dateText(book.createdAt), false)
+            }
+            if (location != null) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = AppSpace.md, vertical = 12.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.book_detail_location),
+                        fontSize = AppType.Body,
+                        color = AppColors.TextPrimary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = location,
+                        modifier = Modifier.fillMaxWidth(),
+                        fontSize = AppType.BodySmall,
+                        color = AppColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(AppSpace.md)) {
+                        Text(
+                            text = stringResource(R.string.book_file_view_path),
+                            fontSize = AppType.Caption,
+                            color = AppColors.Accent,
+                            modifier = Modifier
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() }
+                                ) { pathExpanded = true }
+                                .padding(vertical = 10.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.book_file_copy_path),
+                            fontSize = AppType.Caption,
+                            color = AppColors.Accent,
+                            modifier = Modifier
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() }
+                                ) {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(book.title, location))
+                                    Toast.makeText(context, copiedLabel, Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(vertical = 10.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(AppSpace.sm))
+        }
+    }
+
+    if (pathExpanded && location != null) {
+        LiquidGlassAlertDialog(
+            onDismissRequest = { pathExpanded = false },
+            title = { Text(stringResource(R.string.book_detail_location)) },
+            text = { Text(location) },
+            confirmButton = {
+                LiquidGlassTextButton(
+                    text = stringResource(R.string.book_file_copy_path),
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(book.title, location))
+                        Toast.makeText(context, copiedLabel, Toast.LENGTH_SHORT).show()
+                        pathExpanded = false
+                    }
+                )
+            },
+            dismissButton = {
+                LiquidGlassTextButton(
+                    text = stringResource(R.string.cancel),
+                    onClick = { pathExpanded = false }
+                )
+            }
         )
-        if (!book.isCloudOnly) {
-            DetailRow(stringResource(R.string.book_detail_imported), dateText(book.createdAt), false)
-        }
-        if (!book.isCloudOnly && book.filePath.isNotBlank()) {
-            LocationDetailRow(book.filePath)
-        }
     }
 }
 
-@Composable private fun LocationDetailRow(filePath: String) {
-    val location = readableBookLocation(
-        filePath = filePath,
-        internalStorageLabel = stringResource(R.string.book_detail_internal_storage),
-        unknownLabel = stringResource(R.string.book_detail_unknown)
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text = text,
+        fontSize = AppType.Caption,
+        fontWeight = FontWeight.Medium,
+        color = AppColors.TextSecondary,
+        modifier = Modifier.padding(start = AppSpace.md, end = AppSpace.md, top = AppSpace.md)
     )
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = AppSpace.md, vertical = 14.dp)
-    ) {
-        Text(
-            stringResource(R.string.book_detail_location),
-            fontSize = AppType.Body,
-            color = AppColors.TextPrimary
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            location,
-            modifier = Modifier.fillMaxWidth(),
-            fontSize = AppType.BodySmall,
-            color = AppColors.TextSecondary
-        )
-    }
 }
 
 @Composable internal fun DetailRow(label: String, value: String, clickable: Boolean, onClick: () -> Unit = {}, showChevron: Boolean = false) {
@@ -1137,26 +1264,6 @@ private fun readableBookLocation(filePath: String, internalStorageLabel: String,
         internalStorageLabel + normalizedPath.removePrefix(storageRoot)
     } else {
         normalizedPath
-    }
-}
-
-private fun compactReadingDuration(durationMillis: Long, unitColor: Color): AnnotatedString {
-    val totalMinutes = java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(durationMillis)
-    val hours = totalMinutes / 60
-    val minutes = totalMinutes % 60
-    val values = when {
-        hours > 0 -> listOf(hours to "H", minutes to "M")
-        minutes > 0 -> listOf(minutes to "M")
-        else -> listOf(java.util.concurrent.TimeUnit.MILLISECONDS.toSeconds(durationMillis) to "S")
-    }
-    return buildAnnotatedString {
-        values.forEachIndexed { index, (value, unit) ->
-            if (index > 0) append(' ')
-            append(value.toString())
-            withStyle(SpanStyle(fontSize = 10.sp, color = unitColor, fontWeight = FontWeight.Medium)) {
-                append(unit)
-            }
-        }
     }
 }
 
