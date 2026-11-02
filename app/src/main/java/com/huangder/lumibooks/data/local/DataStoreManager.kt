@@ -364,7 +364,6 @@ class DataStoreManager @Inject constructor(
 
         // 统计设置
         private val DAILY_GOAL = intPreferencesKey("daily_goal")
-        private val READING_SUMMARY_ENABLED = booleanPreferencesKey("reading_summary_enabled")
 
         // 应用设置
         private val APP_ICON_STYLE = stringPreferencesKey("app_icon_style")
@@ -933,10 +932,6 @@ class DataStoreManager @Inject constructor(
     val dailyGoal: Flow<Int> = context.dataStore.data.map { preferences ->
         preferences[DAILY_GOAL] ?: 30
     }
-
-    val readingSummaryEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[READING_SUMMARY_ENABLED] ?: true
-    }.distinctUntilChanged()
 
     // 应用设置
     val appIconStyle: Flow<String> = context.dataStore.data.map { preferences ->
@@ -2509,12 +2504,6 @@ class DataStoreManager @Inject constructor(
     suspend fun saveDailyGoal(goal: Int) {
         context.dataStore.edit { preferences ->
             preferences[DAILY_GOAL] = goal
-        }
-    }
-
-    suspend fun saveReadingSummaryEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[READING_SUMMARY_ENABLED] = enabled
         }
     }
 

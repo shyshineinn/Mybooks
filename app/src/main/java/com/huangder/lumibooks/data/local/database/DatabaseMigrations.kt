@@ -5,6 +5,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.huangder.lumibooks.domain.model.AnnotationTags
 
 object DatabaseMigrations {
+    // v23/v24 only added the independent reading_sessions table. All v22 tables
+    // retain their schema. Explicit downgrade paths preserve the complete library,
+    // pending sync edits and the retired session table instead of deleting data.
+    private fun preserveLibraryOnRollback(fromVersion: Int) = object : Migration(fromVersion, 22) {
+        override fun migrate(db: SupportSQLiteDatabase) = Unit
+    }
+
+    val MIGRATION_23_22: Migration = preserveLibraryOnRollback(23)
+    val MIGRATION_24_22: Migration = preserveLibraryOnRollback(24)
+
     val MIGRATION_21_22 = object : Migration(21, 22) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("ALTER TABLE mybooks_sync_state ADD COLUMN remoteDeleted INTEGER NOT NULL DEFAULT 0")
@@ -293,60 +303,6 @@ object DatabaseMigrations {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("ALTER TABLE notes ADD COLUMN isStale INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE bookmarks ADD COLUMN isStale INTEGER NOT NULL DEFAULT 0")
-        }
-    }
-
-    val MIGRATION_23_24 = object : Migration(23, 24) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-            db.execSQL("ALTER TABLE `reading_sessions` ADD COLUMN `sessionKey` TEXT NOT NULL DEFAULT ''")
-            db.execSQL("ALTER TABLE `reading_sessions` ADD COLUMN `contributedDuration` INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("ALTER TABLE `reading_sessions` ADD COLUMN `contributionsJson` TEXT NOT NULL DEFAULT '{}'")
-            // Sessions written by v23 were already added to the daily totals in full.
-            db.execSQL(
-                "UPDATE `reading_sessions` SET `contributedDuration` = `duration` " +
-                    "WHERE `contributedDuration` = 0"
-            )
-            db.execSQL(
-                "CREATE INDEX IF NOT EXISTS `index_reading_sessions_sessionKey` " +
-                    "ON `reading_sessions` (`sessionKey`)"
-            )
-        }
-    }
-
-    val MIGRATION_22_23 = object : Migration(22, 23) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-            db.execSQL(
-                "CREATE TABLE IF NOT EXISTS `reading_sessions` (" +
-                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
-                    "`bookId` TEXT NOT NULL, " +
-                    "`date` TEXT NOT NULL, " +
-                    "`startTime` INTEGER NOT NULL, " +
-                    "`endTime` INTEGER NOT NULL, " +
-                    "`duration` INTEGER NOT NULL, " +
-                    "`startChapterIndex` INTEGER NOT NULL, " +
-                    "`endChapterIndex` INTEGER NOT NULL, " +
-                    "`startChapterTitle` TEXT, " +
-                    "`endChapterTitle` TEXT, " +
-                    "`startProgress` REAL NOT NULL, " +
-                    "`endProgress` REAL NOT NULL, " +
-                    "`mode` TEXT NOT NULL, " +
-                    "`sourceDeviceId` TEXT NOT NULL, " +
-                    "`note` TEXT, " +
-                    "`mood` TEXT, " +
-                    "`updatedAt` INTEGER NOT NULL)"
-            )
-            db.execSQL(
-                "CREATE INDEX IF NOT EXISTS `index_reading_sessions_bookId_startTime` " +
-                    "ON `reading_sessions` (`bookId`, `startTime`)"
-            )
-            db.execSQL(
-                "CREATE INDEX IF NOT EXISTS `index_reading_sessions_startTime` " +
-                    "ON `reading_sessions` (`startTime`)"
-            )
-            db.execSQL(
-                "CREATE INDEX IF NOT EXISTS `index_reading_sessions_date` " +
-                    "ON `reading_sessions` (`date`)"
-            )
         }
     }
 

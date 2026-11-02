@@ -42,13 +42,6 @@ interface ReadingRecordDao {
     suspend fun updateRecordDuration(recordId: Long, additionalDuration: Long, endTime: Long)
 
     @Query(
-        "UPDATE reading_records SET duration = CASE " +
-            "WHEN duration + :delta < 0 THEN 0 ELSE duration + :delta END, " +
-            "updatedAt = :updatedAt WHERE id = :recordId"
-    )
-    suspend fun adjustRecordDuration(recordId: Long, delta: Long, updatedAt: Long)
-
-    @Query(
         "SELECT bookId, SUM(duration) as totalDuration FROM reading_records " +
             "WHERE date BETWEEN :startDate AND :endDate GROUP BY bookId " +
             "HAVING totalDuration > 0 ORDER BY totalDuration DESC LIMIT :limit"

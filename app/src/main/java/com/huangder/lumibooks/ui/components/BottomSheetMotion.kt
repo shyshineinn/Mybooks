@@ -13,7 +13,6 @@ import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.foundation.background
-import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -164,8 +163,6 @@ fun LiquidGlassBottomSheetScaffold(
     maxHeightFraction: Float = 0.82f,
     shape: Shape = AppRoundedCornerShape(AppRadius.capsule),
     fallbackColor: Color = AppColors.CardBg,
-    /** Opt-in opaque content layer for reading sheets; the glass shell stays outside it. */
-    contentSurfaceColor: Color? = null,
     contentPadding: PaddingValues = PaddingValues(horizontal = AppSpace.lg, vertical = AppSpace.md),
     content: @Composable ColumnScope.(requestDismiss: () -> Unit) -> Unit
 ) {
@@ -187,13 +184,6 @@ fun LiquidGlassBottomSheetScaffold(
                     .fillMaxWidth()
                     .heightIn(max = available * maxHeightFraction)
                     .navigationBarsPadding()
-                    .then(
-                        if (contentSurfaceColor != null) {
-                            Modifier.clip(shape).background(contentSurfaceColor)
-                        } else {
-                            Modifier
-                        }
-                    )
                     .padding(contentPadding),
                 content = { content { dismiss() } }
             )

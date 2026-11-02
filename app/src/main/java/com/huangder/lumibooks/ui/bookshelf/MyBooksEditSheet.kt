@@ -125,7 +125,7 @@ fun MyBooksEditSheet(
             if (localImport && localDraft != null) onLocalImportSaved?.invoke(requireNotNull(localDraft))
             else onDismiss(viewModel.uiState.value.created)
         },
-        maxHeightFraction = 0.92f,
+        maxHeightFraction = 0.62f,
         onRequestDismiss = {
             // 必须读 StateFlow 的实时值：collectAsState 的 state 要等下一次重组才更新，
             // 保存刚成功那一刻读到的还是旧的 saving=true，关闭会被拦掉，弹窗就关不掉。

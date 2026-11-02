@@ -351,11 +351,6 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            dataStoreManager.readingSummaryEnabled.collectLatest { enabled ->
-                _uiState.value = _uiState.value.copy(readingSummaryEnabled = enabled)
-            }
-        }
-        viewModelScope.launch {
             dataStoreManager.acceptedTermsVersion.collectLatest { version ->
                 _uiState.value = _uiState.value.copy(
                     updateCheck = _uiState.value.updateCheck.copy(acceptedTermsVersion = version)
@@ -1021,13 +1016,6 @@ class SettingsViewModel @Inject constructor(
     }
 
     // ─── 阅读目标 ───
-
-    fun saveReadingSummaryEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            dataStoreManager.saveReadingSummaryEnabled(enabled)
-            _uiState.value = _uiState.value.copy(readingSummaryEnabled = enabled)
-        }
-    }
 
     fun saveDailyGoal(minutes: Int) {
         viewModelScope.launch {

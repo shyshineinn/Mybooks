@@ -8,7 +8,6 @@ import com.huangder.lumibooks.data.local.dao.BookmarkDao
 import com.huangder.lumibooks.data.local.dao.FolderDao
 import com.huangder.lumibooks.data.local.dao.NoteDao
 import com.huangder.lumibooks.data.local.dao.ReadingRecordDao
-import com.huangder.lumibooks.data.local.dao.ReadingSessionDao
 import com.huangder.lumibooks.data.local.dao.TagDao
 import com.huangder.lumibooks.data.local.dao.SyncStateDao
 import com.huangder.lumibooks.data.local.dao.HighlightRuleDao
@@ -80,8 +79,8 @@ object AppModule {
             DatabaseMigrations.MIGRATION_19_20,
             DatabaseMigrations.MIGRATION_20_21,
             DatabaseMigrations.MIGRATION_21_22,
-            DatabaseMigrations.MIGRATION_22_23,
-            DatabaseMigrations.MIGRATION_23_24
+            DatabaseMigrations.MIGRATION_23_22,
+            DatabaseMigrations.MIGRATION_24_22
         )
             .build()
     }
@@ -91,11 +90,6 @@ object AppModule {
     fun provideBookDao(database: AppDatabase): BookDao {
         return database.bookDao()
     }
-
-    @Provides
-    @Singleton
-    fun provideReadingSessionDao(database: AppDatabase): ReadingSessionDao =
-        database.readingSessionDao()
 
     @Provides
     @Singleton

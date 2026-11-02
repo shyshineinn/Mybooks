@@ -8,7 +8,6 @@ import com.huangder.lumibooks.data.local.dao.FolderDao
 import com.huangder.lumibooks.data.local.dao.NoteDao
 import com.huangder.lumibooks.data.local.dao.AnnotationTagDao
 import com.huangder.lumibooks.data.local.dao.ReadingRecordDao
-import com.huangder.lumibooks.data.local.dao.ReadingSessionDao
 import com.huangder.lumibooks.data.local.dao.TagDao
 import com.huangder.lumibooks.data.local.dao.SyncStateDao
 import com.huangder.lumibooks.data.local.entity.BookTagCrossRefEntity
@@ -19,7 +18,6 @@ import com.huangder.lumibooks.data.local.entity.FolderEntity
 import com.huangder.lumibooks.data.local.entity.NoteEntity
 import com.huangder.lumibooks.data.local.entity.AnnotationTagEntity
 import com.huangder.lumibooks.data.local.entity.ReadingRecordEntity
-import com.huangder.lumibooks.data.local.entity.ReadingSessionEntity
 import com.huangder.lumibooks.data.local.entity.TagEntity
 import com.huangder.lumibooks.data.local.entity.SyncStateEntity
 import com.huangder.lumibooks.data.local.entity.SyncTombstoneEntity
@@ -40,7 +38,6 @@ import com.huangder.lumibooks.data.local.entity.MyBooksPendingDeleteEntity
         TagEntity::class,
         BookTagCrossRefEntity::class,
         ReadingRecordEntity::class,
-        ReadingSessionEntity::class,
         BookmarkEntity::class,
         NoteEntity::class,
         AnnotationTagEntity::class,
@@ -53,13 +50,12 @@ import com.huangder.lumibooks.data.local.entity.MyBooksPendingDeleteEntity
         MyBooksSyncStateEntity::class,
         MyBooksPendingDeleteEntity::class
     ],
-    version = 24,
+    version = 22,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun bookDao(): BookDao
     abstract fun readingRecordDao(): ReadingRecordDao
-    abstract fun readingSessionDao(): ReadingSessionDao
     abstract fun bookmarkDao(): BookmarkDao
     abstract fun noteDao(): NoteDao
     abstract fun annotationTagDao(): AnnotationTagDao

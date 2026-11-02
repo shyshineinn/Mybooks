@@ -233,16 +233,16 @@ internal fun SummaryRow(summary: String, expanded: Boolean, onExpandedChange: (B
             summary,
             modifier = Modifier.padding(horizontal = AppSpace.md).padding(bottom = 14.dp),
             fontSize = AppType.BodySmall,
-            lineHeight = 22.sp,
+            lineHeight = 20.sp,
             color = AppColors.TextSecondary,
-            maxLines = if (expanded) Int.MAX_VALUE else 5,
+            maxLines = if (expanded) Int.MAX_VALUE else 4,
             overflow = TextOverflow.Ellipsis
         )
     }
 }
 
 @Composable
-internal fun ReadingRecordBlock(meta: ServerBookMeta, title: String? = null) {
+internal fun ReadingRecordBlock(meta: ServerBookMeta) {
     val labels = readingLogLabels(meta)
     if (labels.isNotEmpty()) {
         Column(
@@ -255,7 +255,7 @@ internal fun ReadingRecordBlock(meta: ServerBookMeta, title: String? = null) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    title ?: stringResource(R.string.server_meta_read_logs),
+                    stringResource(R.string.server_meta_read_logs),
                     fontSize = AppType.Body,
                     color = AppColors.TextPrimary,
                     modifier = Modifier.weight(1f)
