@@ -41,7 +41,7 @@ data class MyBooksMergeResult(
  */
 object MyBooksMerge {
     private val scalarFields = listOf(
-        "title", "author", "status", "summary", "rating",
+        "title", "author", "translators", "status", "summary", "rating",
         "series", "series_index", "publisher", "pub_year",
         "isbn", "douban_id", "notes_url"
     )
@@ -76,7 +76,7 @@ object MyBooksMerge {
                 "title" -> if (overrides.has(field)) overrides.opt(field) else book.title.ifBlank { baseValue }
                 "author" -> if (overrides.has(field)) overrides.opt(field) else book.author.ifBlank { baseValue }
                 "notes_url" -> baseValue // App 不编辑心得链接
-                else -> if (overrides.has(field)) overrides.opt(field) else baseValue
+                else -> if (overrides.has(field)) normalizeScalar(field, overrides.opt(field)) else baseValue
             }
             val localChanged = !valueEquals(localValue, baseValue)
             val remoteChanged = !valueEquals(remoteValue, baseValue)
@@ -292,6 +292,7 @@ object MyBooksMerge {
     }
 
     private fun normalizeScalar(field: String, value: Any?): Any? = when (field) {
+        "translators" -> JSONArray(parseMyBooksTranslators(value))
         "title" -> (value as? String).orEmpty().ifBlank { "未命名" }
         "author" -> normalizeRemoteAuthor(value as? String)
         else -> value

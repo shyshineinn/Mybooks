@@ -104,6 +104,9 @@ internal fun customRows(meta: ServerBookMeta, reserved: Set<String> = emptySet()
 @Composable
 internal fun buildServerDetailRows(meta: ServerBookMeta): List<ServerDetailRow> {
     val rows = mutableListOf<ServerDetailRow>()
+    meta.translators.takeIf { it.isNotEmpty() }?.let {
+        rows += ServerDetailRow(stringResource(R.string.mybooks_edit_field_translators), it.joinToString("、"))
+    }
     statusDisplay(meta.status).takeIf { it.isNotBlank() }?.let {
         rows += ServerDetailRow(stringResource(R.string.server_meta_status), it)
     }

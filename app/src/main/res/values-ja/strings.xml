@@ -1660,4 +1660,9 @@
     <string name="mybooks_download_read_failed">ダウンロードは完了しましたが、ローカル記録を読み込めません</string>
     <string name="mybooks_download_done">ダウンロード完了</string>
     <string name="mybooks_download_failed">ダウンロードに失敗しました</string>
+    <string name="mybooks_edit_field_translators">翻訳者</string>
+    <string name="mybooks_edit_translators_hint">複数の名前は「、」で区切る（任意）</string>
+    <string name="mybooks_edit_section_metadata">メタデータ</string>
+    <string name="mybooks_edit_section_reading">読書情報</string>
+    <string name="mybooks_edit_section_other">その他の情報</string>
 </resources>

@@ -2131,4 +2131,9 @@
     <string name="book_file_view_path">查看完整路径</string>
     <string name="book_file_copy_path">复制路径</string>
     <string name="book_file_path_copied">路径已复制</string>
+    <string name="mybooks_edit_field_translators">译者</string>
+    <string name="mybooks_edit_translators_hint">多位译者用顿号分隔（可选）</string>
+    <string name="mybooks_edit_section_metadata">元数据操作</string>
+    <string name="mybooks_edit_section_reading">阅读信息</string>
+    <string name="mybooks_edit_section_other">其他信息</string>
 </resources>

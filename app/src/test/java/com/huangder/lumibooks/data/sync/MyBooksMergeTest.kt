@@ -265,4 +265,27 @@ class MyBooksMergeTest {
         assertFalse(isLocalTitleAuthorEdit("", "三体"))
         assertFalse(isLocalTitleAuthorEdit("三体", "三体"))
     }
+
+    @Test fun translatorsPatchIndependentlyAndKeepConflictDetection() {
+        val base = baseJson().put("translators", JSONArray("[\"甲\"]"))
+        val local = JSONObject().put("translators", JSONArray("[\"乙\",\"丙\"]"))
+        val result = merge(base=base, overrides=local)
+        assertEquals("[\"乙\",\"丙\"]", result.patch.getJSONArray("translators").toString())
+        assertFalse(result.patch.has("author"))
+        val remote = JSONObject(base.toString()).put("translators", JSONArray("[\"丁\"]"))
+        val conflict = merge(base=base, remote=remote, overrides=local)
+        assertTrue("translators" in conflict.conflicts)
+        assertFalse(conflict.patch.has("translators"))
+        val untouched = merge(base=base, remote=remote)
+        assertFalse(untouched.patch.has("translators"))
+        assertFalse(untouched.hasLocalChanges)
+    }
+
+    @Test fun legacySnapshotAndJsonTextDoNotCreatePhantomTranslatorChanges() {
+        val base = baseJson()
+        val remote = JSONObject(base.toString()).put("translators", JSONArray("[\"甲\",\"乙\"]"))
+        assertFalse(merge(base=base, remote=remote).patch.has("translators"))
+        val cached = JSONObject(remote.toString()).put("translators", "[\"甲\",\"乙\"]")
+        assertFalse(merge(base=cached, remote=remote).hasLocalChanges)
+    }
 }

@@ -51,6 +51,7 @@ data class ServerBookMeta(
     val notesUpdatedAt: String? = null,
     val identifiersRaw: Map<String, String> = emptyMap(),
     val customRaw: Map<String, Any?> = emptyMap(),
+    val translators: List<String> = emptyList(),
     val updatedAt: String? = null
 ) {
     companion object {
@@ -157,6 +158,7 @@ data class ServerBookMeta(
             return ServerBookMeta(
                 remoteId = remoteId,
                 title = obj.optTextOrEmpty("title").ifBlank { "未命名" },
+                translators = parseMyBooksTranslators(obj.opt("translators")),
                 author = normalizeRemoteAuthor(obj.optTextOrEmpty("author")),
                 status = obj.optTextOrEmpty("status"),
                 summary = obj.optTextOrEmpty("summary"),

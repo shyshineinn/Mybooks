@@ -1660,4 +1660,9 @@
     <string name="mybooks_download_read_failed">다운로드는 완료되었지만 로컬 기록을 읽을 수 없습니다</string>
     <string name="mybooks_download_done">다운로드 완료</string>
     <string name="mybooks_download_failed">다운로드 실패</string>
+    <string name="mybooks_edit_field_translators">번역자</string>
+    <string name="mybooks_edit_translators_hint">여러 이름은 、로 구분 (선택 사항)</string>
+    <string name="mybooks_edit_section_metadata">메타데이터</string>
+    <string name="mybooks_edit_section_reading">독서 정보</string>
+    <string name="mybooks_edit_section_other">기타 정보</string>
 </resources>

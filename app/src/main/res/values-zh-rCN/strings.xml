@@ -1758,4 +1758,9 @@
     <string name="mybooks_download_read_failed">下载完成但无法读取本地记录</string>
     <string name="mybooks_download_done">下载完成</string>
     <string name="mybooks_download_failed">下载失败</string>
+    <string name="mybooks_edit_field_translators">译者</string>
+    <string name="mybooks_edit_translators_hint">多位译者用顿号分隔（可选）</string>
+    <string name="mybooks_edit_section_metadata">元数据操作</string>
+    <string name="mybooks_edit_section_reading">阅读信息</string>
+    <string name="mybooks_edit_section_other">其他信息</string>
 </resources>

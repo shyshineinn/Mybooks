@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.huangder.lumibooks.R
+import com.huangder.lumibooks.data.local.dao.SyncStateDao
 import com.huangder.lumibooks.data.local.dao.MyBooksSyncStateDao
 import com.huangder.lumibooks.data.local.entity.MyBooksSyncStateEntity
 import com.huangder.lumibooks.data.sync.ContentUriRequestBody
@@ -20,6 +21,7 @@ import com.huangder.lumibooks.data.sync.normalizeRemoteAuthor
 import com.huangder.lumibooks.data.sync.optTextAt
 import com.huangder.lumibooks.data.sync.optTextOrEmpty
 import com.huangder.lumibooks.data.sync.optTextOrNull
+import com.huangder.lumibooks.data.sync.parseMyBooksTranslators
 import com.huangder.lumibooks.data.sync.parseRemoteTags
 import com.huangder.lumibooks.domain.model.Book
 import com.huangder.lumibooks.domain.model.TagNameValidator
@@ -73,7 +75,8 @@ data class MyBooksDoubanCandidate(
     val doubanId: String,
     val coverUrl: String?,
     val openlibraryId: String?,
-    val tags: List<String> = emptyList()
+    val tags: List<String> = emptyList(),
+    val translators: List<String> = emptyList()
 )
 
 data class MyBooksEditUiState(
@@ -81,6 +84,7 @@ data class MyBooksEditUiState(
     val loaded: Boolean = false,
     val title: String = "",
     val author: String = "",
+    val translators: String = "",
     val status: String = "wish",
     val summary: String = "",
     val rating: Float = 0f,
@@ -129,9 +133,10 @@ class MyBooksEditViewModel @Inject constructor(
     private val bookRepository: BookRepository,
     private val syncManager: MyBooksSyncManager,
     private val syncStateDao: MyBooksSyncStateDao,
+    private val localStateDao: SyncStateDao,
     private val tagRepository: TagRepository,
     @ApplicationContext private val context: Context
-) : ViewModel() {
+) : ViewModel(), MyBooksEditActions {
     private val api = MyBooksApiClient()
     private val metaCache = MyBooksMetaCache(context)
     private val customColumnsFile = File(context.filesDir, "mybooks/custom_columns.json")
@@ -172,7 +177,18 @@ class MyBooksEditViewModel @Inject constructor(
     }
 
     fun loadMeta(book: Book, forceRefresh: Boolean = false) {
-        if (!MyBooksConfig.isMyBooks(book)) return
+        if (!MyBooksConfig.isMyBooks(book)) {
+            metaJob?.cancel()
+            metaLoadedFor = book.id
+            _metaState.value = MyBooksMetaUiState(loading = true)
+            metaJob = viewModelScope.launch {
+                val draft = withContext(Dispatchers.IO) { runCatching { localStateDao.getValue("book_import_metadata:" + book.id) }.getOrNull() }
+                val fields = runCatching { draft?.let(::JSONObject)?.optJSONObject("fields") }.getOrNull()
+                val meta = fields?.let { runCatching { ServerBookMeta.fromJson(it.toString(), 0) }.getOrNull() }
+                _metaState.value = MyBooksMetaUiState(meta = meta, loading = false)
+            }
+            return
+        }
         refreshSyncBadge(book.id)
         if (!forceRefresh && metaLoadedFor == book.id && _metaState.value.meta != null) return
         val remoteId = MyBooksConfig.remoteIdOf(book.id) ?: return
@@ -321,7 +337,7 @@ class MyBooksEditViewModel @Inject constructor(
             return null
         }
         _uiState.value = current.copy(dirty = false, error = null, fieldErrors = emptyMap())
-        return JSONObject().put("fields", buildCreatePayload(current))
+        return JSONObject().put("fields", buildMyBooksCreatePayload(current))
             .put("coverUrl", current.coverUrl ?: JSONObject.NULL).toString()
     }
 
@@ -340,7 +356,7 @@ class MyBooksEditViewModel @Inject constructor(
             try {
                 val token = MyBooksConfig.adminToken
                 require(token.isNotBlank()) { context.getString(R.string.mybooks_readonly) }
-                val payload = buildCreatePayload(current)
+                val payload = buildMyBooksCreatePayload(current)
                 // 豆瓣填充带回来的封面：先下载再上传，建书时直接写进 cover。
                 current.coverUrl?.let { coverUrl ->
                     uploadDoubanCover(coverUrl, token)?.let { payload.put("cover", it) }
@@ -382,16 +398,6 @@ class MyBooksEditViewModel @Inject constructor(
         }
     }
 
-    /** 豆瓣 tags 可能是数组或分隔串，统一解析成去重后的标签名。 */
-    private fun parseDoubanTags(raw: Any?): List<String> {
-        val values = when (raw) {
-            is JSONArray -> buildList { for (i in 0 until raw.length()) raw.optTextAt(i)?.let(::add) }
-            is String -> raw.split('、', ',', '，', ';', '；')
-            else -> emptyList()
-        }
-        return values.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-    }
-
     /** 下载豆瓣封面并上传到服务器，返回服务端封面 URL。 */
     private suspend fun uploadDoubanCover(coverUrl: String, token: String): String? = runCatching {
         val temp = File(context.cacheDir, "mybooks/douban-cover-${System.currentTimeMillis()}.jpg")
@@ -411,60 +417,22 @@ class MyBooksEditViewModel @Inject constructor(
         if (api.fetchCover(coverUrl, dest)) dest.absolutePath else null
     }.getOrNull()
 
-    /** 新建书籍的请求体：服务端 parseBook/parseCustom 的字段形态。 */
-    private fun buildCreatePayload(state: MyBooksEditUiState): JSONObject {
-        val payload = JSONObject()
-            .put("title", state.title.trim())
-            .put("author", state.author.trim())
-            .put("status", state.status)
-            .put("summary", state.summary.trim())
-            .put("rating", state.rating.toDouble())
-            .put("series", state.series.trim())
-            .put("series_index", state.seriesIndex.trim())
-            .put("publisher", state.publisher.trim())
-            .put("pub_year", state.pubYear.trim())
-            .put("isbn", state.isbn.trim())
-            .put("douban_id", state.doubanId.trim())
-        val identifiers = JSONObject()
-        state.identifiers.forEach { row ->
-            val type = row.type.trim().lowercase(Locale.ROOT)
-            if (type.isNotEmpty() && row.value.isNotBlank()) identifiers.put(type, row.value.trim())
-        }
-        payload.put("identifiers", identifiers)
-        payload.put("tags", JSONArray(state.tags))
-        val custom = JSONObject()
-        state.customColumns.forEach { column ->
-            val value = state.customValues[column.label].orEmpty()
-            if (value.isNotBlank()) custom.put(column.label, customToServerValue(column, value))
-        }
-        payload.put("custom", custom)
-        val logs = JSONArray()
-        state.readLogs.forEach { row ->
-            val start = row.start.trim()
-            val finish = row.finish.trim()
-            if (start.isNotEmpty() || finish.isNotEmpty()) {
-                logs.put(JSONObject().put("start", start).put("finish", finish))
-            }
-        }
-        payload.put("read_logs", logs)
-        return payload
-    }
-
-    fun updateTitle(value: String) = mutate { it.copy(title = value) }
-    fun updateAuthor(value: String) = mutate { it.copy(author = value) }
-    fun updateStatus(value: String) = mutate { it.copy(status = value) }
-    fun updateSummary(value: String) = mutate { it.copy(summary = value) }
+    override fun updateTitle(value: String) = mutate { it.copy(title = value) }
+    override fun updateAuthor(value: String) = mutate { it.copy(author = value) }
+    override fun updateTranslators(value: String) = mutate { it.copy(translators = value) }
+    override fun updateStatus(value: String) = mutate { it.copy(status = value) }
+    override fun updateSummary(value: String) = mutate { it.copy(summary = value) }
     fun updateRating(value: Float) = mutate { it.copy(rating = value.coerceIn(0f, 10f)) }
-    fun updateSeries(value: String) = mutate {
+    override fun updateSeries(value: String) = mutate {
         it.copy(series = value, seriesIndex = if (value.isBlank()) "" else it.seriesIndex)
     }
-    fun updateSeriesIndex(value: String) = mutate { it.copy(seriesIndex = value) }
+    override fun updateSeriesIndex(value: String) = mutate { it.copy(seriesIndex = value) }
     fun updatePublisher(value: String) = mutate { it.copy(publisher = value) }
     fun updatePubYear(value: String) = mutate { it.copy(pubYear = value) }
-    fun updateIsbn(value: String) = mutate { it.copy(isbn = value) }
+    override fun updateIsbn(value: String) = mutate { it.copy(isbn = value) }
     fun updateDoubanId(value: String) = mutate { it.copy(doubanId = value) }
 
-    fun updateIdentifier(index: Int, type: String? = null, value: String? = null) = mutate { state ->
+    override fun updateIdentifier(index: Int, type: String?, value: String?) = mutate { state ->
         val rows = state.identifiers.toMutableList()
         val row = rows.getOrNull(index) ?: return@mutate state
         rows[index] = row.copy(
@@ -474,19 +442,19 @@ class MyBooksEditViewModel @Inject constructor(
         state.copy(identifiers = rows)
     }
 
-    fun addIdentifier() = mutate { it.copy(identifiers = it.identifiers + MyBooksIdentifierDraft()) }
+    override fun addIdentifier() = mutate { it.copy(identifiers = it.identifiers + MyBooksIdentifierDraft()) }
 
-    fun removeIdentifier(index: Int) = mutate { state ->
+    override fun removeIdentifier(index: Int) = mutate { state ->
         val rows = state.identifiers.toMutableList()
         if (index in rows.indices) rows.removeAt(index)
         state.copy(identifiers = rows)
     }
 
-    fun updateCustom(label: String, value: String) = mutate { state ->
+    override fun updateCustom(label: String, value: String) = mutate { state ->
         state.copy(customValues = state.customValues + (label to value))
     }
 
-    fun updateReadLog(index: Int, start: String? = null, finish: String? = null) = mutate { state ->
+    override fun updateReadLog(index: Int, start: String?, finish: String?) = mutate { state ->
         val rows = state.readLogs.toMutableList()
         val row = rows.getOrNull(index) ?: return@mutate state
         rows[index] = row.copy(start = start ?: row.start, finish = finish ?: row.finish)
@@ -499,14 +467,14 @@ class MyBooksEditViewModel @Inject constructor(
         state.copy(readLogs = rows, status = status)
     }
 
-    fun addReadLog() = mutate { state ->
+    override fun addReadLog() = mutate { state ->
         state.copy(
             readLogs = state.readLogs + MyBooksReadLogDraft(),
             status = if (state.status == "wish") "reading" else state.status
         )
     }
 
-    fun removeReadLog(index: Int) = mutate { state ->
+    override fun removeReadLog(index: Int) = mutate { state ->
         val rows = state.readLogs.toMutableList()
         if (index in rows.indices) rows.removeAt(index)
         state.copy(
@@ -613,7 +581,7 @@ class MyBooksEditViewModel @Inject constructor(
         }
     }
 
-    fun lookupDouban() {
+    override fun lookupDouban() {
         val state = _uiState.value
         if (state.lookupRunning) return
         val isbn = state.isbn.trim()
@@ -631,7 +599,7 @@ class MyBooksEditViewModel @Inject constructor(
                     val raw = withContext(Dispatchers.IO) { api.lookupIsbn(isbn) }
                     val obj = JSONObject(raw)
                     if (obj.optString("status") == "found") {
-                        val candidate = parseCandidate(obj.optJSONObject("book")) 
+                        val candidate = parseMyBooksCandidate(obj.optJSONObject("book"))
                         if (candidate != null) {
                             applyCandidate(candidate)
                             _uiState.value = _uiState.value.copy(
@@ -676,7 +644,9 @@ class MyBooksEditViewModel @Inject constructor(
         }
     }
 
-    fun searchByTitle(query: String = _uiState.value.title.trim()) {
+    override fun searchByTitle() = searchByTitle(_uiState.value.title.trim())
+
+    private fun searchByTitle(query: String) {
         if (query.isBlank()) return
         lookupJob?.cancel()
         lookupJob = viewModelScope.launch {
@@ -691,7 +661,7 @@ class MyBooksEditViewModel @Inject constructor(
                 val results = obj.optJSONArray("results") ?: JSONArray()
                 val candidates = buildList {
                     for (i in 0 until results.length()) {
-                        parseCandidate(results.optJSONObject(i))?.let(::add)
+                        parseMyBooksCandidate(results.optJSONObject(i))?.let(::add)
                     }
                 }
                 _uiState.value = _uiState.value.copy(
@@ -715,38 +685,8 @@ class MyBooksEditViewModel @Inject constructor(
         }
     }
 
-    fun applyCandidate(candidate: MyBooksDoubanCandidate) {
-        mutate { state ->
-            var identifiers = state.identifiers
-            if (!candidate.openlibraryId.isNullOrBlank()) {
-                val index = identifiers.indexOfFirst { it.type.equals("openlibrary", true) }
-                identifiers = if (index >= 0) {
-                    identifiers.toMutableList().also {
-                        it[index] = it[index].copy(value = candidate.openlibraryId)
-                    }
-                } else {
-                    identifiers + MyBooksIdentifierDraft("openlibrary", candidate.openlibraryId)
-                }
-            }
-            state.copy(
-                title = candidate.title.ifBlank { state.title },
-                author = candidate.author.ifBlank { state.author },
-                summary = candidate.summary.ifBlank { state.summary },
-                publisher = candidate.publisher.ifBlank { state.publisher },
-                pubYear = candidate.pubYear.ifBlank { state.pubYear },
-                isbn = candidate.isbn.ifBlank { state.isbn },
-                doubanId = candidate.doubanId.ifBlank { state.doubanId },
-                rating = if (candidate.rating > 0) candidate.rating.toFloat() else state.rating,
-                identifiers = identifiers,
-                candidates = emptyList(),
-                coverUrl = candidate.coverUrl?.takeIf { it.isNotBlank() } ?: state.coverUrl,
-                tags = (state.tags + candidate.tags)
-                    .map { TagNameValidator.clean(it) }
-                    .filter { TagNameValidator.isValid(it) }
-                    .distinctBy { TagNameValidator.normalized(it) },
-                lookupMessage = context.getString(R.string.mybooks_douban_filled)
-            )
-        }
+    override fun applyCandidate(candidate: MyBooksDoubanCandidate) {
+        mutate { applyMyBooksCandidate(it, candidate, context.getString(R.string.mybooks_douban_filled)) }
     }
 
     fun clearCandidates() {
@@ -816,6 +756,7 @@ class MyBooksEditViewModel @Inject constructor(
             // 按文件名写入的临时值，用它做兜底会把文件来源的值带进草稿。
             title = value("title").ifBlank { book.title.trim() },
             author = value("author").ifBlank { normalizeRemoteAuthor(book.author) },
+            translators = parseMyBooksTranslators(if (overrides.has("translators")) overrides.opt("translators") else base.opt("translators")).joinToString("、"),
             status = if (status in setOf("wish", "reading", "done")) status else "wish",
             summary = value("summary"),
             rating = baseRating.toFloat().coerceIn(0f, 10f),
@@ -838,6 +779,7 @@ class MyBooksEditViewModel @Inject constructor(
         val obj = JSONObject()
             .put("title", meta.title)
             .put("author", meta.author)
+            .put("translators", JSONArray(meta.translators))
             .put("status", meta.status.ifBlank { "wish" })
             .put("summary", meta.summary)
             .put("rating", meta.rating ?: 0.0)
@@ -874,55 +816,8 @@ class MyBooksEditViewModel @Inject constructor(
 
     // ────────────────────────── save collection ──────────────────────────
 
-    private fun collectScalarChanges(
-        state: MyBooksEditUiState,
-        changed: MutableMap<String, Any?>,
-        managed: MutableSet<String>
-    ) {
-        val fields = listOf("title", "author", "status", "summary", "rating", "series", "series_index", "publisher", "pub_year", "isbn", "douban_id")
-        managed += fields
-        val baseValues = mapOf(
-            "title" to base.optTextOrEmpty("title").ifBlank { "未命名" },
-            "author" to base.optTextOrEmpty("author").ifBlank { "未知作者" },
-            "status" to base.optTextOrEmpty("status").ifBlank { "wish" },
-            "summary" to base.optTextOrEmpty("summary"),
-            "rating" to base.optDouble("rating", 0.0),
-            "series" to base.optTextOrEmpty("series"),
-            "series_index" to base.opt("series_index")?.toString().takeUnless { it == "null" }.orEmpty(),
-            "publisher" to base.optTextOrEmpty("publisher"),
-            "pub_year" to base.optTextOrEmpty("pub_year"),
-            "isbn" to base.optTextOrEmpty("isbn"),
-            "douban_id" to base.optTextOrEmpty("douban_id")
-        )
-        val draftValues = mapOf(
-            "title" to state.title.trim().ifBlank { "未命名" },
-            "author" to state.author.trim().ifBlank { "未知作者" },
-            "status" to state.status,
-            "summary" to state.summary.trim(),
-            "rating" to state.rating.toDouble(),
-            "series" to state.series.trim(),
-            "series_index" to state.seriesIndex.trim(),
-            "publisher" to state.publisher.trim(),
-            "pub_year" to state.pubYear.trim(),
-            "isbn" to state.isbn.trim(),
-            "douban_id" to state.doubanId.trim()
-        )
-        // 比较沿用占位口径（空值与基线等价，不产生幽灵改动）；
-        // 真正提交时用用户原始输入，避免把占位文案写进服务器。
-        val rawValues = mapOf(
-            "title" to state.title.trim(),
-            "author" to state.author.trim()
-        )
-        for ((key, value) in draftValues) {
-            val baseValue = baseValues[key]
-            val equal = when (key) {
-                "rating" -> (baseValue as? Number)?.toDouble() == (value as Double)
-                "series_index" -> (baseValue as? String).orEmpty().ifBlank { "0" } == (value as String).ifBlank { "0" }
-                else -> baseValue == value
-            }
-            if (!equal) changed[key] = rawValues[key] ?: value
-        }
-    }
+    private fun collectScalarChanges(state: MyBooksEditUiState, changed: MutableMap<String, Any?>, managed: MutableSet<String>) =
+        collectMyBooksScalarChanges(base, state, changed, managed)
 
     private fun collectIdentifierChanges(
         state: MyBooksEditUiState,
@@ -1073,6 +968,7 @@ class MyBooksEditViewModel @Inject constructor(
     private fun draftEquals(a: MyBooksEditUiState, b: MyBooksEditUiState): Boolean =
         a.title == b.title &&
             a.author == b.author &&
+            a.translators == b.translators &&
             a.status == b.status &&
             a.summary == b.summary &&
             a.rating == b.rating &&
@@ -1145,20 +1041,6 @@ class MyBooksEditViewModel @Inject constructor(
         }
     }
 
-    private fun customToServerValue(column: MyBooksCustomColumn, draft: String): Any {
-        val text = draft.trim()
-        return when {
-            column.multiple -> JSONArray(
-                text.split('、', ',', '，', ';', '；').map { it.trim() }.filter { it.isNotEmpty() }
-            )
-            column.datatype == "int" -> if (text.isEmpty()) "" else text.toLongOrNull() ?: 0L
-            column.datatype == "float" || column.datatype == "rating" ->
-                if (text.isEmpty()) "" else text.toDoubleOrNull() ?: 0.0
-            column.datatype == "bool" -> if (text.isEmpty()) "" else text == "1"
-            else -> text
-        }
-    }
-
     private fun readLogsFrom(raw: Any?): List<Pair<String, String>> {
         val array = when (raw) {
             is JSONArray -> raw
@@ -1181,7 +1063,7 @@ class MyBooksEditViewModel @Inject constructor(
         val effective = JSONObject(baseObj.toString())
         if (overrides.length() == 0) return effective
         listOf(
-            "title", "author", "status", "summary", "rating", "series", "series_index",
+            "title", "author", "translators", "status", "summary", "rating", "series", "series_index",
             "publisher", "pub_year", "isbn", "douban_id"
         ).forEach { key ->
             if (overrides.has(key)) effective.put(key, overrides.opt(key))
@@ -1314,26 +1196,6 @@ class MyBooksEditViewModel @Inject constructor(
 
     private fun MyBooksEditUiState.recalculateDirty(baseDraft: MyBooksEditUiState?): MyBooksEditUiState =
         copy(dirty = baseDraft != null && !draftEquals(this, baseDraft))
-
-    private fun parseCandidate(obj: JSONObject?): MyBooksDoubanCandidate? {
-        if (obj == null) return null
-        val title = obj.optTextOrEmpty("title").trim()
-        if (title.isEmpty()) return null
-        return MyBooksDoubanCandidate(
-            title = title,
-            author = obj.optTextOrEmpty("author").trim(),
-            summary = obj.optTextOrEmpty("summary").trim(),
-            publisher = obj.optTextOrEmpty("publisher").trim(),
-            pubYear = obj.optTextOrEmpty("pubYear").ifBlank { obj.optTextOrEmpty("pub_year") }.trim(),
-            isbn = obj.optTextOrEmpty("isbn").trim(),
-            rating = obj.optDouble("rating", 0.0),
-            doubanId = obj.optTextOrEmpty("doubanId").ifBlank { obj.optTextOrEmpty("douban_id") }.trim(),
-            coverUrl = obj.optTextOrEmpty("cover").takeIf { it.isNotBlank() },
-            openlibraryId = obj.optTextOrEmpty("openlibraryId").ifBlank { obj.optTextOrEmpty("openlibrary_id") }
-                .takeIf { it.isNotBlank() },
-            tags = parseDoubanTags(obj.opt("tags"))
-        )
-    }
 
     private fun doubanError(error: Exception): String = when ((error as? MyBooksHttpException)?.status) {
         502 -> context.getString(R.string.mybooks_douban_blocked)

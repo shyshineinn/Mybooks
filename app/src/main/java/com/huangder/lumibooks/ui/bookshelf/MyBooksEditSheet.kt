@@ -125,7 +125,7 @@ fun MyBooksEditSheet(
             if (localImport && localDraft != null) onLocalImportSaved?.invoke(requireNotNull(localDraft))
             else onDismiss(viewModel.uiState.value.created)
         },
-        maxHeightFraction = 0.62f,
+        maxHeightFraction = 0.92f,
         onRequestDismiss = {
             // 必须读 StateFlow 的实时值：collectAsState 的 state 要等下一次重组才更新，
             // 保存刚成功那一刻读到的还是旧的 saving=true，关闭会被拦掉，弹窗就关不掉。
@@ -209,14 +209,14 @@ private fun MyBooksDiscardConfirm(onKeep: () -> Unit, onDiscard: () -> Unit) {
 }
 
 @Composable
-private fun ColumnScope.EditSheetContent(
+internal fun ColumnScope.EditSheetContent(
     state: MyBooksEditUiState,
     createMode: Boolean,
     localImport: Boolean = false,
     onClose: () -> Unit,
     onCancel: () -> Unit,
     onSave: () -> Unit,
-    viewModel: MyBooksEditViewModel
+    viewModel: MyBooksEditActions
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -340,7 +340,7 @@ private fun ColumnScope.EditSheetContent(
 }
 
 @Composable
-private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEditViewModel) {
+private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
     SectionHeader(stringResource(R.string.mybooks_edit_section_basic))
 
     EditorTextField(
@@ -359,6 +359,27 @@ private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
     )
     Spacer(Modifier.height(AppSpace.md))
 
+    EditorTextField(
+        value = state.translators,
+        onValueChange = viewModel::updateTranslators,
+        label = stringResource(R.string.mybooks_edit_field_translators),
+        placeholder = stringResource(R.string.mybooks_edit_translators_hint),
+        enabled = !state.saving
+    )
+    Spacer(Modifier.height(AppSpace.md))
+    EditorTextField(
+        value = state.isbn,
+        onValueChange = viewModel::updateIsbn,
+        label = stringResource(R.string.mybooks_edit_field_isbn),
+        error = state.fieldErrors["isbn"],
+        keyboardType = KeyboardType.Ascii,
+        enabled = !state.saving
+    )
+    Spacer(Modifier.height(AppSpace.lg))
+    SectionHeader(stringResource(R.string.mybooks_edit_section_metadata))
+    DoubanFillSection(state, viewModel)
+    Spacer(Modifier.height(AppSpace.lg))
+    SectionHeader(stringResource(R.string.mybooks_edit_section_reading))
     Text(
         text = stringResource(R.string.mybooks_edit_field_status),
         fontSize = AppType.Caption,
@@ -381,41 +402,6 @@ private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
             })
         }
     )
-    Spacer(Modifier.height(AppSpace.md))
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = stringResource(R.string.mybooks_edit_field_rating),
-            fontSize = AppType.Caption,
-            fontWeight = FontWeight.Medium,
-            color = AppColors.TextSecondary,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = if (state.rating <= 0f) {
-                stringResource(R.string.mybooks_edit_not_rated)
-            } else {
-                stringResource(R.string.mybooks_edit_rating_value, String.format(Locale.US, "%.1f", state.rating))
-            },
-            fontSize = AppType.BodySmall,
-            color = AppColors.TextSecondary
-        )
-    }
-    Spacer(Modifier.height(AppSpace.sm))
-    Box(Modifier.alpha(if (state.saving) 0.6f else 1f)) {
-        PillSlider(
-            value = state.rating,
-            onValueChange = { if (!state.saving) viewModel.updateRating(it) },
-            valueRange = 0f..10f,
-            step = 0.1f,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = AppSpace.xs)
-        )
-    }
     Spacer(Modifier.height(AppSpace.md))
 
     ResponsiveFieldPair(
@@ -441,57 +427,7 @@ private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
         }
     )
     Spacer(Modifier.height(AppSpace.md))
-    ResponsiveFieldPair(
-        first = { modifier ->
-            EditorTextField(
-                value = state.publisher,
-                onValueChange = viewModel::updatePublisher,
-                label = stringResource(R.string.mybooks_edit_field_publisher),
-                enabled = !state.saving,
-                modifier = modifier
-            )
-        },
-        second = { modifier ->
-            EditorTextField(
-                value = state.pubYear,
-                onValueChange = viewModel::updatePubYear,
-                label = stringResource(R.string.mybooks_edit_field_pub_year),
-                error = state.fieldErrors["pub_year"],
-                enabled = !state.saving,
-                modifier = modifier
-            )
-        }
-    )
-    Spacer(Modifier.height(AppSpace.md))
-    ResponsiveFieldPair(
-        first = { modifier ->
-            EditorTextField(
-                value = state.isbn,
-                onValueChange = viewModel::updateIsbn,
-                label = stringResource(R.string.mybooks_edit_field_isbn),
-                error = state.fieldErrors["isbn"],
-                keyboardType = KeyboardType.Ascii,
-                enabled = !state.saving,
-                modifier = modifier
-            )
-        },
-        second = { modifier ->
-            EditorTextField(
-                value = state.doubanId,
-                onValueChange = viewModel::updateDoubanId,
-                label = stringResource(R.string.mybooks_edit_field_douban),
-                error = state.fieldErrors["douban_id"],
-                keyboardType = KeyboardType.Ascii,
-                enabled = !state.saving,
-                modifier = modifier
-            )
-        }
-    )
-    Spacer(Modifier.height(AppSpace.md))
-
-    DoubanFillSection(state, viewModel)
-
-    Spacer(Modifier.height(AppSpace.md))
+    SectionHeader(stringResource(R.string.mybooks_edit_section_other))
     EditorTextField(
         value = state.summary,
         onValueChange = viewModel::updateSummary,
@@ -507,7 +443,7 @@ private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DoubanFillSection(state: MyBooksEditUiState, viewModel: MyBooksEditViewModel) {
+private fun DoubanFillSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
     val context = LocalContext.current
     val toast = remember(context) { ReplacingToast(context) }
     var lastLookupMessage by remember { mutableStateOf<String?>(null) }
@@ -665,6 +601,7 @@ private fun DoubanCandidateRow(
                 )
                 val details = listOfNotNull(
                     candidate.author.takeIf { it.isNotBlank() },
+                    candidate.translators.takeIf { it.isNotEmpty() }?.let { stringResource(R.string.mybooks_edit_field_translators) + "：" + it.joinToString("、") },
                     candidate.publisher.takeIf { it.isNotBlank() },
                     candidate.pubYear.takeIf { it.isNotBlank() }
                 ).joinToString(" · ")
@@ -696,7 +633,7 @@ private fun DoubanCandidateRow(
 }
 
 @Composable
-private fun IdentifiersSection(state: MyBooksEditUiState, viewModel: MyBooksEditViewModel) {
+private fun IdentifiersSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
     SectionHeader(stringResource(R.string.mybooks_edit_section_identifiers))
     if (state.identifiers.isEmpty()) {
         Text(
@@ -779,7 +716,7 @@ private fun IdentifiersSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CustomFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEditViewModel) {
+private fun CustomFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
     SectionHeader(stringResource(R.string.mybooks_edit_section_custom))
     Column(verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
         state.customColumns.forEach { column ->
@@ -912,7 +849,7 @@ private fun CustomFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdi
 }
 
 @Composable
-private fun ReadingLogsSection(state: MyBooksEditUiState, viewModel: MyBooksEditViewModel) {
+private fun ReadingLogsSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
     SectionHeader(stringResource(R.string.mybooks_edit_section_read_logs))
     Column(verticalArrangement = Arrangement.spacedBy(AppSpace.sm)) {
         state.readLogs.forEachIndexed { index, row ->

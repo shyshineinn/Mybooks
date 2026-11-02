@@ -1658,4 +1658,9 @@
     <string name="mybooks_download_read_failed">下載完成但無法讀取本機記錄</string>
     <string name="mybooks_download_done">下載完成</string>
     <string name="mybooks_download_failed">下載失敗</string>
+    <string name="mybooks_edit_field_translators">譯者</string>
+    <string name="mybooks_edit_translators_hint">多位譯者以頓號分隔（選填）</string>
+    <string name="mybooks_edit_section_metadata">中繼資料操作</string>
+    <string name="mybooks_edit_section_reading">閱讀資訊</string>
+    <string name="mybooks_edit_section_other">其他資訊</string>
 </resources>

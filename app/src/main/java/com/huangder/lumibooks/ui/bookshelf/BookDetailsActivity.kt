@@ -324,7 +324,7 @@ fun BookDetailsScreen(
     val syncBadge by editViewModel.syncBadge.collectAsState()
     val myBooksSyncing by homeViewModel.myBooksSyncing.collectAsState()
     LaunchedEffect(book.id) {
-        if (MyBooksConfig.isMyBooks(book)) editViewModel.loadMeta(book)
+        editViewModel.loadMeta(book)
     }
     LaunchedEffect(myBooksSyncing) {
         if (!myBooksSyncing && MyBooksConfig.isMyBooks(book)) {
@@ -837,6 +837,11 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
         ) {
             DetailRow(stringResource(R.string.book_title_label), book.title, true, onEdit)
             DetailRow(stringResource(R.string.book_author_label), book.author, true, onEdit)
+            if (!serverBook) {
+                metaState.meta?.translators?.takeIf { it.isNotEmpty() }?.let {
+                    DetailRow(stringResource(R.string.mybooks_edit_field_translators), it.joinToString("、"), false)
+                }
+            }
             meta?.let { MyBooksDetailRows(it) }
         }
         InformationCard(
