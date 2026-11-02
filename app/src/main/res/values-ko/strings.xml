@@ -1579,7 +1579,7 @@
     <string name="mybooks_edit_saving">저장 중…</string>
     <string name="mybooks_edit_section_basic">기본 정보</string>
     <string name="mybooks_edit_section_custom">사용자 정의 필드</string>
-    <string name="mybooks_edit_section_identifiers">식별자</string>
+    <string name="mybooks_edit_section_identifiers">기타 식별자</string>
     <string name="mybooks_edit_section_read_logs">읽기 기록</string>
     <string name="mybooks_edit_series_index_invalid">시리즈 권 번호는 0 이상의 정수여야 합니다</string>
     <string name="mybooks_edit_series_required">권 번호를 입력하기 전에 시리즈를 입력하세요</string>
@@ -1663,6 +1663,9 @@
     <string name="mybooks_edit_field_translators">번역자</string>
     <string name="mybooks_edit_translators_hint">여러 이름은 、로 구분 (선택 사항)</string>
     <string name="mybooks_edit_section_metadata">메타데이터</string>
-    <string name="mybooks_edit_section_reading">독서 정보</string>
+    <string name="mybooks_edit_section_reading">독서 관리</string>
     <string name="mybooks_edit_section_other">기타 정보</string>
+    <string name="mybooks_edit_more_info">추가 도서 정보</string>
+    <string name="mybooks_edit_more_expanded">펼쳐짐</string>
+    <string name="mybooks_edit_more_collapsed">접힘</string>
 </resources>

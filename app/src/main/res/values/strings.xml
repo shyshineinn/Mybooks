@@ -1821,7 +1821,7 @@
     <string name="mybooks_edit_date_order">读完日期不能早于开始日期</string>
     <string name="mybooks_edit_custom_invalid">“%1$s”的输入不合法</string>
     <string name="mybooks_edit_section_basic">基本信息</string>
-    <string name="mybooks_edit_section_identifiers">标识符</string>
+    <string name="mybooks_edit_section_identifiers">其他标识符</string>
     <string name="mybooks_edit_section_custom">自定义字段</string>
     <string name="mybooks_edit_section_read_logs">阅读记录</string>
     <string name="mybooks_edit_field_title">书名</string>
@@ -2005,6 +2005,9 @@
     <string name="mybooks_edit_field_translators">译者</string>
     <string name="mybooks_edit_translators_hint">多位译者用顿号分隔（可选）</string>
     <string name="mybooks_edit_section_metadata">元数据操作</string>
-    <string name="mybooks_edit_section_reading">阅读信息</string>
+    <string name="mybooks_edit_section_reading">阅读管理</string>
     <string name="mybooks_edit_section_other">其他信息</string>
+    <string name="mybooks_edit_more_info">更多书籍信息</string>
+    <string name="mybooks_edit_more_expanded">已展开</string>
+    <string name="mybooks_edit_more_collapsed">已收起</string>
 </resources>

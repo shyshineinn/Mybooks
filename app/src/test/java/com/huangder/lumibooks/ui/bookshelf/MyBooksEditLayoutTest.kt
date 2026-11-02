@@ -48,7 +48,11 @@ class MyBooksEditLayoutTest {
         for(id in listOf(R.string.mybooks_edit_field_rating, R.string.mybooks_edit_field_publisher, R.string.mybooks_edit_field_pub_year, R.string.mybooks_edit_field_douban)) {
             compose.onNodeWithText(text(id)).assertDoesNotExist()
         }
+        compose.onNodeWithText(text(R.string.mybooks_edit_field_summary)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.mybooks_edit_section_basic)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.mybooks_edit_section_metadata)).assertDoesNotExist()
         val before = compose.onNodeWithText(text(save)).fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithTag("mybooks-more-info").performScrollTo().performClick()
         compose.onNodeWithText(text(R.string.mybooks_edit_add_read)).performScrollTo().assertIsDisplayed()
         assertEquals(before, compose.onNodeWithText(text(save)).fetchSemanticsNode().boundsInRoot)
         compose.onNodeWithText(text(title)).assertIsDisplayed()

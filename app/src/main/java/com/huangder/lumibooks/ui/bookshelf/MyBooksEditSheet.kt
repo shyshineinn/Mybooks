@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -35,6 +36,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -45,22 +47,31 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -126,6 +137,7 @@ fun MyBooksEditSheet(
             else onDismiss(viewModel.uiState.value.created)
         },
         maxHeightFraction = 0.62f,
+        contentPadding = PaddingValues(horizontal = 24.dp, vertical = AppSpace.md),
         onRequestDismiss = {
             // 必须读 StateFlow 的实时值：collectAsState 的 state 要等下一次重组才更新，
             // 保存刚成功那一刻读到的还是旧的 saving=true，关闭会被拦掉，弹窗就关不掉。
@@ -218,8 +230,17 @@ internal fun ColumnScope.EditSheetContent(
     onSave: () -> Unit,
     viewModel: MyBooksEditActions
 ) {
+    var moreExpanded by rememberSaveable { mutableStateOf(false) }
+    val advancedHasErrors = state.fieldErrors.keys.any { key ->
+        key == "summary" || key.startsWith("identifier.") ||
+            key.startsWith("custom.") || key.startsWith("readlog.")
+    }
+    LaunchedEffect(advancedHasErrors) {
+        if (advancedHasErrors) moreExpanded = true
+    }
+    val showMore = moreExpanded || advancedHasErrors
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().testTag("mybooks-edit-header"),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -281,36 +302,46 @@ internal fun ColumnScope.EditSheetContent(
             modifier = Modifier
                 .weight(1f, fill = false)
                 .fillMaxWidth()
+                .testTag("mybooks-edit-scroll")
                 .verticalScroll(rememberScrollState())
         ) {
             BasicFieldsSection(state, viewModel)
-            if (state.identifiers.isNotEmpty() || state.loaded) {
-                Spacer(Modifier.height(AppSpace.lg))
-                IdentifiersSection(state, viewModel)
-            }
-            if (state.customColumns.isNotEmpty()) {
-                Spacer(Modifier.height(AppSpace.lg))
-                CustomFieldsSection(state, viewModel)
-            }
-            Spacer(Modifier.height(AppSpace.lg))
-            ReadingLogsSection(state, viewModel)
-        }
-
-        state.error?.let { error ->
-            Text(
-                text = error,
-                fontSize = AppType.Caption,
-                color = errorColor(),
-                modifier = Modifier
-                    .padding(top = AppSpace.sm)
-                    .semantics { liveRegion = LiveRegionMode.Polite }
+            Spacer(Modifier.height(24.dp))
+            ReadingManagementSection(state, viewModel)
+            Spacer(Modifier.height(24.dp))
+            MoreBookInformationToggle(
+                expanded = showMore,
+                enabled = !state.saving && !advancedHasErrors,
+                onToggle = { moreExpanded = !moreExpanded }
             )
+            if (showMore) {
+                Spacer(Modifier.height(8.dp))
+                SummarySection(state, viewModel)
+                Spacer(Modifier.height(24.dp))
+                IdentifiersSection(state, viewModel)
+                if (state.customColumns.isNotEmpty()) {
+                    Spacer(Modifier.height(24.dp))
+                    CustomFieldsSection(state, viewModel)
+                }
+                Spacer(Modifier.height(24.dp))
+                ReadingLogsSection(state, viewModel)
+            }
+            state.error?.let { error ->
+                Text(
+                    text = error,
+                    fontSize = AppType.Caption,
+                    color = errorColor(),
+                    modifier = Modifier.padding(top = AppSpace.sm)
+                        .semantics { liveRegion = LiveRegionMode.Polite }
+                )
+            }
+            Spacer(Modifier.height(4.dp))
         }
     }
 
     Spacer(Modifier.height(AppSpace.md))
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().testTag("mybooks-edit-actions"),
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -341,51 +372,61 @@ internal fun ColumnScope.EditSheetContent(
 
 @Composable
 private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
-    SectionHeader(stringResource(R.string.mybooks_edit_section_basic))
-
     EditorTextField(
         value = state.title,
         onValueChange = viewModel::updateTitle,
         label = stringResource(R.string.mybooks_edit_field_title),
+        singleLine = true,
+        ellipsizeWhenUnfocused = true,
         error = state.fieldErrors["title"],
-        enabled = !state.saving
+        enabled = !state.saving,
+        modifier = Modifier.testTag("mybooks-title-field")
     )
-    Spacer(Modifier.height(AppSpace.md))
+    Spacer(Modifier.height(16.dp))
     EditorTextField(
         value = state.author,
         onValueChange = viewModel::updateAuthor,
         label = stringResource(R.string.mybooks_edit_field_author),
-        enabled = !state.saving
+        singleLine = true,
+        ellipsizeWhenUnfocused = true,
+        enabled = !state.saving,
+        modifier = Modifier.testTag("mybooks-author-field")
     )
-    Spacer(Modifier.height(AppSpace.md))
-
+    Spacer(Modifier.height(16.dp))
     EditorTextField(
         value = state.translators,
         onValueChange = viewModel::updateTranslators,
         label = stringResource(R.string.mybooks_edit_field_translators),
         placeholder = stringResource(R.string.mybooks_edit_translators_hint),
-        enabled = !state.saving
+        singleLine = true,
+        ellipsizeWhenUnfocused = true,
+        enabled = !state.saving,
+        modifier = Modifier.testTag("mybooks-translators-field")
     )
-    Spacer(Modifier.height(AppSpace.md))
+    Spacer(Modifier.height(16.dp))
     EditorTextField(
         value = state.isbn,
         onValueChange = viewModel::updateIsbn,
         label = stringResource(R.string.mybooks_edit_field_isbn),
         error = state.fieldErrors["isbn"],
         keyboardType = KeyboardType.Ascii,
-        enabled = !state.saving
+        enabled = !state.saving,
+        modifier = Modifier.testTag("mybooks-isbn-field")
     )
-    Spacer(Modifier.height(AppSpace.lg))
-    SectionHeader(stringResource(R.string.mybooks_edit_section_metadata))
+    Spacer(Modifier.height(6.dp))
     DoubanFillSection(state, viewModel)
-    Spacer(Modifier.height(AppSpace.lg))
+}
+
+@Composable
+private fun ReadingManagementSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
     SectionHeader(stringResource(R.string.mybooks_edit_section_reading))
     Text(
         text = stringResource(R.string.mybooks_edit_field_status),
-        fontSize = AppType.Caption,
+        fontSize = 13.sp,
+        lineHeight = 16.sp,
         fontWeight = FontWeight.Medium,
         color = AppColors.TextSecondary,
-        modifier = Modifier.padding(bottom = AppSpace.sm)
+        modifier = Modifier.padding(bottom = 6.dp)
     )
     StatusSegment(
         selected = when (state.status) {
@@ -402,14 +443,14 @@ private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
             })
         }
     )
-    Spacer(Modifier.height(AppSpace.md))
-
+    Spacer(Modifier.height(16.dp))
     ResponsiveFieldPair(
         first = { modifier ->
             EditorTextField(
                 value = state.series,
                 onValueChange = viewModel::updateSeries,
                 label = stringResource(R.string.mybooks_edit_field_series),
+                ellipsizeWhenUnfocused = true,
                 enabled = !state.saving,
                 modifier = modifier
             )
@@ -426,8 +467,40 @@ private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
             )
         }
     )
-    Spacer(Modifier.height(AppSpace.md))
-    SectionHeader(stringResource(R.string.mybooks_edit_section_other))
+}
+
+@Composable
+private fun MoreBookInformationToggle(expanded: Boolean, enabled: Boolean, onToggle: () -> Unit) {
+    val description = stringResource(
+        if (expanded) R.string.mybooks_edit_more_expanded else R.string.mybooks_edit_more_collapsed
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
+            .testTag("mybooks-more-info")
+            .semantics { stateDescription = description }
+            .clickable(enabled = enabled, role = Role.Button, onClick = onToggle),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = stringResource(R.string.mybooks_edit_more_info),
+            fontSize = 13.sp,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.weight(1f)
+        )
+        Icon(
+            imageVector = if (expanded) AppIcons.CaretUp else AppIcons.CaretDown,
+            contentDescription = null,
+            tint = AppColors.TextSecondary,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+@Composable
+private fun SummarySection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
     EditorTextField(
         value = state.summary,
         onValueChange = viewModel::updateSummary,
@@ -457,20 +530,9 @@ private fun DoubanFillSection(state: MyBooksEditUiState, viewModel: MyBooksEditA
     val canFill = state.title.isNotBlank() || state.isbn.isNotBlank()
     Row(
         modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.weight(1f)) {
-            // 只在按钮不可用时说明原因；常驻说明文案一律不留。
-            if (!canFill) {
-                Text(
-                    text = stringResource(R.string.mybooks_douban_need_title_isbn),
-                    fontSize = AppType.Caption,
-                    color = AppColors.TextSecondary,
-                    lineHeight = 16.sp
-                )
-            }
-        }
-        Spacer(Modifier.width(AppSpace.sm))
         LiquidGlassTextButton(
             text = if (state.lookupRunning) {
                 stringResource(R.string.mybooks_douban_filling)
@@ -479,8 +541,16 @@ private fun DoubanFillSection(state: MyBooksEditUiState, viewModel: MyBooksEditA
             },
             enabled = canFill && !state.lookupRunning && !state.saving,
             contentColor = AppColors.TextSecondary,
-            modifier = Modifier.height(44.dp),
+            modifier = Modifier.heightIn(min = 44.dp).testTag("mybooks-douban-fill"),
             onClick = { viewModel.lookupDouban() }
+        )
+    }
+    if (!canFill) {
+        Text(
+            text = stringResource(R.string.mybooks_douban_need_title_isbn),
+            fontSize = 13.sp,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.padding(top = 4.dp)
         )
     }
     if (state.lookupRunning) {
@@ -596,8 +666,6 @@ private fun DoubanCandidateRow(
                     fontSize = AppType.BodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = AppColors.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
                 )
                 val details = listOfNotNull(
                     candidate.author.takeIf { it.isNotBlank() },
@@ -610,9 +678,7 @@ private fun DoubanCandidateRow(
                         text = details,
                         fontSize = AppType.Caption,
                         color = AppColors.TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                            )
                 }
                 val extra = listOfNotNull(
                     if (candidate.rating > 0) String.format(Locale.US, "%.1f/10", candidate.rating) else null,
@@ -623,9 +689,7 @@ private fun DoubanCandidateRow(
                         text = extra,
                         fontSize = AppType.Caption,
                         color = AppColors.TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                            )
                 }
             }
         }
@@ -646,7 +710,7 @@ private fun IdentifiersSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
         Column(verticalArrangement = Arrangement.spacedBy(AppSpace.sm)) {
             state.identifiers.forEachIndexed { index, row ->
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    val stack = maxWidth < 360.dp
+                    val stack = maxWidth.value / LocalDensity.current.fontScale < 360f
                     val error = state.fieldErrors["identifier.$index"]
                     if (stack) {
                         Column(verticalArrangement = Arrangement.spacedBy(AppSpace.xs)) {
@@ -725,10 +789,11 @@ private fun CustomFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdi
             Column(Modifier.fillMaxWidth()) {
                 Text(
                     text = column.name,
-                    fontSize = AppType.Caption,
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp,
                     fontWeight = FontWeight.Medium,
                     color = AppColors.TextSecondary,
-                    modifier = Modifier.padding(bottom = AppSpace.sm)
+                    modifier = Modifier.padding(bottom = 6.dp)
                 )
                 when (column.datatype) {
                     "bool" -> {
@@ -854,7 +919,7 @@ private fun ReadingLogsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
     Column(verticalArrangement = Arrangement.spacedBy(AppSpace.sm)) {
         state.readLogs.forEachIndexed { index, row ->
             BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val stack = maxWidth < 360.dp
+                val stack = maxWidth.value / LocalDensity.current.fontScale < 360f
                 val error = state.fieldErrors["readlog.$index"]
                 Column {
                     if (stack) {
@@ -966,10 +1031,11 @@ private fun DateField(
 private fun SectionHeader(text: String) {
     Text(
         text = text,
-        fontSize = AppType.Caption,
+        fontSize = 13.sp,
+        lineHeight = 16.sp,
         fontWeight = FontWeight.SemiBold,
         color = AppColors.TextSecondary,
-        modifier = Modifier.padding(bottom = AppSpace.sm)
+        modifier = Modifier.padding(bottom = 6.dp)
     )
 }
 
@@ -979,7 +1045,7 @@ private fun ResponsiveFieldPair(
     second: @Composable (Modifier) -> Unit
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        if (maxWidth < 360.dp) {
+        if (maxWidth.value / LocalDensity.current.fontScale < 360f) {
             Column(verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
                 first(Modifier.fillMaxWidth())
                 second(Modifier.fillMaxWidth())
@@ -1014,21 +1080,35 @@ private fun TwoOrThreeSegment(
     enabled: Boolean,
     onSelected: (Int) -> Unit
 ) {
-    LiquidGlassSegmentedControl(
-        itemCount = labels.size,
-        selectedIndex = selected,
-        onSelected = onSelected,
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
-        trackHeight = 40.dp
-    ) { index, isSelected ->
-        Text(
-            text = labels[index],
-            fontSize = AppType.BodySmall,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (isSelected) AppColors.TextPrimary else AppColors.TextSecondary,
-            maxLines = 1
-        )
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val labelWidth = with(density) { (maxWidth / labels.size - 16.dp).roundToPx() }.coerceAtLeast(1)
+        val labelHeight = labels.maxOf { label ->
+            textMeasurer.measure(
+                text = label,
+                style = TextStyle(fontSize = AppType.BodySmall, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold),
+                constraints = Constraints(maxWidth = labelWidth)
+            ).size.height
+        }
+        val trackHeight = maxOf(40.dp, with(density) { labelHeight.toDp() } + 16.dp)
+        LiquidGlassSegmentedControl(
+            itemCount = labels.size,
+            selectedIndex = selected,
+            onSelected = onSelected,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth(),
+            trackHeight = trackHeight
+        ) { index, isSelected ->
+            Text(
+                text = labels[index],
+                fontSize = AppType.BodySmall,
+                lineHeight = 18.sp,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (isSelected) AppColors.TextPrimary else AppColors.TextSecondary,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
@@ -1080,7 +1160,8 @@ private fun EditorTextField(
     label: String? = null,
     placeholder: String = "",
     singleLine: Boolean = true,
-    minHeight: androidx.compose.ui.unit.Dp = 48.dp,
+    ellipsizeWhenUnfocused: Boolean = false,
+    minHeight: androidx.compose.ui.unit.Dp = 54.dp,
     keyboardType: KeyboardType = KeyboardType.Text,
     imeAction: ImeAction = ImeAction.Next,
     enabled: Boolean = true,
@@ -1089,22 +1170,29 @@ private fun EditorTextField(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val showEllipsis = ellipsizeWhenUnfocused && !focused && value.isNotEmpty()
+    val fontScale = LocalDensity.current.fontScale
+    val verticalPadding = if (singleLine) {
+        minOf(12.dp, maxOf(4.dp, (minHeight - 20.dp * fontScale) / 2))
+    } else 12.dp
     val borderColor = when {
         error != null -> errorColor()
         focused -> AppColors.Accent
         else -> Color.Transparent
     }
-    Column(modifier = modifier) {
+    Column(modifier = modifier.fillMaxWidth()) {
         if (label != null) {
             Text(
                 text = label,
-                fontSize = AppType.Caption,
+                fontSize = 13.sp,
+                lineHeight = 16.sp,
                 fontWeight = FontWeight.Medium,
                 color = AppColors.TextSecondary,
-                modifier = Modifier.padding(bottom = AppSpace.sm)
+                modifier = Modifier.padding(bottom = 6.dp)
             )
         }
         Box(
+            contentAlignment = Alignment.CenterStart,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = minHeight)
@@ -1113,13 +1201,16 @@ private fun EditorTextField(
                     if (enabled) AppColors.BgGray else AppColors.BgGray.copy(alpha = 0.6f)
                 )
                 .border(1.dp, borderColor, AppRoundedCornerShape(AppRadius.md))
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = verticalPadding)
         ) {
             if (value.isEmpty() && placeholder.isNotEmpty()) {
                 Text(
                     text = placeholder,
                     fontSize = AppType.Body,
-                    color = AppColors.TextSecondary
+                    lineHeight = 20.sp,
+                    color = AppColors.TextSecondary,
+                    maxLines = if (singleLine) 1 else Int.MAX_VALUE,
+                    overflow = if (singleLine) TextOverflow.Ellipsis else TextOverflow.Clip
                 )
             }
             BasicTextField(
@@ -1127,10 +1218,10 @@ private fun EditorTextField(
                 onValueChange = onValueChange,
                 enabled = enabled,
                 singleLine = singleLine,
-                maxLines = if (singleLine) 1 else 8,
+                maxLines = if (singleLine) 1 else Int.MAX_VALUE,
                 textStyle = TextStyle(
                     fontSize = AppType.Body,
-                    color = if (enabled) AppColors.TextPrimary else AppColors.TextSecondary
+                    color = if (showEllipsis) Color.Transparent else if (enabled) AppColors.TextPrimary else AppColors.TextSecondary
                 ),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(AppColors.Accent),
                 keyboardOptions = KeyboardOptions(
@@ -1140,6 +1231,16 @@ private fun EditorTextField(
                 interactionSource = interaction,
                 modifier = Modifier.fillMaxWidth()
             )
+            if (showEllipsis) {
+                Text(
+                    text = value.replace('\n', ' ').replace('\r', ' '),
+                    fontSize = AppType.Body,
+                    color = if (enabled) AppColors.TextPrimary else AppColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().clearAndSetSemantics { }
+                )
+            }
         }
         if (error != null) {
             Text(

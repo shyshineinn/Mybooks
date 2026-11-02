@@ -1578,7 +1578,7 @@
     <string name="mybooks_edit_saving">儲存中…</string>
     <string name="mybooks_edit_section_basic">基本資訊</string>
     <string name="mybooks_edit_section_custom">自訂欄位</string>
-    <string name="mybooks_edit_section_identifiers">標識符</string>
+    <string name="mybooks_edit_section_identifiers">其他識別碼</string>
     <string name="mybooks_edit_section_read_logs">閱讀記錄</string>
     <string name="mybooks_edit_series_index_invalid">系列序號應為非負整數</string>
     <string name="mybooks_edit_series_required">填寫序號前請先填寫系列</string>
@@ -1661,6 +1661,9 @@
     <string name="mybooks_edit_field_translators">譯者</string>
     <string name="mybooks_edit_translators_hint">多位譯者以頓號分隔（選填）</string>
     <string name="mybooks_edit_section_metadata">中繼資料操作</string>
-    <string name="mybooks_edit_section_reading">閱讀資訊</string>
+    <string name="mybooks_edit_section_reading">閱讀管理</string>
     <string name="mybooks_edit_section_other">其他資訊</string>
+    <string name="mybooks_edit_more_info">更多書籍資訊</string>
+    <string name="mybooks_edit_more_expanded">已展開</string>
+    <string name="mybooks_edit_more_collapsed">已收合</string>
 </resources>

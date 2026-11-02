@@ -1579,7 +1579,7 @@
     <string name="mybooks_edit_saving">保存中…</string>
     <string name="mybooks_edit_section_basic">基本情報</string>
     <string name="mybooks_edit_section_custom">カスタムフィールド</string>
-    <string name="mybooks_edit_section_identifiers">識別子</string>
+    <string name="mybooks_edit_section_identifiers">その他の識別子</string>
     <string name="mybooks_edit_section_read_logs">読書記録</string>
     <string name="mybooks_edit_series_index_invalid">シリーズ巻数は 0 以上の整数で入力してください</string>
     <string name="mybooks_edit_series_required">巻数を入力する前にシリーズを入力してください</string>
@@ -1663,6 +1663,9 @@
     <string name="mybooks_edit_field_translators">翻訳者</string>
     <string name="mybooks_edit_translators_hint">複数の名前は「、」で区切る（任意）</string>
     <string name="mybooks_edit_section_metadata">メタデータ</string>
-    <string name="mybooks_edit_section_reading">読書情報</string>
+    <string name="mybooks_edit_section_reading">読書管理</string>
     <string name="mybooks_edit_section_other">その他の情報</string>
+    <string name="mybooks_edit_more_info">その他の書籍情報</string>
+    <string name="mybooks_edit_more_expanded">展開済み</string>
+    <string name="mybooks_edit_more_collapsed">折りたたみ</string>
 </resources>
