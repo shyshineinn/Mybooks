@@ -19,10 +19,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
+import com.huangder.lumibooks.domain.model.MenuAnimationStyle
 import com.huangder.lumibooks.domain.model.ReadingStatus
 import com.huangder.lumibooks.ui.theme.LiquidGlassCapability
 import com.huangder.lumibooks.ui.theme.LocalAppTheme
 import com.huangder.lumibooks.ui.theme.LocalLiquidGlassCapability
+import com.huangder.lumibooks.ui.theme.LocalMenuAnimationStyle
 import com.huangder.lumibooks.ui.theme.LocalMotionEnabled
 import com.huangder.lumibooks.ui.theme.LocalUseMaterial3Theme
 import org.junit.Assert.assertEquals
@@ -54,12 +56,13 @@ class ReadingStatusMorphOverlayTest {
         ReadingStatus.DONE -> "Read"
     }
 
-    private fun runScenario(theme: String, motionEnabled: Boolean) {
+    private fun runScenario(theme: String, motionEnabled: Boolean, menuStyle: MenuAnimationStyle = MenuAnimationStyle.LIQUID) {
         compose.setContent {
             CompositionLocalProvider(
                 LocalAppTheme provides theme,
                 LocalUseMaterial3Theme provides (theme == "material3"),
                 LocalMotionEnabled provides motionEnabled,
+                LocalMenuAnimationStyle provides menuStyle,
                 LocalLiquidGlassCapability provides if (theme == "liquid_glass") {
                     LiquidGlassCapability(true, false)
                 } else {
@@ -129,10 +132,10 @@ class ReadingStatusMorphOverlayTest {
         compose.onNodeWithTag("reading-status-option-reading").assertExists()
         compose.onNodeWithTag("reading-status-option-done").assertExists()
 
-        val card = compose.onNodeWithTag("reading-status-morph-card")
+        val card = compose.onNodeWithTag("liquid-glass-morph-card")
             .fetchSemanticsNode().boundsInRoot
         val widthDp = card.width / compose.density.density
-        assertTrue("selector width was ${widthDp}dp", widthDp in 144f..160f)
+        assertTrue("selector width was ${widthDp}dp", widthDp in 60f..68f)
         assertEquals(tapOrigin.value.x, card.center.x, 2f)
         assertEquals(tapOrigin.value.y, card.center.y, 2f)
 
@@ -144,7 +147,7 @@ class ReadingStatusMorphOverlayTest {
 
         compose.runOnIdle { close.value = true }
         compose.waitForIdle()
-        compose.onNodeWithTag("reading-status-morph-card").assertDoesNotExist()
+        compose.onNodeWithTag("liquid-glass-morph-card").assertDoesNotExist()
         compose.onNodeWithTag("status-row").assertExists()
         compose.onNodeWithTag("book-title").assertIsDisplayed()
         compose.onNodeWithText("Reading").assertExists()
@@ -161,6 +164,10 @@ class ReadingStatusMorphOverlayTest {
     @Test
     fun `liquid glass theme keeps the page visible and centers the selector on the tap`() =
         runScenario(theme = "liquid_glass", motionEnabled = true)
+
+    @Test
+    fun `normal menu style still centers the selector on the tap`() =
+        runScenario(theme = "lumi", motionEnabled = true, menuStyle = MenuAnimationStyle.NORMAL)
 
     @Test
     fun `reduced motion still opens and closes the selector at the tap`() =

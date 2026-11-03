@@ -85,13 +85,13 @@ private fun tonalGlassHighlight(baseColor: Color): Color {
 internal val LiquidGlassOutlineWidth = 0.5.dp
 private const val LiquidGlassOutlineAlpha = 0.62f
 
-internal fun liquidGlassHighlight(): Highlight =
-    Highlight.Default.copy(alpha = LiquidGlassOutlineAlpha)
+internal fun liquidGlassHighlight(alpha: Float = 1f): Highlight =
+    Highlight.Default.copy(alpha = LiquidGlassOutlineAlpha * alpha.coerceIn(0f, 1f))
 
-internal fun liquidGlassFallbackOutlineBrush(): Brush = Brush.linearGradient(
+internal fun liquidGlassFallbackOutlineBrush(alpha: Float = 1f): Brush = Brush.linearGradient(
     colors = listOf(
-        Color.White.copy(alpha = 0.30f),
-        Color.White.copy(alpha = 0.08f)
+        Color.White.copy(alpha = 0.30f * alpha.coerceIn(0f, 1f)),
+        Color.White.copy(alpha = 0.08f * alpha.coerceIn(0f, 1f))
     )
 )
 
@@ -148,7 +148,9 @@ internal fun Modifier.liquidGlassBackdrop(
     pressedShadowAlpha: Float = 0.08f,
     controlEdge: Boolean = false,
     controlEdgeColor: Color = tintColor ?: contentScrimColor,
-    controlEdgeForceCanvas: Boolean = false
+    controlEdgeForceCanvas: Boolean = false,
+    /** Animated surfaces can fade their rim in without changing the glass body. */
+    outlineAlpha: Float = 1f
 ): Modifier {
     val lensSupported = !reduceTransparency && supportsLiquidGlassLens(lensShape)
     val effectiveBlurBoostPx = if (reduceTransparency) 0f else blurBoostPx.coerceAtLeast(0f)
@@ -203,7 +205,7 @@ internal fun Modifier.liquidGlassBackdrop(
             }
         },
         highlight = if (nativeOutlineSupported && !controlEdge) {
-            { liquidGlassHighlight() }
+            { liquidGlassHighlight(outlineAlpha) }
         } else {
             null
         },
@@ -245,10 +247,14 @@ internal fun Modifier.liquidGlassBackdrop(
     // the same single 0.5dp outline without layering a second border over normal shapes.
     return if (controlEdge) {
         glassModifier.liquidGlassControlEdge(shape, controlEdgeColor, isDark, controlEdgeForceCanvas)
-    } else if (nativeOutlineSupported) {
+    } else if (nativeOutlineSupported || outlineAlpha <= 0f) {
         glassModifier
     } else {
-        glassModifier.border(LiquidGlassOutlineWidth, liquidGlassFallbackOutlineBrush(), shape)
+        glassModifier.border(
+            LiquidGlassOutlineWidth,
+            liquidGlassFallbackOutlineBrush(outlineAlpha),
+            shape
+        )
     }
 }
 
@@ -437,8 +443,11 @@ fun LiquidGlassSurface(
     contentAlignment: Alignment = Alignment.Center,
     /** Optical control rim; large surfaces keep their existing edge unless explicitly opted in. */
     controlEdge: Boolean = false,
+    /** The body keeps its material; only the rim/highlight fades with this value. */
+    outlineAlpha: Float = 1f,
     content: @Composable BoxScope.() -> Unit
 ) {
+    val resolvedOutlineAlpha = outlineAlpha.coerceIn(0f, 1f)
     val glassLayer = LocalLiquidGlassLayer.current + 1
     val isLiquidGlass = LocalAppTheme.current == "liquid_glass" &&
         LocalLiquidGlassCapability.current.supported &&
@@ -536,7 +545,8 @@ fun LiquidGlassSurface(
             pressedShadowAlpha = 0.02f,
             controlEdge = useControlEdge,
             controlEdgeColor = edgeColor,
-            controlEdgeForceCanvas = forceCanvasEdge
+            controlEdgeForceCanvas = forceCanvasEdge,
+            outlineAlpha = resolvedOutlineAlpha
         )
     } else if (isLiquidGlass) {
         val fallbackScrim = if (tintColor != null) {
@@ -574,8 +584,17 @@ fun LiquidGlassSurface(
             )
             .background(contrastScrim)
             .then(
-                if (useControlEdge) Modifier.liquidGlassControlEdge(shape, edgeColor, isDark, forceCanvasEdge)
-                else Modifier.border(LiquidGlassOutlineWidth, liquidGlassFallbackOutlineBrush(), shape)
+                when {
+                    useControlEdge -> Modifier.liquidGlassControlEdge(
+                        shape, edgeColor, isDark, forceCanvasEdge
+                    )
+                    resolvedOutlineAlpha <= 0f -> Modifier
+                    else -> Modifier.border(
+                        LiquidGlassOutlineWidth,
+                        liquidGlassFallbackOutlineBrush(resolvedOutlineAlpha),
+                        shape
+                    )
+                }
             )
     } else {
         Modifier
@@ -673,7 +692,7 @@ fun LiquidGlassSurface(
                 }
                 drawContent()
             }
-            .cardOutline(shape)
+            .cardOutline(shape, resolvedOutlineAlpha)
         )
         val surfaceScope = this
         CompositionLocalProvider(

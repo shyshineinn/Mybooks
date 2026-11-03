@@ -68,10 +68,8 @@ class ReadingStatusMorphTest {
     }
 
     @Test
-    fun `selector width starts compact and grows for large text`() {
-        assertEquals(152.dp, ReadingStatusSelectorMetrics.widthForText(80.dp, 1f))
-        assertEquals(160.dp, ReadingStatusSelectorMetrics.widthForText(200.dp, 1f))
-        assertEquals(200.dp, ReadingStatusSelectorMetrics.widthForText(200.dp, 1.5f))
+    fun `selector is a fixed compact column`() {
+        assertEquals(64.dp, ReadingStatusSelectorMetrics.Width)
         assertEquals(188.dp, ReadingStatusSelectorMetrics.contentHeight(1f))
     }
 }

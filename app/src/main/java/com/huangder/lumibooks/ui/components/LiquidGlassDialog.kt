@@ -280,13 +280,12 @@ fun LiquidGlassDialogHost(
                                         ),
                                     contentAlignment = targetSpec.alignment
                                 ) {
-                                    LiquidGlassSurface(
+                                    OutlinedLiquidGlassSurface(
                                         shape = targetSpec.shape,
                                         fallbackColor = AppColors.CardBg,
                                         backdrop = targetSpec.backdrop ?: activeBackdrop,
                                         contentScrimColor = targetSpec.contentScrimColor,
                                         transparencyOverride = targetSpec.transparencyOverride,
-                                        interactive = false,
                                         modifier = Modifier
                                             .widthIn(max = 560.dp)
                                             .then(targetSpec.modifier)
