@@ -15,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -44,9 +43,32 @@ fun InformationCard(
     verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(AppSpace.sm),
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val shape = AppRoundedCornerShape(if (LocalEInkMode.current) AppRadius.sm else AppRadius.lg)
+    val eInk = LocalEInkMode.current
+    val dark = LocalIsDarkTheme.current
+    val glass = !eInk && LocalAppTheme.current == "liquid_glass" &&
+        LocalLiquidGlassCapability.current.supported && LocalLiquidGlassLayer.current < 3
+    val shape = AppRoundedCornerShape(if (eInk) AppRadius.sm else AppRadius.lg)
     val highContrast = LocalCardOutlinesEnabled.current
-    val decoration = informationCardDecoration(shape)
+    val borderColor = when {
+        eInk -> Color.Black
+        dark -> Color.White
+        else -> Color.Black
+    }
+    val decoration = Modifier
+        .then(
+            if (eInk) Modifier else Modifier.shadow(
+                elevation = 4.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = Color.Black.copy(alpha = if (dark) 0.18f else 0.06f),
+                spotColor = Color.Black.copy(alpha = if (dark) 0.24f else 0.08f)
+            )
+        )
+        .then(
+            if (eInk || highContrast) {
+                Modifier.border(if (glass) 0.5.dp else 1.dp, borderColor, shape)
+            } else Modifier
+        )
 
     // This card owns the optional outline, avoiding a second global border.
     // Restore the preference for children, which may include their own controls.
@@ -81,34 +103,4 @@ fun InformationCard(
             }
         }
     }
-}
-
-/** Shadow/outline around an information card's glass; shared with morph overlays. */
-@Composable
-internal fun informationCardDecoration(shape: Shape): Modifier {
-    val eInk = LocalEInkMode.current
-    val dark = LocalIsDarkTheme.current
-    val glass = !eInk && LocalAppTheme.current == "liquid_glass" &&
-        LocalLiquidGlassCapability.current.supported && LocalLiquidGlassLayer.current < 3
-    val highContrast = LocalCardOutlinesEnabled.current
-    val borderColor = when {
-        eInk -> Color.Black
-        dark -> Color.White
-        else -> Color.Black
-    }
-    return Modifier
-        .then(
-            if (eInk) Modifier else Modifier.shadow(
-                elevation = 4.dp,
-                shape = shape,
-                clip = false,
-                ambientColor = Color.Black.copy(alpha = if (dark) 0.18f else 0.06f),
-                spotColor = Color.Black.copy(alpha = if (dark) 0.24f else 0.08f)
-            )
-        )
-        .then(
-            if (eInk || highContrast) {
-                Modifier.border(if (glass) 0.5.dp else 1.dp, borderColor, shape)
-            } else Modifier
-        )
 }

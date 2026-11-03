@@ -7,6 +7,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,12 +28,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -119,7 +127,9 @@ internal fun MyBooksDetailRows(
     meta: ServerBookMeta,
     statusText: String? = null,
     statusClickable: Boolean = false,
+    statusHidden: Boolean = false,
     onStatusClick: () -> Unit = {},
+    onStatusTap: ((Offset) -> Unit)? = null,
     onStatusBounds: (Rect) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -129,7 +139,9 @@ internal fun MyBooksDetailRows(
                 label = row.label,
                 value = row.value,
                 clickable = statusClickable,
+                hidden = statusHidden,
                 onClick = onStatusClick,
+                onTapAt = onStatusTap,
                 onBounds = onStatusBounds
             )
         } else {
@@ -147,14 +159,42 @@ internal fun ReadingStatusDetailRow(
     value: String,
     clickable: Boolean,
     onClick: () -> Unit,
-    onBounds: (Rect) -> Unit
+    onBounds: (Rect) -> Unit,
+    hidden: Boolean = false,
+    onTapAt: ((Offset) -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
+    val tapEnabled = clickable && !hidden && onTapAt != null
     Box(
-        Modifier
+        modifier
             .fillMaxWidth()
             .onGloballyPositioned { onBounds(it.boundsInRoot()) }
+            .then(
+                if (tapEnabled) {
+                    Modifier
+                        .pointerInput(onTapAt) {
+                            detectTapGestures { local -> onTapAt?.invoke(local) }
+                        }
+                        .semantics(mergeDescendants = true) {
+                            role = Role.Button
+                            onClick {
+                                onClick()
+                                true
+                            }
+                        }
+                } else {
+                    Modifier
+                }
+            )
+            .graphicsLayer { alpha = if (hidden) 0f else 1f }
+            .then(if (hidden) Modifier.clearAndSetSemantics {} else Modifier)
     ) {
-        DetailRow(label, value, clickable = clickable, onClick = onClick)
+        DetailRow(
+            label,
+            value,
+            clickable = clickable && !hidden && onTapAt == null,
+            onClick = onClick
+        )
     }
 }
 

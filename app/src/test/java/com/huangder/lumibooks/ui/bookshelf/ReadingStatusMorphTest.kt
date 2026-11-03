@@ -1,35 +1,30 @@
 package com.huangder.lumibooks.ui.bookshelf
 
-import androidx.compose.ui.geometry.Rect
-import com.huangder.lumibooks.domain.model.ReadingStatus
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReadingStatusMorphTest {
-    private val source = Rect(left = 100f, top = 300f, right = 1000f, bottom = 1100f)
-    private val width = 660f
-    private val height = 560f
     private val hostWidth = 1080f
     private val hostHeight = 2400f
     private val safeTop = 60f
     private val safeBottom = 40f
     private val margin = 24f
-    private val statusCenter = 640f
-    private val selectedCenterFromTop = 200f
+    private val width = 456f
+    private val height = 564f
 
     private fun target(
-        card: Rect = source,
-        statusOffset: Float = statusCenter,
-        hostH: Float = hostHeight,
-        selectedCenter: Float = selectedCenterFromTop
+        centerX: Float = 540f,
+        centerY: Float = 1200f,
+        hostW: Float = hostWidth,
+        hostH: Float = hostHeight
     ) = readingStatusSelectorTargetRect(
-        source = card,
-        statusCenterOffsetPx = statusOffset,
-        selectedCenterFromTopPx = selectedCenter,
+        originCenterX = centerX,
+        originCenterY = centerY,
         widthPx = width,
         heightPx = height,
-        hostWidthPx = hostWidth,
+        hostWidthPx = hostW,
         hostHeightPx = hostH,
         safeTopPx = safeTop,
         safeBottomPx = safeBottom,
@@ -37,50 +32,46 @@ class ReadingStatusMorphTest {
     )
 
     @Test
-    fun `right edge stays aligned with the information card`() {
+    fun `selector settles centered on the tap position`() {
         val rect = target()
 
-        assertEquals(source.right, rect.right, 0.001f)
+        assertEquals(540f, rect.center.x, 0.001f)
+        assertEquals(1200f, rect.center.y, 0.001f)
         assertEquals(width, rect.width, 0.001f)
-        assertEquals(source.right - width, rect.left, 0.001f)
+        assertEquals(height, rect.height, 0.001f)
     }
 
     @Test
-    fun `selected option center lines up with the original status row`() {
-        val rect = target()
+    fun `left edge is corrected only when the tap is near a horizontal edge`() {
+        val leftRect = target(centerX = 0f)
+        val rightRect = target(centerX = hostWidth)
 
-        assertEquals(source.top + statusCenter, rect.top + selectedCenterFromTop, 0.001f)
+        assertEquals(margin, leftRect.left, 0.001f)
+        assertEquals(hostWidth - margin, rightRect.right, 0.001f)
     }
 
     @Test
-    fun `card shifts down when the status row is too close to the top`() {
-        val rect = target(statusOffset = 0f, selectedCenter = 400f)
+    fun `vertical position is corrected only when the tap is near a vertical edge`() {
+        val topRect = target(centerY = 0f)
+        val bottomRect = target(centerY = hostHeight)
 
-        assertEquals(safeTop + margin, rect.top, 0.001f)
-        assertEquals(source.right, rect.right, 0.001f)
+        assertEquals(safeTop + margin, topRect.top, 0.001f)
+        assertEquals(hostHeight - safeBottom - margin, bottomRect.bottom, 0.001f)
     }
 
     @Test
-    fun `card shifts up when the status row is too close to the bottom`() {
-        val shortHost = 1200f
-        val rect = target(statusOffset = 800f, hostH = shortHost)
+    fun `width never exceeds the available screen width`() {
+        val rect = target(hostW = 320f)
 
-        assertEquals(shortHost - safeBottom - margin - height, rect.top, 0.001f)
-        assertTrue(rect.bottom <= shortHost - safeBottom - margin)
+        assertTrue(rect.width <= 320f - margin * 2f + 0.001f)
+        assertEquals(320f - margin * 2f, rect.width, 0.001f)
     }
 
     @Test
-    fun `right edge is clamped only when the card itself leaves the screen`() {
-        val offscreen = Rect(left = 900f, top = 300f, right = 1200f, bottom = 1100f)
-        val rect = target(card = offscreen)
-
-        assertEquals(hostWidth - margin, rect.right, 0.001f)
-    }
-
-    @Test
-    fun `three states map to stable option indexes`() {
-        assertEquals(0, ReadingStatus.WISH.selectorIndex())
-        assertEquals(1, ReadingStatus.READING.selectorIndex())
-        assertEquals(2, ReadingStatus.DONE.selectorIndex())
+    fun `selector width starts compact and grows for large text`() {
+        assertEquals(152.dp, ReadingStatusSelectorMetrics.widthForText(80.dp, 1f))
+        assertEquals(160.dp, ReadingStatusSelectorMetrics.widthForText(200.dp, 1f))
+        assertEquals(200.dp, ReadingStatusSelectorMetrics.widthForText(200.dp, 1.5f))
+        assertEquals(188.dp, ReadingStatusSelectorMetrics.contentHeight(1f))
     }
 }

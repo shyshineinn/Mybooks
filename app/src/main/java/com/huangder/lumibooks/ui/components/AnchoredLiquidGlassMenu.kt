@@ -194,17 +194,6 @@ data class LiquidGlassMenuMotion(
     }
 }
 
-/** Resolves a morph target from the source rectangle and the measured card content. */
-typealias LiquidGlassMenuTargetBounds = (
-    source: Rect,
-    measuredHeightPx: Float,
-    widthPx: Float,
-    hostWidthPx: Float,
-    hostHeightPx: Float,
-    safeTopPx: Float,
-    safeBottomPx: Float
-) -> Rect
-
 data class LiquidGlassMenuSpec(
     val anchorBounds: Rect,
     val width: Dp,
@@ -231,17 +220,7 @@ data class LiquidGlassMenuSpec(
     /** Disable for compact selectors whose first option overlaps the trigger hit area. */
     val keepTriggerInteractive: Boolean = true,
     /** The host supplies scrolling and an atomic, single-submission selection callback. */
-    val content: (@Composable (enabled: Boolean, select: (() -> Unit) -> Unit) -> Unit)? = null,
-    /**
-     * A whole-card selector: the source's right edge stays fixed while the other three
-     * edges converge on [targetBounds]. Skips the menu droplet neck/squash so the
-     * settled rectangle follows the caller's anchor instead of the trigger hit area.
-     */
-    val cardMorph: Boolean = false,
-    /** Resolves the settled rectangle; used by [cardMorph] to center on a content row. */
-    val targetBounds: LiquidGlassMenuTargetBounds? = null,
-    /** Draw the settled surface with the information-card glass instead of menu glass. */
-    val cardSurface: Boolean = false
+    val content: (@Composable (enabled: Boolean, select: (() -> Unit) -> Unit) -> Unit)? = null
 )
 
 /**
@@ -276,9 +255,6 @@ internal object LiquidGlassMenuMorph {
 
     /** Growth progress at which the contents start to surface. */
     const val ContentRevealStart = 0.15f
-
-    /** Source snapshot is fully faded by this growth progress. */
-    const val SourceFadeEnd = 0.3f
 
     /** How far a row travels while it surfaces. */
     const val ItemTravelDp = 8f
@@ -413,13 +389,7 @@ internal object LiquidGlassMenuMorph {
     fun nearAlignment(source: Rect, target: Rect): Alignment =
         BiasAbsoluteAlignment(nearEdgeBiasX(source, target), nearEdgeBiasY(source, target))
 
-    fun morphRect(
-        source: Rect,
-        target: Rect,
-        progress: Float,
-        continuous: Boolean = true,
-        squash: Boolean = true
-    ): Rect {
+    fun morphRect(source: Rect, target: Rect, progress: Float, continuous: Boolean = true): Rect {
         val clamped = growthProgress(progress, continuous).coerceIn(0f, 1f + MaxOvershoot)
         val nearT = clamped.coerceAtLeast(0f).pow(NearEdgeExponent)
         val farT = clamped
@@ -431,7 +401,7 @@ internal object LiquidGlassMenuMorph {
         val top = lerp(source.top, target.top, if (nearY < 0f) nearT else farT)
         val bottom = lerp(source.bottom, target.bottom, if (nearY > 0f) nearT else farT)
 
-        val scale = if (squash) squashScale(progress, continuous) else 1f
+        val scale = squashScale(progress, continuous)
         if (scale >= 1f) return Rect(left, top, right, bottom)
 
         // The squash only happens while the container is still the trigger's own
@@ -455,12 +425,7 @@ internal object LiquidGlassMenuMorph {
     fun contentProgress(growthProgress: Float): Float =
         ((growthProgress - ContentRevealStart) / (0.85f - ContentRevealStart)).coerceIn(0f, 1f)
 
-    /** Card morphs wait for the source snapshot to disappear before revealing their rows. */
-    fun cardContentProgress(growthProgress: Float): Float =
-        ((growthProgress - SourceFadeEnd) / (0.85f - SourceFadeEnd)).coerceIn(0f, 1f)
-
-    fun sourceAlpha(progress: Float): Float =
-        (1f - growthProgress(progress) / SourceFadeEnd).coerceIn(0f, 1f)
+    fun sourceAlpha(progress: Float): Float = (1f - growthProgress(progress) / 0.3f).coerceIn(0f, 1f)
 
     fun windowToHost(bounds: Rect, hostOrigin: Offset): Rect = bounds.translate(-hostOrigin)
 
@@ -563,7 +528,7 @@ class LiquidGlassMenuHostState {
 val LocalLiquidGlassMenuHost = staticCompositionLocalOf<LiquidGlassMenuHostState?> { null }
 
 private val MenuItemRowHeight = 44.dp
-internal val MenuContentPadding = 8.dp
+private val MenuContentPadding = 8.dp
 private val MenuScreenMargin = 8.dp
 private val MenuAnchorGap = 6.dp
 private val MenuItemCornerRadius = 12.dp
@@ -623,15 +588,13 @@ fun LiquidGlassMenuHost(
     val menuBackdrop = if (backgroundBackdrop != null) {
         rememberCombinedBackdrop(backgroundBackdrop, pageBackdrop)
     } else pageBackdrop
-    val cardMorphActive = activeMenu?.cardMorph == true || hostState.displayedMenu?.cardMorph == true
-    val capturePage = liquidTheme && !cardMorphActive &&
+    val capturePage = liquidTheme &&
         (activeMenu?.forceSolid == false || hostState.displayedMenu?.forceSolid == false)
     var hostWindowBounds by remember { mutableStateOf(Rect.Zero) }
     var hostRootOrigin by remember { mutableStateOf(Offset.Zero) }
 
     LaunchedEffect(activeMenu, motionEnabled, liquidTheme) {
         fun motionFor(menu: LiquidGlassMenuSpec): LiquidGlassMenuMotion = when {
-            menu.cardMorph -> menu.motion
             menu.fadeOnlyPanel -> LiquidMenuGeometry.Motion
             menu.sourceId == null -> LiquidGlassMenuMotion.Legacy
             liquidTheme && displayedStyle == MenuAnimationStyle.LIQUID && !menu.forceSolid &&
@@ -646,16 +609,13 @@ fun LiquidGlassMenuHost(
             } else if (motionEnabled && closing.fadeOnlyPanel) {
                 progress.animateTo(0f, tween(420, easing = FastOutSlowInEasing))
                 animationVelocity = 0f
-            } else if (motionEnabled && !closing.cardMorph && displayedStyle == MenuAnimationStyle.NORMAL) {
+            } else if (motionEnabled && displayedStyle == MenuAnimationStyle.NORMAL) {
                 fade.animateTo(0f, tween(140, easing = FastOutSlowInEasing))
             } else if (motionEnabled) {
                 progress.animateTo(0f, motion.closeSpec(), animationVelocity + motion.closeInitialVelocity) {
                     animationVelocity = velocity
                 }
                 animationVelocity = 0f
-            } else if (closing.cardMorph) {
-                // Reduced motion: swap back without a shrinking intermediate card.
-                fade.snapTo(0f)
             } else {
                 fade.animateTo(0f, tween(ReducedMotionFadeMillis))
             }
@@ -694,7 +654,7 @@ fun LiquidGlassMenuHost(
             animationVelocity = 0f
             progress.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
             animationVelocity = 0f
-        } else if (motionEnabled && !requested.cardMorph && displayedStyle == MenuAnimationStyle.NORMAL) {
+        } else if (motionEnabled && displayedStyle == MenuAnimationStyle.NORMAL) {
             hostState.drawingSourceId = null
             progress.snapTo(1f)
             animationVelocity = 0f
@@ -709,14 +669,6 @@ fun LiquidGlassMenuHost(
                 animationVelocity = velocity
             }
             animationVelocity = 0f
-        } else if (requested.cardMorph) {
-            // Reduced motion keeps the same one-glass handoff but skips the morph.
-            hostState.source(requested)?.takeIf { it.recorded }?.let {
-                hostState.drawingSourceId = it.id
-            }
-            progress.snapTo(1f)
-            animationVelocity = 0f
-            fade.snapTo(1f)
         } else {
             hostState.drawingSourceId = null
             progress.snapTo(1f)
@@ -967,13 +919,12 @@ private fun AnchoredLiquidGlassMenu(
     val density = LocalDensity.current
     val isDark = LocalIsDarkTheme.current
     val isLiquidGlass = LocalAppTheme.current == "liquid_glass" && !spec.forceSolid
-    val normalMotion = !spec.fadeOnlyPanel && !spec.cardMorph && menuStyle == MenuAnimationStyle.NORMAL
+    val normalMotion = !spec.fadeOnlyPanel && menuStyle == MenuAnimationStyle.NORMAL
     val fadeOnlyPanel = spec.fadeOnlyPanel
     val glassSurface = isLiquidGlass && LocalLiquidGlassCapability.current.supported
     // The categories sheet keeps its solid surface, but still uses the same
-    // anchor handoff and liquid geometry as the glass menus. A whole-card morph
-    // always follows the plain anchored rectangle path so its right edge stays put.
-    val droplet = !spec.cardMorph && !normalMotion && source != null && (glassSurface || fadeOnlyPanel)
+    // anchor handoff and liquid geometry as the glass menus.
+    val droplet = !normalMotion && source != null && (glassSurface || fadeOnlyPanel)
     val layoutDirection = LocalLayoutDirection.current
     val continuous = source != null
     val embedded = source?.kind == LiquidGlassMenuAnchorKind.Embedded
@@ -982,10 +933,8 @@ private fun AnchoredLiquidGlassMenu(
     val growth = { LiquidGlassMenuMorph.growthProgress(phase(), continuous) }
     val reveal = {
         if (droplet) LiquidMenuGeometry.contentAlpha(phase())
-        else if (continuous) {
-            if (spec.cardMorph) LiquidGlassMenuMorph.cardContentProgress(growth())
-            else LiquidGlassMenuMorph.contentProgress(growth())
-        } else ((growth() - 0.68f) / 0.32f).coerceIn(0f, 1f)
+        else if (continuous) LiquidGlassMenuMorph.contentProgress(growth())
+        else ((growth() - 0.68f) / 0.32f).coerceIn(0f, 1f)
     }
     val sourceAlpha = {
         if (motionEnabled && !normalMotion && hostState.ownsDrawing(spec.sourceId ?: Unit)) {
@@ -1015,29 +964,18 @@ private fun AnchoredLiquidGlassMenu(
         hostHeightPx - panelHeightPx,
         hostWidthPx,
         hostHeightPx
-    ) else {
-        val resolvedHeight = measuredHeightPx.coerceAtLeast(1f)
-        spec.targetBounds?.invoke(
-            sourceRect,
-            resolvedHeight,
-            widthPx,
-            hostWidthPx,
-            hostHeightPx,
-            safeTop,
-            safeBottom
-        ) ?: LiquidGlassMenuMorph.targetRect(
-            anchor = sourceRect.translate(Offset(0f, -safeTop)),
-            widthPx = widthPx,
-            heightPx = resolvedHeight,
-            hostWidthPx = hostWidthPx,
-            hostHeightPx = hostHeightPx - safeTop - safeBottom,
-            marginPx = margin,
-            gapPx = gap,
-            alignEnd = spec.alignEnd == (layoutDirection == LayoutDirection.Ltr),
-            overlapAnchor = continuous && !embedded && !normalMotion,
-            preferAbove = spec.preferAbove
-        ).translate(Offset(0f, safeTop))
-    }
+    ) else LiquidGlassMenuMorph.targetRect(
+        anchor = sourceRect.translate(Offset(0f, -safeTop)),
+        widthPx = widthPx,
+        heightPx = measuredHeightPx.coerceAtLeast(1f),
+        hostWidthPx = hostWidthPx,
+        hostHeightPx = hostHeightPx - safeTop - safeBottom,
+        marginPx = margin,
+        gapPx = gap,
+        alignEnd = spec.alignEnd == (layoutDirection == LayoutDirection.Ltr),
+        overlapAnchor = continuous && !embedded && !normalMotion,
+        preferAbove = spec.preferAbove
+    ).translate(Offset(0f, safeTop))
     val sourceRadius = with(density) { (spec.anchorCornerRadius ?: source?.cornerRadius)?.toPx() }
         ?: LiquidGlassMenuMorph.capsuleCornerRadiusPx(sourceRect)
     val targetRadius = with(density) { LiquidGlassMenuMorph.TargetCornerRadiusDp.dp.toPx() }
@@ -1047,16 +985,10 @@ private fun AnchoredLiquidGlassMenu(
             else null
         }
     }
-    val rect = remember(motionEnabled, normalMotion, frame, targetRect, sourceRect, phase, continuous, spec.cardMorph) {
+    val rect = remember(motionEnabled, normalMotion, frame, targetRect, sourceRect, phase, continuous) {
         derivedStateOf {
             if (!motionEnabled || normalMotion) targetRect else frame.value?.bounds
-                ?: LiquidGlassMenuMorph.morphRect(
-                    sourceRect,
-                    targetRect,
-                    phase(),
-                    continuous,
-                    squash = !spec.cardMorph
-                )
+                ?: LiquidGlassMenuMorph.morphRect(sourceRect, targetRect, phase(), continuous)
         }
     }
     val radiusPx = {
@@ -1143,20 +1075,7 @@ private fun AnchoredLiquidGlassMenu(
                 }
             }
     ) {
-        if (spec.cardSurface) {
-            // Keep the information card's own glass/outline so the morph reads as the
-            // same surface, not a menu that changes material halfway through.
-            val cardShape = shape.value
-            val cardDecoration = informationCardDecoration(cardShape)
-            LiquidGlassSurface(
-                shape = cardShape,
-                fallbackColor = color,
-                modifier = Modifier.matchParentSize()
-                    .graphicsLayer { this.alpha = 1f - sourceAlpha() },
-                decorationModifier = cardDecoration,
-                contentAlignment = Alignment.TopStart
-            ) {}
-        } else if (glassSurface) {
+        if (glassSurface) {
             LiquidMenuSurface(
                 // Animation style changes motion only; ordinary and unanchored
                 // menus retain the same settled glass lens as the liquid morph.
@@ -1177,15 +1096,7 @@ private fun AnchoredLiquidGlassMenu(
         )
         if (source != null) {
             Box(
-                Modifier.matchParentSize().graphicsLayer {
-                    this.alpha = sourceAlpha()
-                    if (spec.cardMorph) {
-                        // Keep the frozen card inside the live outline so its old rim
-                        // cannot show outside the single glass surface.
-                        this.shape = shape.value
-                        clip = true
-                    }
-                }
+                Modifier.matchParentSize().graphicsLayer { this.alpha = sourceAlpha() }
                     .clearAndSetSemantics {}
                     .drawWithContent {
                         if (sourceAlpha() <= 0f || !source.recorded) return@drawWithContent

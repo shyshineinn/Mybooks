@@ -47,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -288,12 +290,14 @@ fun BookDetailsScreen(
         if (metaState.meta != null) notesViewModel.refresh(book, metaState.meta)
     }
     val menuHost = LocalLiquidGlassMenuHost.current
-    val selectorDensity = LocalDensity.current
     val selectorScope = rememberCoroutineScope()
-    var statusSelectorOpen by remember(book.id) { mutableStateOf(false) }
+    var statusMorphAnchor by remember(book.id) { mutableStateOf<ReadingStatusMorphAnchor?>(null) }
+    var statusMorphCloseRequested by remember(book.id) { mutableStateOf(false) }
     var selectorSaving by remember(book.id) { mutableStateOf(false) }
+    var statusUpdateToken by remember(book.id) { mutableIntStateOf(0) }
     val selectorStatus = remember(book.id) { mutableStateOf<ReadingStatus?>(null) }
     var locallyUpdatedStatus by remember(book.id) { mutableStateOf<ReadingStatus?>(null) }
+    val statusSelectorOpen = statusMorphAnchor != null
     val effectiveReadingStatus = locallyUpdatedStatus
         ?: library.serverReadingStatusByBookId[book.id]
         ?: metaState.meta?.status?.let { ReadingStatus.fromServerStatus(it) }
@@ -305,87 +309,41 @@ fun BookDetailsScreen(
     }
 
     fun openReadingStatusSelector(anchor: ReadingStatusMorphAnchor) {
-        val host = menuHost ?: return
+        statusUpdateToken++
         selectorStatus.value = anchor.status
         selectorSaving = false
-        val fontScale = selectorDensity.fontScale
-        val selectedCenterPx = with(selectorDensity) {
-            ReadingStatusSelectorMetrics.selectedCenterFromTop(
-                fontScale,
-                anchor.status.selectorIndex()
-            ).toPx()
+        statusMorphCloseRequested = false
+        statusMorphAnchor = anchor
+    }
+
+    fun selectReadingStatus(anchor: ReadingStatusMorphAnchor, target: ReadingStatus) {
+        val previous = selectorStatus.value ?: anchor.status
+        if (selectorSaving) return
+        if (target == effectiveReadingStatus) {
+            statusMorphCloseRequested = true
+            return
         }
-        val marginPx = with(selectorDensity) { 8.dp.toPx() }
-        val initialStatus = anchor.status
-        val selectorWidth = minOf(
-            ReadingStatusSelectorMetrics.Width,
-            with(selectorDensity) { anchor.cardBounds.width.toDp() }
-        )
-        val spec = LiquidGlassMenuSpec(
-            anchorBounds = anchor.cardBounds,
-            width = selectorWidth,
-            items = emptyList(),
-            sourceId = anchor.sourceId,
-            anchorCornerRadius = AppRadius.lg,
-            motion = ReadingStatusSelectorMotion,
-            keepTriggerInteractive = false,
-            cardMorph = true,
-            cardSurface = true,
-            targetBounds = { source, measuredHeightPx, widthPx, hostWidthPx, hostHeightPx, safeTopPx, safeBottomPx ->
-                readingStatusSelectorTargetRect(
-                    source = source,
-                    statusCenterOffsetPx = anchor.statusCenterOffsetPx,
-                    selectedCenterFromTopPx = selectedCenterPx,
-                    widthPx = widthPx,
-                    heightPx = measuredHeightPx,
-                    hostWidthPx = hostWidthPx,
-                    hostHeightPx = hostHeightPx,
-                    safeTopPx = safeTopPx,
-                    safeBottomPx = safeBottomPx,
-                    marginPx = marginPx
-                )
-            },
-            onDismiss = { statusSelectorOpen = false },
-            content = { enabled, _ ->
-                ReadingStatusSelectorContent(
-                    selected = selectorStatus.value ?: initialStatus,
-                    saving = selectorSaving,
-                    enabled = enabled,
-                    onSelect = { target ->
-                        val previous = selectorStatus.value ?: initialStatus
-                        if (!selectorSaving) {
-                            if (target == effectiveReadingStatus) {
-                                host.dismiss()
-                            } else {
-                                selectorStatus.value = target
-                                selectorSaving = true
-                                homeViewModel.setReadingStatus(book, target) { success, message ->
-                                    if (success) {
-                                        // Keep the options locked through the feedback beat and the
-                                        // reverse morph, so a second tap cannot race the dismissal.
-                                        locallyUpdatedStatus = target
-                                        // 阅读记录区块也应按新的 read_logs 刷新，而不是只等下次进页。
-                                        editViewModel.loadMeta(book, forceRefresh = true)
-                                        selectorScope.launch {
-                                            delay(160)
-                                            if (statusSelectorOpen) host.dismiss()
-                                        }
-                                    } else {
-                                        selectorSaving = false
-                                        selectorStatus.value = previous
-                                        toast.show(
-                                            message ?: context.getString(R.string.mybooks_edit_save_failed)
-                                        )
-                                    }
-                                }
-                            }
-                        }
+        val token = ++statusUpdateToken
+        selectorStatus.value = target
+        selectorSaving = true
+        homeViewModel.setReadingStatus(book, target) { success, message ->
+            if (token != statusUpdateToken) return@setReadingStatus
+            if (success) {
+                // Keep the options locked through the feedback beat and the reverse morph.
+                locallyUpdatedStatus = target
+                editViewModel.loadMeta(book, forceRefresh = true)
+                selectorScope.launch {
+                    delay(160)
+                    if (token == statusUpdateToken && statusMorphAnchor != null) {
+                        statusMorphCloseRequested = true
                     }
-                )
+                }
+            } else {
+                selectorSaving = false
+                selectorStatus.value = previous
+                toast.show(message ?: context.getString(R.string.mybooks_edit_save_failed))
             }
-        )
-        statusSelectorOpen = true
-        host.show(spec)
+        }
     }
 
     var notesMenuExpanded by remember { mutableStateOf(false) }
@@ -680,6 +638,24 @@ fun BookDetailsScreen(
         }
     }
 
+    statusMorphAnchor?.let { anchor ->
+        ReadingStatusMorphOverlay(
+            anchor = anchor,
+            selected = selectorStatus.value ?: anchor.status,
+            saving = selectorSaving,
+            closeRequested = statusMorphCloseRequested,
+            onSelect = { target -> selectReadingStatus(anchor, target) },
+            onDismiss = {
+                if (!statusMorphCloseRequested) statusMorphCloseRequested = true
+            },
+            onFinished = {
+                statusMorphAnchor = null
+                statusMorphCloseRequested = false
+                selectorSaving = false
+            }
+        )
+    }
+
     if (editing) EditBookDialog(book, homeViewModel) { editing = false }
     if (editingMyBooks) {
         MyBooksEditSheet(
@@ -915,45 +891,24 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
     val meta = metaState.meta.takeIf { serverBook }
     val currentStatus = readingStatus ?: meta?.let { ReadingStatus.fromServerStatus(it.status) }
     val statusText = currentStatus?.let { statusDisplay(it.toServerStatus()) }
-    val detailsAnchorId = remember(book.id) { "mybooks-details-card-${book.id}" }
     val cardGeometry = remember(book.id) { ReadingStatusCardGeometry() }
-    val contentRevision = remember(book, meta, folder, tags, readingStatus) {
-        listOf(book, meta, folder, tags, readingStatus)
-    }
-    var frozenRevision by remember(book.id) { mutableStateOf<Any?>(contentRevision) }
-    LaunchedEffect(statusMorphActive, contentRevision) {
-        if (!statusMorphActive) frozenRevision = contentRevision
-    }
-    val detailsAnchorModifier = if (serverBook) {
-        Modifier
-            .fillMaxWidth()
-            .liquidGlassMenuAnchor(
-                id = detailsAnchorId,
-                cornerRadius = AppRadius.lg,
-                recordOnce = true,
-                recordRevision = frozenRevision
-            )
-            .onGloballyPositioned { cardGeometry.cardBounds = it.boundsInRoot() }
-    } else {
-        Modifier.fillMaxWidth().onGloballyPositioned { cardGeometry.cardBounds = it.boundsInRoot() }
-    }
-    val openStatusSelector = {
+    val openStatusSelectorAt: (Offset) -> Unit = { local ->
         val targetStatus = currentStatus
         val openSelector = onReadingStatusClick
-        val cardBounds = cardGeometry.cardBounds
         val statusBounds = cardGeometry.statusRowBounds
-        if (targetStatus != null && openSelector != null &&
-            cardBounds != Rect.Zero && statusBounds != Rect.Zero
-        ) {
+        if (targetStatus != null && openSelector != null && statusBounds != Rect.Zero) {
             openSelector(
                 ReadingStatusMorphAnchor(
-                    sourceId = detailsAnchorId,
-                    cardBounds = cardBounds,
-                    statusCenterOffsetPx = statusBounds.center.y - cardBounds.top,
+                    statusRowBounds = statusBounds,
+                    originCenter = statusBounds.topLeft + local,
                     status = targetStatus
                 )
             )
         }
+    }
+    val openStatusSelector = {
+        val bounds = cardGeometry.statusRowBounds
+        openStatusSelectorAt(Offset(bounds.width / 2f, bounds.height / 2f))
     }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
         if (meta != null && hasMeaningfulSummary(meta.summary)) {
@@ -961,12 +916,11 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
                 SummaryRow(meta.summary.trim(), summaryExpanded, onSummaryExpandedChange)
             }
         }
-        Box(detailsAnchorModifier) {
-            InformationCard(
-                title = stringResource(R.string.book_detail_group_details),
-                contentPadding = PaddingValues(0.dp),
-                verticalArrangement = Arrangement.Top
-            ) {
+        InformationCard(
+            title = stringResource(R.string.book_detail_group_details),
+            contentPadding = PaddingValues(0.dp),
+            verticalArrangement = Arrangement.Top
+        ) {
                 DetailRow(stringResource(R.string.book_title_label), book.title, true, onEdit)
                 DetailRow(stringResource(R.string.book_author_label), book.author, true, onEdit)
                 if (!serverBook) {
@@ -981,7 +935,9 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
                         value = statusText,
                         clickable = onReadingStatusClick != null,
                         onClick = openStatusSelector,
-                        onBounds = { cardGeometry.statusRowBounds = it }
+                        onBounds = { cardGeometry.statusRowBounds = it },
+                        hidden = statusMorphActive,
+                        onTapAt = openStatusSelectorAt
                     )
                 }
                 meta?.let {
@@ -989,11 +945,12 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
                         meta = it,
                         statusText = statusText,
                         statusClickable = currentStatus != null && onReadingStatusClick != null,
+                        statusHidden = statusMorphActive,
                         onStatusClick = openStatusSelector,
+                        onStatusTap = openStatusSelectorAt,
                         onStatusBounds = { cardGeometry.statusRowBounds = it }
                     )
                 }
-            }
         }
         InformationCard(
             title = stringResource(R.string.book_detail_group_library),
