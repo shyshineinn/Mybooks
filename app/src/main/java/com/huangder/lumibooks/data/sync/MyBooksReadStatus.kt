@@ -15,6 +15,13 @@ internal data class MyBooksReadToggle(
     val logs: List<MyBooksReadLog>
 )
 
+/** 三态分类对应的服务端 status 值。 */
+internal fun ReadingStatus.toServerStatus(): String = when (this) {
+    ReadingStatus.WISH -> "wish"
+    ReadingStatus.READING -> "reading"
+    ReadingStatus.DONE -> "done"
+}
+
 /**
  * “标记已读”与服务端 status/read_logs 的转换规则。
  *
@@ -22,6 +29,37 @@ internal data class MyBooksReadToggle(
  * 标记已读时补一条读完记录，取消时清掉最后一条 finish，与网页端的状态联动一致。
  */
 internal object MyBooksReadStatus {
+    /**
+     * 三态切换：想读/在读只改分类，不动阅读进度与历史完成记录；
+     * 已读沿用现有规则补完成日期，已有完成记录时不重复写。
+     */
+    fun transition(
+        currentLogs: List<MyBooksReadLog>,
+        target: ReadingStatus,
+        today: String
+    ): MyBooksReadToggle {
+        val logs = canonical(currentLogs)
+        return when (target) {
+            ReadingStatus.WISH ->
+                MyBooksReadToggle(status = "wish", logs = logs)
+            ReadingStatus.READING ->
+                MyBooksReadToggle(status = "reading", logs = logs)
+            ReadingStatus.DONE -> {
+                if (logs.any { it.finish.isNotBlank() }) {
+                    MyBooksReadToggle(status = "done", logs = logs)
+                } else {
+                    val pending = logs.indexOfLast { it.start.isNotBlank() && it.finish.isBlank() }
+                    val completed = if (pending >= 0) {
+                        logs.toMutableList().also { it[pending] = it[pending].copy(finish = today) }
+                    } else {
+                        logs + MyBooksReadLog(start = today, finish = today)
+                    }
+                    MyBooksReadToggle(status = "done", logs = canonical(completed))
+                }
+            }
+        }
+    }
+
     fun toggle(
         currentLogs: List<MyBooksReadLog>,
         markRead: Boolean,

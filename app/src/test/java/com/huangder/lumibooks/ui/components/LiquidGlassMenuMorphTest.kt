@@ -303,6 +303,38 @@ class LiquidGlassMenuMorphTest {
     }
 
     @Test
+    fun `card content waits until the source snapshot has faded`() {
+        assertEquals(0f, LiquidGlassMenuMorph.cardContentProgress(0f), 0f)
+        assertEquals(0f, LiquidGlassMenuMorph.cardContentProgress(LiquidGlassMenuMorph.SourceFadeEnd), 0f)
+        assertTrue(
+            LiquidGlassMenuMorph.cardContentProgress(
+                LiquidGlassMenuMorph.SourceFadeEnd + 0.01f
+            ) > 0f
+        )
+    }
+
+    @Test
+    fun `card morph keeps the right edge and never squashes the source`() {
+        val card = Rect(left = 100f, top = 300f, right = 1000f, bottom = 1100f)
+        val target = Rect(left = 340f, top = 620f, right = 1000f, bottom = 880f)
+
+        val start = LiquidGlassMenuMorph.morphRect(card, target, 0f, squash = false)
+        assertEquals(card, start)
+        for (step in 0..100) {
+            val rect = LiquidGlassMenuMorph.morphRect(
+                card,
+                target,
+                step / 100f,
+                squash = false
+            )
+            assertEquals("right edge must stay anchored", card.right, rect.right, 0.001f)
+            assertTrue("left edge only moves inward", rect.left >= card.left - 0.001f)
+            assertTrue("height converges toward the row", rect.height <= card.height + 0.001f)
+        }
+        assertEquals(target, LiquidGlassMenuMorph.morphRect(card, target, 1f, squash = false))
+    }
+
+    @Test
     fun `content group un-blurs as it surfaces`() {
         assertEquals(LiquidGlassMenuMorph.ContentBlurDp, LiquidGlassMenuMorph.contentBlurDp(0f), 0.001f)
         assertEquals(0f, LiquidGlassMenuMorph.contentBlurDp(1f), 0.001f)

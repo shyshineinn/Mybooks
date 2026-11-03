@@ -13,7 +13,8 @@ import java.util.Locale
 internal data class ServerDetailRow(
     val label: String,
     val value: String,
-    val url: String? = null
+    val url: String? = null,
+    val isStatus: Boolean = false
 )
 
 @Composable
@@ -100,15 +101,21 @@ internal fun customRows(meta: ServerBookMeta, reserved: Set<String> = emptySet()
     }
 }
 
-/** 内容卡中的元数据行（简介单独渲染，阅读记录和文件行由各自的区块处理）。 */
+/**
+ * 内容卡中的元数据行（简介单独渲染，阅读记录和文件行由各自的区块处理）。
+ * [statusText] 传入详情页当前有效状态（含本地 override），避免等待缓存刷新。
+ */
 @Composable
-internal fun buildServerDetailRows(meta: ServerBookMeta): List<ServerDetailRow> {
+internal fun buildServerDetailRows(
+    meta: ServerBookMeta,
+    statusText: String? = null
+): List<ServerDetailRow> {
     val rows = mutableListOf<ServerDetailRow>()
     meta.translators.takeIf { it.isNotEmpty() }?.let {
         rows += ServerDetailRow(stringResource(R.string.mybooks_edit_field_translators), it.joinToString("、"))
     }
-    statusDisplay(meta.status).takeIf { it.isNotBlank() }?.let {
-        rows += ServerDetailRow(stringResource(R.string.server_meta_status), it)
+    (statusText ?: statusDisplay(meta.status)).takeIf { it.isNotBlank() }?.let {
+        rows += ServerDetailRow(stringResource(R.string.server_meta_status), it, isStatus = true)
     }
     ratingDisplay(meta.rating)?.let {
         rows += ServerDetailRow(stringResource(R.string.server_meta_rating), it)

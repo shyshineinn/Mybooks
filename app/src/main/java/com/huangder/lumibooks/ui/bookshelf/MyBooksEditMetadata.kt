@@ -95,7 +95,9 @@ internal fun collectMyBooksScalarChanges(
     changed: MutableMap<String, Any?>,
     managed: MutableSet<String>
 ) {
-    val fields = listOf("title", "author", "translators", "status", "summary", "rating", "series", "series_index", "publisher", "pub_year", "isbn", "douban_id")
+    // 阅读状态已迁到详情页，编辑弹窗不再管理 status：
+    // 否则保存其它字段时 replaceLocalEdits() 会把详情页写入的 override 清掉。
+    val fields = listOf("title", "author", "translators", "summary", "rating", "series", "series_index", "publisher", "pub_year", "isbn", "douban_id")
     managed += fields
     val translators = parseMyBooksTranslators(state.translators)
     if (translators != parseMyBooksTranslators(base.opt("translators"))) {
@@ -104,7 +106,6 @@ internal fun collectMyBooksScalarChanges(
     val baseValues = mapOf(
         "title" to base.optTextOrEmpty("title").ifBlank { "未命名" },
         "author" to base.optTextOrEmpty("author").ifBlank { "未知作者" },
-        "status" to base.optTextOrEmpty("status").ifBlank { "wish" },
         "summary" to base.optTextOrEmpty("summary"),
         "rating" to base.optDouble("rating", 0.0),
         "series" to base.optTextOrEmpty("series"),
@@ -117,7 +118,6 @@ internal fun collectMyBooksScalarChanges(
     val draftValues = mapOf(
         "title" to state.title.trim().ifBlank { "未命名" },
         "author" to state.author.trim().ifBlank { "未知作者" },
-        "status" to state.status,
         "summary" to state.summary.trim(),
         "rating" to kotlin.math.round(state.rating.toDouble() * 10) / 10,
         "series" to state.series.trim(),

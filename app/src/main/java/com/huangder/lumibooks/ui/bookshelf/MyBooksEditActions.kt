@@ -9,7 +9,6 @@ interface MyBooksEditActions {
     fun updateSeries(value: String)
     fun updateSeriesIndex(value: String)
     fun updateSummary(value: String)
-    fun updateStatus(value: String)
     fun updateIdentifier(index: Int, type: String? = null, value: String? = null)
     fun addIdentifier()
     fun removeIdentifier(index: Int)

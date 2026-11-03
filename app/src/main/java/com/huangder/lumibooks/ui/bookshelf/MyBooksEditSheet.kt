@@ -420,30 +420,6 @@ private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
 @Composable
 private fun ReadingManagementSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
     SectionHeader(stringResource(R.string.mybooks_edit_section_reading))
-    Text(
-        text = stringResource(R.string.mybooks_edit_field_status),
-        fontSize = 13.sp,
-        lineHeight = 16.sp,
-        fontWeight = FontWeight.Medium,
-        color = AppColors.TextSecondary,
-        modifier = Modifier.padding(bottom = 6.dp)
-    )
-    StatusSegment(
-        selected = when (state.status) {
-            "reading" -> 1
-            "done" -> 2
-            else -> 0
-        },
-        enabled = !state.saving,
-        onSelected = { index ->
-            viewModel.updateStatus(when (index) {
-                1 -> "reading"
-                2 -> "done"
-                else -> "wish"
-            })
-        }
-    )
-    Spacer(Modifier.height(16.dp))
     ResponsiveFieldPair(
         first = { modifier ->
             EditorTextField(
@@ -1057,20 +1033,6 @@ private fun ResponsiveFieldPair(
             }
         }
     }
-}
-
-@Composable
-private fun StatusSegment(
-    selected: Int,
-    enabled: Boolean,
-    onSelected: (Int) -> Unit
-) {
-    val labels = listOf(
-        stringResource(R.string.mybooks_edit_status_wish),
-        stringResource(R.string.mybooks_edit_status_reading),
-        stringResource(R.string.mybooks_edit_status_done)
-    )
-    TwoOrThreeSegment(labels, selected, enabled, onSelected)
 }
 
 @Composable

@@ -8,6 +8,7 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +27,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -111,12 +115,46 @@ fun rememberMyBooksMeta(book: Book): MyBooksMetaUiState {
 }
 
 @Composable
-internal fun MyBooksDetailRows(meta: ServerBookMeta) {
+internal fun MyBooksDetailRows(
+    meta: ServerBookMeta,
+    statusText: String? = null,
+    statusClickable: Boolean = false,
+    onStatusClick: () -> Unit = {},
+    onStatusBounds: (Rect) -> Unit = {}
+) {
     val context = LocalContext.current
-    buildServerDetailRows(meta).forEach { row ->
-        DetailRow(row.label, row.value, row.url != null, onClick = {
-            row.url?.let { openServerUrl(context, it) }
-        })
+    buildServerDetailRows(meta, statusText).forEach { row ->
+        if (row.isStatus) {
+            ReadingStatusDetailRow(
+                label = row.label,
+                value = row.value,
+                clickable = statusClickable,
+                onClick = onStatusClick,
+                onBounds = onStatusBounds
+            )
+        } else {
+            DetailRow(row.label, row.value, row.url != null, onClick = {
+                row.url?.let { openServerUrl(context, it) }
+            })
+        }
+    }
+}
+
+/** The one interactive status row, shared by cached meta and the offline fallback. */
+@Composable
+internal fun ReadingStatusDetailRow(
+    label: String,
+    value: String,
+    clickable: Boolean,
+    onClick: () -> Unit,
+    onBounds: (Rect) -> Unit
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { onBounds(it.boundsInRoot()) }
+    ) {
+        DetailRow(label, value, clickable = clickable, onClick = onClick)
     }
 }
 

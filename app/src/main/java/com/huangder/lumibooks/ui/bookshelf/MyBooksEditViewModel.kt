@@ -420,7 +420,6 @@ class MyBooksEditViewModel @Inject constructor(
     override fun updateTitle(value: String) = mutate { it.copy(title = value) }
     override fun updateAuthor(value: String) = mutate { it.copy(author = value) }
     override fun updateTranslators(value: String) = mutate { it.copy(translators = value) }
-    override fun updateStatus(value: String) = mutate { it.copy(status = value) }
     override fun updateSummary(value: String) = mutate { it.copy(summary = value) }
     fun updateRating(value: Float) = mutate { it.copy(rating = value.coerceIn(0f, 10f)) }
     override fun updateSeries(value: String) = mutate {

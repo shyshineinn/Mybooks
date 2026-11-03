@@ -16,6 +16,7 @@ import com.huangder.lumibooks.data.sync.BookDownloadState
 import com.huangder.lumibooks.data.sync.CloudBookDownloadResult
 import com.huangder.lumibooks.domain.model.Book
 import com.huangder.lumibooks.domain.model.BookFormat
+import com.huangder.lumibooks.domain.model.ReadingStatus
 import com.huangder.lumibooks.domain.model.TagNameValidator
 import com.huangder.lumibooks.domain.repository.BookRepository
 import com.huangder.lumibooks.util.FileUtils
@@ -319,6 +320,37 @@ class MyBooksSyncManager @Inject constructor(
 
         val fields = linkedMapOf<String, Any?>("status" to toggle.status)
         if (logsChanged) fields["read_logs"] = MyBooksReadStatus.logsToJson(toggle.logs)
+        recordLocalEdit(bookId, fields)
+    }
+
+    /**
+     * 详情页三态选择：只改服务器 status；想读/在读不清理 read_logs，
+     * 已读才按既有规则补一条完成记录，随后进入同一条离线 override 推送通道。
+     */
+    suspend fun setReadingStatus(bookId: String, target: ReadingStatus) {
+        val state = myBooksSyncStateDao.get(bookId)
+            ?: error(context.getString(R.string.mybooks_edit_save_failed))
+        val base = runCatching { JSONObject(state.baseJson) }.getOrDefault(JSONObject())
+        val overrides = runCatching { JSONObject(state.overridesJson) }.getOrDefault(JSONObject())
+        val currentLogs = MyBooksReadStatus.parseLogs(
+            if (overrides.has("read_logs")) overrides.opt("read_logs") else base.opt("read_logs")
+        )
+        val transition = MyBooksReadStatus.transition(
+            currentLogs = currentLogs,
+            target = target,
+            today = LocalDate.now().toString()
+        )
+        val logsChanged = MyBooksReadStatus.canonical(transition.logs) !=
+            MyBooksReadStatus.canonical(currentLogs)
+        val currentStatus = (if (overrides.has("status")) {
+            overrides.optString("status")
+        } else {
+            base.optString("status")
+        }).ifBlank { "wish" }
+        if (transition.status == currentStatus && !logsChanged) return
+
+        val fields = linkedMapOf<String, Any?>("status" to transition.status)
+        if (logsChanged) fields["read_logs"] = MyBooksReadStatus.logsToJson(transition.logs)
         recordLocalEdit(bookId, fields)
     }
 

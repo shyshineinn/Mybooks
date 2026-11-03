@@ -43,6 +43,7 @@ import com.huangder.lumibooks.util.toSnapshot
 import com.huangder.lumibooks.util.parser.BookParserFactory
 import com.huangder.lumibooks.data.sync.MyBooksConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -2302,6 +2303,30 @@ class HomeViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(error = e.message)
+            }
+        }
+    }
+
+    /**
+     * 详情页三态分类：只写服务器 status / read_logs，不改本地阅读进度。
+     * 失败时回传错误，由选择卡片恢复原状态并提示。
+     */
+    fun setReadingStatus(
+        book: Book,
+        status: ReadingStatus,
+        onResult: (success: Boolean, message: String?) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            try {
+                myBooksSyncManager.setReadingStatus(book.id, status)
+                onResult(true, null)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                val message = e.message?.takeIf { it.isNotBlank() }
+                    ?: application.getString(R.string.mybooks_edit_save_failed)
+                _uiState.value = _uiState.value.copy(error = message)
+                onResult(false, message)
             }
         }
     }

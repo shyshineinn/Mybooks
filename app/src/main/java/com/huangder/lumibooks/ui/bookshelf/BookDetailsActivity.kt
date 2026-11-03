@@ -4,6 +4,7 @@ import com.huangder.lumibooks.ui.icons.AppIcons
 import com.huangder.lumibooks.data.sync.BookDownloadState
 import com.huangder.lumibooks.data.sync.MyBooksConfig
 import com.huangder.lumibooks.data.sync.RemoteBookFormats
+import com.huangder.lumibooks.data.sync.toServerStatus
 
 import android.content.Context
 import android.content.Intent
@@ -48,6 +49,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -83,6 +85,7 @@ import com.huangder.lumibooks.data.local.DataStoreManager
 import com.huangder.lumibooks.domain.model.Book
 import com.huangder.lumibooks.domain.model.BookDeleteMode
 import com.huangder.lumibooks.domain.model.DEFAULT_APP_ACCENT_HEX
+import com.huangder.lumibooks.domain.model.ReadingStatus
 import com.huangder.lumibooks.ui.components.ConfigurableActivityBack
 import com.huangder.lumibooks.ui.components.CloudAwareBookDeleteDialog
 import com.huangder.lumibooks.ui.components.EditInputDialog
@@ -115,6 +118,7 @@ import com.huangder.lumibooks.util.TimeUtils
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
@@ -284,6 +288,106 @@ fun BookDetailsScreen(
         if (metaState.meta != null) notesViewModel.refresh(book, metaState.meta)
     }
     val menuHost = LocalLiquidGlassMenuHost.current
+    val selectorDensity = LocalDensity.current
+    val selectorScope = rememberCoroutineScope()
+    var statusSelectorOpen by remember(book.id) { mutableStateOf(false) }
+    var selectorSaving by remember(book.id) { mutableStateOf(false) }
+    val selectorStatus = remember(book.id) { mutableStateOf<ReadingStatus?>(null) }
+    var locallyUpdatedStatus by remember(book.id) { mutableStateOf<ReadingStatus?>(null) }
+    val effectiveReadingStatus = locallyUpdatedStatus
+        ?: library.serverReadingStatusByBookId[book.id]
+        ?: metaState.meta?.status?.let { ReadingStatus.fromServerStatus(it) }
+    LaunchedEffect(library.serverReadingStatusByBookId[book.id]) {
+        // 本地结果只做即时回显；同步状态一旦落地就以服务器 override 为准。
+        if (locallyUpdatedStatus != null && library.serverReadingStatusByBookId[book.id] != null) {
+            locallyUpdatedStatus = null
+        }
+    }
+
+    fun openReadingStatusSelector(anchor: ReadingStatusMorphAnchor) {
+        val host = menuHost ?: return
+        selectorStatus.value = anchor.status
+        selectorSaving = false
+        val fontScale = selectorDensity.fontScale
+        val selectedCenterPx = with(selectorDensity) {
+            ReadingStatusSelectorMetrics.selectedCenterFromTop(
+                fontScale,
+                anchor.status.selectorIndex()
+            ).toPx()
+        }
+        val marginPx = with(selectorDensity) { 8.dp.toPx() }
+        val initialStatus = anchor.status
+        val selectorWidth = minOf(
+            ReadingStatusSelectorMetrics.Width,
+            with(selectorDensity) { anchor.cardBounds.width.toDp() }
+        )
+        val spec = LiquidGlassMenuSpec(
+            anchorBounds = anchor.cardBounds,
+            width = selectorWidth,
+            items = emptyList(),
+            sourceId = anchor.sourceId,
+            anchorCornerRadius = AppRadius.lg,
+            motion = ReadingStatusSelectorMotion,
+            keepTriggerInteractive = false,
+            cardMorph = true,
+            cardSurface = true,
+            targetBounds = { source, measuredHeightPx, widthPx, hostWidthPx, hostHeightPx, safeTopPx, safeBottomPx ->
+                readingStatusSelectorTargetRect(
+                    source = source,
+                    statusCenterOffsetPx = anchor.statusCenterOffsetPx,
+                    selectedCenterFromTopPx = selectedCenterPx,
+                    widthPx = widthPx,
+                    heightPx = measuredHeightPx,
+                    hostWidthPx = hostWidthPx,
+                    hostHeightPx = hostHeightPx,
+                    safeTopPx = safeTopPx,
+                    safeBottomPx = safeBottomPx,
+                    marginPx = marginPx
+                )
+            },
+            onDismiss = { statusSelectorOpen = false },
+            content = { enabled, _ ->
+                ReadingStatusSelectorContent(
+                    selected = selectorStatus.value ?: initialStatus,
+                    saving = selectorSaving,
+                    enabled = enabled,
+                    onSelect = { target ->
+                        val previous = selectorStatus.value ?: initialStatus
+                        if (!selectorSaving) {
+                            if (target == effectiveReadingStatus) {
+                                host.dismiss()
+                            } else {
+                                selectorStatus.value = target
+                                selectorSaving = true
+                                homeViewModel.setReadingStatus(book, target) { success, message ->
+                                    if (success) {
+                                        // Keep the options locked through the feedback beat and the
+                                        // reverse morph, so a second tap cannot race the dismissal.
+                                        locallyUpdatedStatus = target
+                                        // 阅读记录区块也应按新的 read_logs 刷新，而不是只等下次进页。
+                                        editViewModel.loadMeta(book, forceRefresh = true)
+                                        selectorScope.launch {
+                                            delay(160)
+                                            if (statusSelectorOpen) host.dismiss()
+                                        }
+                                    } else {
+                                        selectorSaving = false
+                                        selectorStatus.value = previous
+                                        toast.show(
+                                            message ?: context.getString(R.string.mybooks_edit_save_failed)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+        )
+        statusSelectorOpen = true
+        host.show(spec)
+    }
+
     var notesMenuExpanded by remember { mutableStateOf(false) }
     var notesMenuBounds by remember { mutableStateOf(Rect.Zero) }
     var pendingNoteUpload by remember { mutableStateOf<MyBooksPickedNote?>(null) }
@@ -537,7 +641,10 @@ fun BookDetailsScreen(
                         onEdit = { if (MyBooksConfig.isMyBooks(book)) editingMyBooks = true else editing = true },
                         onTags = { tagsOpen = true },
                         onMove = { moveOpen = true },
-                        onReview = { BookReviewActivity.start(context, book.id, book.title, book.coverPath) }
+                        onReview = { BookReviewActivity.start(context, book.id, book.title, book.coverPath) },
+                        readingStatus = effectiveReadingStatus,
+                        statusMorphActive = statusSelectorOpen,
+                        onReadingStatusClick = { anchor -> openReadingStatusSelector(anchor) }
                     )
                 }
                 BookDetailsPage.Reading -> {
@@ -799,29 +906,94 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
     onEdit: () -> Unit,
     onTags: () -> Unit,
     onMove: () -> Unit,
-    onReview: () -> Unit
+    onReview: () -> Unit,
+    readingStatus: ReadingStatus? = null,
+    statusMorphActive: Boolean = false,
+    onReadingStatusClick: ((ReadingStatusMorphAnchor) -> Unit)? = null
 ) {
     val serverBook = MyBooksConfig.isMyBooks(book)
     val meta = metaState.meta.takeIf { serverBook }
+    val currentStatus = readingStatus ?: meta?.let { ReadingStatus.fromServerStatus(it.status) }
+    val statusText = currentStatus?.let { statusDisplay(it.toServerStatus()) }
+    val detailsAnchorId = remember(book.id) { "mybooks-details-card-${book.id}" }
+    val cardGeometry = remember(book.id) { ReadingStatusCardGeometry() }
+    val contentRevision = remember(book, meta, folder, tags, readingStatus) {
+        listOf(book, meta, folder, tags, readingStatus)
+    }
+    var frozenRevision by remember(book.id) { mutableStateOf<Any?>(contentRevision) }
+    LaunchedEffect(statusMorphActive, contentRevision) {
+        if (!statusMorphActive) frozenRevision = contentRevision
+    }
+    val detailsAnchorModifier = if (serverBook) {
+        Modifier
+            .fillMaxWidth()
+            .liquidGlassMenuAnchor(
+                id = detailsAnchorId,
+                cornerRadius = AppRadius.lg,
+                recordOnce = true,
+                recordRevision = frozenRevision
+            )
+            .onGloballyPositioned { cardGeometry.cardBounds = it.boundsInRoot() }
+    } else {
+        Modifier.fillMaxWidth().onGloballyPositioned { cardGeometry.cardBounds = it.boundsInRoot() }
+    }
+    val openStatusSelector = {
+        val targetStatus = currentStatus
+        val openSelector = onReadingStatusClick
+        val cardBounds = cardGeometry.cardBounds
+        val statusBounds = cardGeometry.statusRowBounds
+        if (targetStatus != null && openSelector != null &&
+            cardBounds != Rect.Zero && statusBounds != Rect.Zero
+        ) {
+            openSelector(
+                ReadingStatusMorphAnchor(
+                    sourceId = detailsAnchorId,
+                    cardBounds = cardBounds,
+                    statusCenterOffsetPx = statusBounds.center.y - cardBounds.top,
+                    status = targetStatus
+                )
+            )
+        }
+    }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
         if (meta != null && hasMeaningfulSummary(meta.summary)) {
             InformationCard(contentPadding = PaddingValues(0.dp), verticalArrangement = Arrangement.Top) {
                 SummaryRow(meta.summary.trim(), summaryExpanded, onSummaryExpandedChange)
             }
         }
-        InformationCard(
-            title = stringResource(R.string.book_detail_group_details),
-            contentPadding = PaddingValues(0.dp),
-            verticalArrangement = Arrangement.Top
-        ) {
-            DetailRow(stringResource(R.string.book_title_label), book.title, true, onEdit)
-            DetailRow(stringResource(R.string.book_author_label), book.author, true, onEdit)
-            if (!serverBook) {
-                metaState.meta?.translators?.takeIf { it.isNotEmpty() }?.let {
-                    DetailRow(stringResource(R.string.mybooks_edit_field_translators), it.joinToString("、"), false)
+        Box(detailsAnchorModifier) {
+            InformationCard(
+                title = stringResource(R.string.book_detail_group_details),
+                contentPadding = PaddingValues(0.dp),
+                verticalArrangement = Arrangement.Top
+            ) {
+                DetailRow(stringResource(R.string.book_title_label), book.title, true, onEdit)
+                DetailRow(stringResource(R.string.book_author_label), book.author, true, onEdit)
+                if (!serverBook) {
+                    metaState.meta?.translators?.takeIf { it.isNotEmpty() }?.let {
+                        DetailRow(stringResource(R.string.mybooks_edit_field_translators), it.joinToString("、"), false)
+                    }
+                }
+                if (serverBook && meta == null && statusText != null) {
+                    // 缓存尚未到达时仍可用同步状态进入三态选择，离线也能改。
+                    ReadingStatusDetailRow(
+                        label = stringResource(R.string.server_meta_status),
+                        value = statusText,
+                        clickable = onReadingStatusClick != null,
+                        onClick = openStatusSelector,
+                        onBounds = { cardGeometry.statusRowBounds = it }
+                    )
+                }
+                meta?.let {
+                    MyBooksDetailRows(
+                        meta = it,
+                        statusText = statusText,
+                        statusClickable = currentStatus != null && onReadingStatusClick != null,
+                        onStatusClick = openStatusSelector,
+                        onStatusBounds = { cardGeometry.statusRowBounds = it }
+                    )
                 }
             }
-            meta?.let { MyBooksDetailRows(it) }
         }
         InformationCard(
             title = stringResource(R.string.book_detail_group_library),

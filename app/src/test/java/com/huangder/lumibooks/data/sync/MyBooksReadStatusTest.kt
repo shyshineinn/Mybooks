@@ -140,6 +140,63 @@ class MyBooksReadStatusTest {
     }
 
     @Test
+    fun wishTransitionKeepsAllReadingLogs() {
+        val logs = listOf(log("2026-09-01", "2026-09-05"), log("2026-10-10"))
+
+        val result = MyBooksReadStatus.transition(logs, ReadingStatus.WISH, "2026-11-03")
+
+        assertEquals("wish", result.status)
+        assertEquals(logs, result.logs)
+    }
+
+    @Test
+    fun readingTransitionKeepsCompletedHistory() {
+        val logs = listOf(log("2026-09-01", "2026-09-05"))
+
+        val result = MyBooksReadStatus.transition(logs, ReadingStatus.READING, "2026-11-03")
+
+        assertEquals("reading", result.status)
+        assertEquals(logs, result.logs)
+    }
+
+    @Test
+    fun doneTransitionAddsCompletionWhenHistoryHasNone() {
+        val result = MyBooksReadStatus.transition(emptyList(), ReadingStatus.DONE, "2026-11-03")
+
+        assertEquals("done", result.status)
+        assertEquals(listOf(log("2026-11-03", "2026-11-03")), result.logs)
+    }
+
+    @Test
+    fun doneTransitionFillsPendingLogInsteadOfAddingAnother() {
+        val result = MyBooksReadStatus.transition(
+            listOf(log("2026-10-01")),
+            ReadingStatus.DONE,
+            "2026-11-03"
+        )
+
+        assertEquals(listOf(log("2026-10-01", "2026-11-03")), result.logs)
+    }
+
+    @Test
+    fun doneTransitionDoesNotDuplicateAnExistingCompletion() {
+        val logs = listOf(log("2026-09-01", "2026-09-05"))
+        val result = MyBooksReadStatus.transition(logs, ReadingStatus.DONE, "2026-11-03")
+
+        assertEquals(logs, result.logs)
+        assertEquals("done", result.status)
+    }
+
+    @Test
+    fun doneTransitionDoesNotAddASecondDateForToday() {
+        val logs = listOf(log("2026-11-03", "2026-11-03"))
+        val result = MyBooksReadStatus.transition(logs, ReadingStatus.DONE, "2026-11-03")
+
+        assertEquals(logs, result.logs)
+        assertEquals(1, result.logs.count { it.finish == "2026-11-03" })
+    }
+
+    @Test
     fun categoryStatusUsesEffectiveServerStatusOnly() {
         assertEquals(
             ReadingStatus.WISH,

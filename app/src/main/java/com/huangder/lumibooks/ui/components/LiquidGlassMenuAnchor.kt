@@ -31,13 +31,21 @@ internal class LiquidGlassMenuAnchor(
     var rootBounds: Rect = Rect.Zero
     var windowBounds by mutableStateOf(Rect.Zero)
     var recorded = false
+    var recordedRevision: Any? = null
 }
 
-/** Put this before the trigger's background/clip so the entire visible control is handed off. */
+/**
+ * Put this before the trigger's background/clip so the entire visible control is handed off.
+ *
+ * Large sources can set [recordOnce] and pass a content [recordRevision]; the layer then
+ * refreshes only when the caller says the content changed instead of on every draw.
+ */
 fun Modifier.liquidGlassMenuAnchor(
     id: Any? = null,
     kind: LiquidGlassMenuAnchorKind = LiquidGlassMenuAnchorKind.Standalone,
-    cornerRadius: Dp? = null
+    cornerRadius: Dp? = null,
+    recordOnce: Boolean = false,
+    recordRevision: Any? = null
 ): Modifier = composed {
     val host = LocalLiquidGlassMenuHost.current ?: return@composed this
     val generatedId = remember { Any() }
@@ -59,9 +67,17 @@ fun Modifier.liquidGlassMenuAnchor(
             // Freeze the source RenderNode during the handoff. Never capture the overlay
             // back into the source, or glass sampling can form a recursive render tree.
             val hidden = host.hidesSource(anchor.id)
-            if (!host.ownsDrawing(anchor.id) && (!hidden || !anchor.recorded)) {
+            val revisionChanged = !recordOnce || !anchor.recorded || anchor.recordedRevision != recordRevision
+            // A whole-card source may change while it is hidden (e.g. after a status pick).
+            // Refreshing only on an explicit revision keeps the expand-back content current
+            // without re-recording every frame.
+            val hiddenRefresh = hidden && recordOnce && revisionChanged
+            if ((!host.ownsDrawing(anchor.id) || hiddenRefresh) &&
+                (!hidden || !anchor.recorded || hiddenRefresh) && revisionChanged
+            ) {
                 layer.record { this@drawWithContent.drawContent() }
                 anchor.recorded = true
+                anchor.recordedRevision = recordRevision
             }
             if (!hidden) drawLayer(layer)
         }
