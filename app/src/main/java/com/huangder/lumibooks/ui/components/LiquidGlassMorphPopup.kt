@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -193,7 +193,7 @@ fun LiquidGlassMorphPopup(
                                 (startContentRect.top - rect.top).roundToInt()
                             )
                         }
-                        .size(startContentWidthDp, startContentHeightDp)
+                        .requiredSize(startContentWidthDp, startContentHeightDp)
                         .graphicsLayer { alpha = rowAlpha() }
                         .clip(shape)
                         .clearAndSetSemantics {},
@@ -208,7 +208,7 @@ fun LiquidGlassMorphPopup(
                                 (targetRect.top - rect.top).roundToInt()
                             )
                         }
-                        .size(targetWidthDp, targetHeightDp)
+                        .requiredSize(targetWidthDp, targetHeightDp)
                         .graphicsLayer { alpha = targetContentAlpha() }
                         .clip(shape)
                         .then(

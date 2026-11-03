@@ -1631,6 +1631,7 @@
     <string name="mybooks_sync_state">同期状態</string>
 
     <string name="server_meta_status">読書状態</string>
+    <string name="server_meta_douban">豆瓣</string>
     <string name="server_meta_rating">評価</string>
     <string name="server_meta_series">シリーズ</string>
     <string name="server_meta_publication">出版</string>

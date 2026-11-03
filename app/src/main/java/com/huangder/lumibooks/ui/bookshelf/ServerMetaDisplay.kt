@@ -67,16 +67,20 @@ internal fun isbnRow(meta: ServerBookMeta): ServerDetailRow? {
     return ServerDetailRow("ISBN", value, identifier?.url)
 }
 
-internal fun identifierRows(meta: ServerBookMeta): List<ServerDetailRow> {
+internal fun identifierRows(
+    meta: ServerBookMeta,
+    labelFor: (String) -> String = { it }
+): List<ServerDetailRow> {
     val seen = HashSet<String>()
     val rows = mutableListOf<ServerDetailRow>()
     meta.identifiers.forEach { identifier ->
         val type = identifier.type?.takeIf { it.isNotBlank() }?.trim()
-        val label = identifier.label?.takeIf { it.isNotBlank() }?.trim() ?: type ?: return@forEach
-        if (type.equals("isbn", ignoreCase = true) || label.equals("ISBN", ignoreCase = true)) {
+        val rawLabel = identifier.label?.takeIf { it.isNotBlank() }?.trim() ?: type ?: return@forEach
+        if (type.equals("isbn", ignoreCase = true) || rawLabel.equals("ISBN", ignoreCase = true)) {
             return@forEach
         }
         val value = identifier.value?.takeIf { it.isNotBlank() }?.trim() ?: return@forEach
+        val label = labelFor(rawLabel)
         val key = "${label.lowercase(Locale.ROOT)}\u0000$value"
         if (seen.add(key)) rows += ServerDetailRow(label, value, identifier.url)
     }
@@ -89,11 +93,15 @@ private val reservedCustomLabels = setOf(
     "电子书文件", "文件名", "格式", "存储状态", "导入时间", "最后阅读", "文件位置"
 )
 
-internal fun customRows(meta: ServerBookMeta, reserved: Set<String> = emptySet()): List<ServerDetailRow> {
+internal fun customRows(
+    meta: ServerBookMeta,
+    reserved: Set<String> = emptySet(),
+    labelFor: (String) -> String = { it }
+): List<ServerDetailRow> {
     val seen = (reservedCustomLabels + reserved)
         .mapTo(HashSet()) { it.trim().lowercase(Locale.ROOT) }
     return meta.customDisplay.mapNotNull { (rawLabel, rawValue) ->
-        val label = rawLabel.trim()
+        val label = labelFor(rawLabel.trim())
         val value = rawValue.trim()
         if (label.isEmpty() || value.isEmpty()) return@mapNotNull null
         if (!seen.add(label.lowercase(Locale.ROOT))) return@mapNotNull null
@@ -110,6 +118,14 @@ internal fun buildServerDetailRows(
     meta: ServerBookMeta,
     statusText: String? = null
 ): List<ServerDetailRow> {
+    val doubanLabel = stringResource(R.string.server_meta_douban)
+    val labelFor: (String) -> String = { raw ->
+        if (raw.equals("douban", ignoreCase = true) || raw.equals("douban_id", ignoreCase = true)) {
+            doubanLabel
+        } else {
+            raw
+        }
+    }
     val rows = mutableListOf<ServerDetailRow>()
     meta.translators.takeIf { it.isNotEmpty() }?.let {
         rows += ServerDetailRow(stringResource(R.string.mybooks_edit_field_translators), it.joinToString("、"))
@@ -127,7 +143,7 @@ internal fun buildServerDetailRows(
         rows += ServerDetailRow(stringResource(R.string.server_meta_publication), it)
     }
     isbnRow(meta)?.let { rows += it }
-    rows += identifierRows(meta)
+    rows += identifierRows(meta, labelFor)
     val reserved = buildSet {
         rows.forEach { add(it.label) }
         listOf(
@@ -146,7 +162,7 @@ internal fun buildServerDetailRows(
             identifier.type?.takeIf { it.isNotBlank() }?.let(::add)
         }
     }
-    rows += customRows(meta, reserved)
+    rows += customRows(meta, reserved, labelFor)
     return rows
 }
 

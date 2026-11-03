@@ -1860,6 +1860,7 @@
     <string name="mybooks_sync_state">Sync status</string>
 
     <string name="server_meta_status">Reading status</string>
+    <string name="server_meta_douban">Douban</string>
     <string name="server_meta_rating">Rating</string>
     <string name="server_meta_series">Series</string>
     <string name="server_meta_publication">Publication</string>

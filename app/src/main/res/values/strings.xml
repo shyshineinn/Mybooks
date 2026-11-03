@@ -1884,6 +1884,7 @@
     <string name="mybooks_sync_failed">同步失败</string>
     <string name="mybooks_pull_sync_hint">松手同步服务器书库</string>
     <string name="server_meta_status">阅读状态</string>
+    <string name="server_meta_douban">豆瓣</string>
     <string name="server_meta_rating">评分</string>
     <string name="server_meta_series">系列</string>
     <string name="server_meta_publication">出版</string>

@@ -69,7 +69,7 @@ class ReadingStatusMorphTest {
 
     @Test
     fun `selector is a fixed compact column`() {
-        assertEquals(64.dp, ReadingStatusSelectorMetrics.Width)
+        assertEquals(132.dp, ReadingStatusSelectorMetrics.Width)
         assertEquals(188.dp, ReadingStatusSelectorMetrics.contentHeight(1f))
     }
 }

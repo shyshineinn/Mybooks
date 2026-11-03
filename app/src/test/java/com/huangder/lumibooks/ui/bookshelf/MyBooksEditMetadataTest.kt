@@ -24,6 +24,18 @@ class MyBooksEditMetadataTest {
         assertEquals(listOf("A B", "甲·乙"), parseMyBooksTranslators(" A  B 、a b / 甲·乙"))
     }
 
+    @Test fun rawDoubanKeysUseTheReadableLocalizedLabel() {
+        val meta = ServerBookMeta.fromJson(
+            """{"title":"书","identifiers":{"douban":"123"},"custom_display":{"douban_id":"456"}}""",
+            1
+        )
+        val labelFor: (String) -> String = {
+            if (it.equals("douban", true) || it.equals("douban_id", true)) "豆瓣" else it
+        }
+        assertEquals("豆瓣", identifierRows(meta, labelFor).single { it.value == "123" }.label)
+        assertEquals("豆瓣", customRows(meta, labelFor = labelFor).single { it.value == "456" }.label)
+    }
+
     @Test fun missingTranslatorsAndHiddenMetadataNeverEraseFilledValues() {
         val legacyCustom = ServerBookMeta.fromJson("""{"title":"书","custom_display":{"译者":"旧自定义值"}}""", 1)
         assertEquals("旧自定义值", customRows(legacyCustom).single { it.label == "译者" }.value)

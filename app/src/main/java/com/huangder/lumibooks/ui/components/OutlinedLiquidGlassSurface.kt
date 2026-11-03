@@ -3,12 +3,15 @@ package com.huangder.lumibooks.ui.components
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.shape.CornerBasedShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
+import com.huangder.lumibooks.ui.theme.ContinuousCornerBasedShape
 import com.huangder.lumibooks.ui.theme.LocalAppTheme
 import com.huangder.lumibooks.ui.theme.LocalCardOutlinesEnabled
 import com.huangder.lumibooks.ui.theme.LocalIsDarkTheme
@@ -42,16 +45,27 @@ fun OutlinedLiquidGlassSurface(
     val activeBackdrop = backdrop
         ?: LocalLiquidGlassBackdrop.current
         ?: LocalLumiBackgroundBackdrop.current
+    // Continuous-corner masks deliberately skip Backdrop's lens. Popups need the
+    // same refraction/highlight as menus, so use the equivalent CornerBasedShape
+    // for the liquid renderer while keeping the caller's corner sizes.
+    val surfaceShape = if (liquidTheme && shape is CornerBasedShape) {
+        RoundedCornerShape(shape.topStart, shape.topEnd, shape.bottomEnd, shape.bottomStart)
+    } else {
+        shape
+    }
+    val lensActive = supportsLiquidGlassLens(surfaceShape) &&
+        surfaceShape !is ContinuousCornerBasedShape
     // Real liquid glass already has a refractive rim/highlight. A black stroke
     // fights those optics, so only fallback surfaces opt into the user outline.
     val liquidOpticsActive = liquidTheme &&
         LocalLiquidGlassCapability.current.supported &&
         LocalLiquidGlassLayer.current < 3 &&
         activeBackdrop != null &&
-        !LocalReduceTransparency.current
+        !LocalReduceTransparency.current &&
+        lensActive
     Box(modifier) {
         LiquidGlassSurface(
-            shape = shape,
+            shape = surfaceShape,
             fallbackColor = fallbackColor,
             modifier = Modifier.matchParentSize(),
             backdrop = backdrop,
@@ -70,7 +84,7 @@ fun OutlinedLiquidGlassSurface(
                     .border(
                         width = 0.5.dp,
                         color = outlineColor.copy(alpha = resolvedOutlineAlpha),
-                        shape = shape
+                        shape = surfaceShape
                     )
             )
         }

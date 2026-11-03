@@ -50,7 +50,7 @@ internal class ReadingStatusCardGeometry {
 
 /** Shared measurements for the compact, centered status selector. */
 internal object ReadingStatusSelectorMetrics {
-    val Width = 64.dp
+    val Width = 132.dp
     val HeaderHeight = 28.dp
     val RowHeight = 48.dp
     val HorizontalPadding = 8.dp

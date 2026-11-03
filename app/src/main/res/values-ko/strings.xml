@@ -1631,6 +1631,7 @@
     <string name="mybooks_sync_state">동기화 상태</string>
 
     <string name="server_meta_status">읽기 상태</string>
+    <string name="server_meta_douban">더우반</string>
     <string name="server_meta_rating">평점</string>
     <string name="server_meta_series">시리즈</string>
     <string name="server_meta_publication">출판</string>
