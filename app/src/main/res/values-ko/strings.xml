@@ -1524,7 +1524,7 @@
     <string name="mybooks_douban_candidates">Douban 후보</string>
     <string name="mybooks_douban_cookieless">서버에 Douban 쿠키가 설정되지 않아 결과가 불완전할 수 있습니다</string>
     <string name="mybooks_douban_failed">조회에 실패했습니다. 나중에 다시 시도하세요</string>
-    <string name="mybooks_douban_fill">Douban에서 채우기</string>
+    <string name="mybooks_douban_fill">채우기</string>
     <string name="mybooks_douban_filled">Douban에서 채웠습니다. 계속 수정할 수 있습니다</string>
     <string name="mybooks_douban_filling">검색 중…</string>
     <string name="mybooks_douban_need_title_isbn">먼저 제목이나 ISBN을 입력하세요</string>

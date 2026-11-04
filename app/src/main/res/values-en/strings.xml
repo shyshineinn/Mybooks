@@ -1753,7 +1753,7 @@
     <string name="mybooks_douban_candidates">Douban matches</string>
     <string name="mybooks_douban_cookieless">Douban cookies are not configured on the server; results may be incomplete</string>
     <string name="mybooks_douban_failed">Lookup failed. Try again later.</string>
-    <string name="mybooks_douban_fill">Fill from Douban</string>
+    <string name="mybooks_douban_fill">Fill</string>
     <string name="mybooks_douban_filled">Filled from Douban; you can edit further</string>
     <string name="mybooks_douban_filling">Searching…</string>
     <string name="mybooks_douban_need_title_isbn">Enter a title or ISBN first</string>

@@ -346,6 +346,16 @@ internal fun ColumnScope.EditSheetContent(
         verticalAlignment = Alignment.CenterVertically
     ) {
         LiquidGlassTextButton(
+            text = stringResource(R.string.mybooks_douban_fill),
+            enabled = state.loaded && !state.loading &&
+                (state.title.isNotBlank() || state.isbn.isNotBlank()) &&
+                !state.lookupRunning && !state.saving,
+            contentColor = AppColors.TextSecondary,
+            onClick = { viewModel.lookupDouban() },
+            modifier = Modifier.height(44.dp).testTag("mybooks-douban-fill")
+        )
+        Spacer(Modifier.width(AppSpace.sm))
+        LiquidGlassTextButton(
             text = stringResource(R.string.cancel),
             enabled = !state.saving,
             contentColor = AppColors.TextSecondary,
@@ -419,7 +429,6 @@ private fun BasicFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
 
 @Composable
 private fun ReadingManagementSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
-    SectionHeader(stringResource(R.string.mybooks_edit_section_reading))
     ResponsiveFieldPair(
         first = { modifier ->
             EditorTextField(
@@ -504,23 +513,6 @@ private fun DoubanFillSection(state: MyBooksEditUiState, viewModel: MyBooksEditA
         }
     }
     val canFill = state.title.isNotBlank() || state.isbn.isNotBlank()
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        LiquidGlassTextButton(
-            text = if (state.lookupRunning) {
-                stringResource(R.string.mybooks_douban_filling)
-            } else {
-                stringResource(R.string.mybooks_douban_fill)
-            },
-            enabled = canFill && !state.lookupRunning && !state.saving,
-            contentColor = AppColors.TextSecondary,
-            modifier = Modifier.heightIn(min = 44.dp).testTag("mybooks-douban-fill"),
-            onClick = { viewModel.lookupDouban() }
-        )
-    }
     if (!canFill) {
         Text(
             text = stringResource(R.string.mybooks_douban_need_title_isbn),

@@ -1523,7 +1523,7 @@
     <string name="mybooks_douban_candidates">豆瓣候選</string>
     <string name="mybooks_douban_cookieless">伺服器未設定豆瓣 Cookie，結果可能不完整</string>
     <string name="mybooks_douban_failed">查詢失敗，請稍後再試</string>
-    <string name="mybooks_douban_fill">從豆瓣填入</string>
+    <string name="mybooks_douban_fill">填入</string>
     <string name="mybooks_douban_filled">已從豆瓣填入，可繼續修改</string>
     <string name="mybooks_douban_filling">檢索中…</string>
     <string name="mybooks_douban_need_title_isbn">先填書名或 ISBN</string>

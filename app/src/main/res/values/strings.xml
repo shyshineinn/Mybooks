@@ -1861,7 +1861,7 @@
     <string name="mybooks_edit_custom_unset">未填</string>
     <string name="mybooks_edit_custom_yes">是</string>
     <string name="mybooks_edit_custom_no">否</string>
-    <string name="mybooks_douban_fill">从豆瓣填充</string>
+    <string name="mybooks_douban_fill">填充</string>
     <string name="mybooks_douban_filling">检索中…</string>
     <string name="mybooks_douban_candidates">豆瓣候选</string>
     <string name="mybooks_douban_need_title_isbn">先填书名或 ISBN</string>

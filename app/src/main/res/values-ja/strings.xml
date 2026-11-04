@@ -1524,7 +1524,7 @@
     <string name="mybooks_douban_candidates">豆瓣の候補</string>
     <string name="mybooks_douban_cookieless">サーバーに豆瓣 Cookie が設定されていないため、結果が不完全な場合があります</string>
     <string name="mybooks_douban_failed">検索に失敗しました。後でもう一度お試しください</string>
-    <string name="mybooks_douban_fill">豆瓣から入力</string>
+    <string name="mybooks_douban_fill">入力</string>
     <string name="mybooks_douban_filled">豆瓣から入力しました。続けて編集できます</string>
     <string name="mybooks_douban_filling">検索中…</string>
     <string name="mybooks_douban_need_title_isbn">先に書名または ISBN を入力してください</string>

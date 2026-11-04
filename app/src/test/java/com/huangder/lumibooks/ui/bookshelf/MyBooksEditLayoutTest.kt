@@ -30,7 +30,14 @@ import java.lang.reflect.Proxy
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class MyBooksEditLayoutTest {
     @get:Rule val compose = createComposeRule()
-    private val actions = Proxy.newProxyInstance(MyBooksEditActions::class.java.classLoader, arrayOf(MyBooksEditActions::class.java)) { _, _, _ -> null } as MyBooksEditActions
+    private val actions = Proxy.newProxyInstance(MyBooksEditActions::class.java.classLoader, arrayOf(MyBooksEditActions::class.java)) { proxy, method, args ->
+        when (method.name) {
+            "equals" -> proxy === args?.firstOrNull()
+            "hashCode" -> System.identityHashCode(proxy)
+            "toString" -> "MyBooksEditActionsTestDouble"
+            else -> null
+        }
+    } as MyBooksEditActions
     private fun text(id: Int) = RuntimeEnvironment.getApplication().getString(id)
     private fun verify(width: Int, height: Int, importing: Boolean) {
         compose.setContent {
@@ -51,8 +58,9 @@ class MyBooksEditLayoutTest {
         compose.onNodeWithText(text(R.string.mybooks_edit_field_summary)).assertDoesNotExist()
         compose.onNodeWithText(text(R.string.mybooks_edit_section_basic)).assertDoesNotExist()
         compose.onNodeWithText(text(R.string.mybooks_edit_section_metadata)).assertDoesNotExist()
-        val before = compose.onNodeWithText(text(save)).fetchSemanticsNode().boundsInRoot
         compose.onNodeWithTag("mybooks-more-info").performScrollTo().performClick()
+        // Expanding content may grow the sheet; scrolling must keep its actions pinned.
+        val before = compose.onNodeWithText(text(save)).fetchSemanticsNode().boundsInRoot
         compose.onNodeWithText(text(R.string.mybooks_edit_add_read)).performScrollTo().assertIsDisplayed()
         assertEquals(before, compose.onNodeWithText(text(save)).fetchSemanticsNode().boundsInRoot)
         compose.onNodeWithText(text(title)).assertIsDisplayed()
