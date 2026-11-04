@@ -21,6 +21,9 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
+        with:
+          # The retired tools package is no longer available from sdkmanager.
+          packages: platform-tools
       - name: Install SDK components
         run: sdkmanager "platforms;android-37.0" "build-tools;36.0.0" "platform-tools"
       - run: chmod +x gradlew
