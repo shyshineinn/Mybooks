@@ -135,7 +135,7 @@ class ReadingStatusMorphOverlayTest {
         val card = compose.onNodeWithTag("liquid-glass-morph-card")
             .fetchSemanticsNode().boundsInRoot
         val widthDp = card.width / compose.density.density
-        assertTrue("selector width was ${widthDp}dp", widthDp in 128f..136f)
+        assertTrue("selector width was ${widthDp}dp", widthDp in 100f..104f)
         assertEquals(tapOrigin.value.x, card.center.x, 2f)
         assertEquals(tapOrigin.value.y, card.center.y, 2f)
 

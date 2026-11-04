@@ -1,6 +1,8 @@
 package com.huangder.lumibooks.ui.bookshelf
 
 import androidx.compose.ui.unit.dp
+import com.huangder.lumibooks.ui.components.liquidGlassMorphPopupTargetRect
+import com.huangder.lumibooks.ui.components.LiquidGlassMorphSelectorDefaults
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,7 +21,7 @@ class ReadingStatusMorphTest {
         centerY: Float = 1200f,
         hostW: Float = hostWidth,
         hostH: Float = hostHeight
-    ) = readingStatusSelectorTargetRect(
+    ) = liquidGlassMorphPopupTargetRect(
         originCenterX = centerX,
         originCenterY = centerY,
         widthPx = width,
@@ -69,7 +71,7 @@ class ReadingStatusMorphTest {
 
     @Test
     fun `selector is a fixed compact column`() {
-        assertEquals(132.dp, ReadingStatusSelectorMetrics.Width)
-        assertEquals(188.dp, ReadingStatusSelectorMetrics.contentHeight(1f))
+        assertEquals(102.dp, LiquidGlassMorphSelectorDefaults.Width)
+        assertEquals(188.dp, LiquidGlassMorphSelectorDefaults.contentHeight(1f))
     }
 }

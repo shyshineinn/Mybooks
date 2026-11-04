@@ -7,6 +7,8 @@ import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -18,7 +20,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import com.huangder.lumibooks.ui.theme.AppRoundedCornerShape
 import com.huangder.lumibooks.ui.theme.LiquidGlassCapability
@@ -127,5 +132,25 @@ class LiquidGlassStaticSurfaceRenderTest {
                 rendered.recycle()
             }
         }
+    }
+
+    @Test
+    fun outlinedSurfaceWrapsContentHeight() {
+        compose.setContent {
+            CompositionLocalProvider(
+                LocalAppTheme provides "liquid_glass",
+                LocalLiquidGlassCapability provides LiquidGlassCapability(true, false)
+            ) {
+                OutlinedLiquidGlassSurface(
+                    shape = AppRoundedCornerShape(28.dp),
+                    fallbackColor = Color.White,
+                    modifier = Modifier.fillMaxWidth().testTag("outlinedSurface")
+                ) {
+                    Box(Modifier.fillMaxWidth().height(48.dp))
+                }
+            }
+        }
+
+        compose.onNodeWithTag("outlinedSurface").assertHeightIsEqualTo(48.dp)
     }
 }

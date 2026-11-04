@@ -6,10 +6,15 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -20,12 +25,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -41,7 +49,94 @@ import com.huangder.lumibooks.ui.animation.VisualMotion
 import com.huangder.lumibooks.ui.theme.AppColors
 import com.huangder.lumibooks.ui.theme.LocalMenuAnimationStyle
 import com.huangder.lumibooks.ui.theme.LocalMotionEnabled
+import com.kyant.backdrop.Backdrop
 import kotlin.math.roundToInt
+
+/** Shared visual geometry for compact morph popups. */
+@Immutable
+data class LiquidGlassMorphPopupStyle(
+    val startRadius: Dp = 8.dp,
+    val targetRadius: Dp = 24.dp,
+    val screenMargin: Dp = 8.dp,
+    val anchorInset: Dp = 2.dp
+)
+
+/** Center on the tap and correct only for the available screen edges. */
+internal fun liquidGlassMorphPopupTargetRect(
+    originCenterX: Float,
+    originCenterY: Float,
+    widthPx: Float,
+    heightPx: Float,
+    hostWidthPx: Float,
+    hostHeightPx: Float,
+    safeTopPx: Float,
+    safeBottomPx: Float,
+    marginPx: Float
+): Rect {
+    val maxWidth = (hostWidthPx - marginPx * 2f).coerceAtLeast(1f)
+    val width = widthPx.coerceIn(1f, maxWidth)
+    val maxLeft = (hostWidthPx - marginPx - width).coerceAtLeast(marginPx)
+    val left = (originCenterX - width / 2f).coerceIn(marginPx, maxLeft)
+    val cardHeight = heightPx.coerceAtLeast(1f)
+    val minTop = safeTopPx + marginPx
+    val maxTop = (hostHeightPx - safeBottomPx - marginPx - cardHeight).coerceAtLeast(minTop)
+    val top = (originCenterY - cardHeight / 2f).coerceIn(minTop, maxTop)
+    return Rect(left, top, left + width, top + cardHeight)
+}
+
+/**
+ * Ready-to-use popup for an anchor row and a tap, both in root coordinates.
+ * Owns the anchor inset, safe-area placement and target measurement; callers
+ * supply their original row and popup content without repeating animation math.
+ */
+@Composable
+fun AnchoredLiquidGlassMorphPopup(
+    anchorBounds: Rect,
+    originCenter: Offset,
+    width: Dp,
+    height: Dp,
+    closeRequested: Boolean,
+    onDismiss: () -> Unit,
+    onFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+    style: LiquidGlassMorphPopupStyle = LiquidGlassMorphPopupStyle(),
+    startContent: @Composable BoxScope.() -> Unit,
+    content: @Composable BoxScope.(enabled: Boolean) -> Unit
+) {
+    val density = LocalDensity.current
+    var hostOrigin by remember { mutableStateOf(Offset.Zero) }
+    BoxWithConstraints(modifier.fillMaxSize().onGloballyPositioned { hostOrigin = it.positionInRoot() }) {
+        val localAnchor = anchorBounds.translate(-hostOrigin)
+        val localCenter = originCenter - hostOrigin
+        val inset = minOf(with(density) { style.anchorInset.toPx() }, localAnchor.width / 4f)
+        val startRect = Rect(
+            localAnchor.left + inset, localAnchor.top,
+            localAnchor.right - inset, localAnchor.bottom
+        )
+        val targetRect = liquidGlassMorphPopupTargetRect(
+            originCenterX = localCenter.x,
+            originCenterY = localCenter.y,
+            widthPx = minOf(with(density) { width.toPx() }, startRect.width),
+            heightPx = with(density) { height.toPx() },
+            hostWidthPx = constraints.maxWidth.toFloat(),
+            hostHeightPx = constraints.maxHeight.toFloat(),
+            safeTopPx = WindowInsets.safeDrawing.getTop(density).toFloat(),
+            safeBottomPx = WindowInsets.safeDrawing.getBottom(density).toFloat(),
+            marginPx = with(density) { style.screenMargin.toPx() }
+        )
+        LiquidGlassMorphPopup(
+            startRect = startRect,
+            targetRect = targetRect,
+            closeRequested = closeRequested,
+            onDismiss = onDismiss,
+            onFinished = onFinished,
+            style = style,
+            startContentRect = localAnchor,
+            startContent = startContent,
+            content = content
+        )
+    }
+}
 
 /**
  * Shared anchored glass morph used by compact popups.
@@ -58,11 +153,11 @@ fun LiquidGlassMorphPopup(
     onDismiss: () -> Unit,
     onFinished: () -> Unit,
     modifier: Modifier = Modifier,
-    startRadius: Dp = 8.dp,
-    /** Menus settle on a 24dp continuous corner; popups share that radius. */
-    targetRadius: Dp = 24.dp,
+    style: LiquidGlassMorphPopupStyle = LiquidGlassMorphPopupStyle(),
     /** Content can keep the original row alignment when the glass is inset. */
     startContentRect: Rect = startRect,
+    /** Capture of the page only; the popup must never sample its own glass. */
+    backdrop: Backdrop? = LocalLiquidGlassMorphPopupBackdrop.current,
     startContent: @Composable BoxScope.() -> Unit,
     content: @Composable BoxScope.(enabled: Boolean) -> Unit
 ) {
@@ -73,46 +168,24 @@ fun LiquidGlassMorphPopup(
     var settled by remember { mutableStateOf(false) }
     val currentOnFinished by rememberUpdatedState(onFinished)
 
-    LaunchedEffect(startRect, targetRect, normalStyle) {
+    LaunchedEffect(startRect, targetRect, normalStyle, motionEnabled, closeRequested) {
         settled = false
-        if (motionEnabled) {
-            if (normalStyle) {
-                progress.animateTo(1f, VisualMotion.tween(190))
-            } else {
-                progress.animateTo(
-                    1f,
-                    VisualMotion.spring(
-                        dampingRatio = 0.9f,
-                        stiffness = 300f,
-                        visibilityThreshold = 0.001f
-                    )
-                )
-            }
+        val target = if (closeRequested) 0f else 1f
+        if (!motionEnabled) {
+            progress.snapTo(target)
+        } else if (normalStyle) {
+            progress.animateTo(target, VisualMotion.tween(if (closeRequested) 140 else 190))
         } else {
-            progress.snapTo(1f)
-        }
-        settled = true
-    }
-    LaunchedEffect(closeRequested) {
-        if (!closeRequested) return@LaunchedEffect
-        settled = false
-        if (motionEnabled) {
-            if (normalStyle) {
-                progress.animateTo(0f, VisualMotion.tween(140))
-            } else {
-                progress.animateTo(
-                    0f,
-                    VisualMotion.spring(
-                        dampingRatio = 0.9f,
-                        stiffness = 360f,
-                        visibilityThreshold = 0.001f
-                    )
+            progress.animateTo(
+                target,
+                VisualMotion.spring(
+                    dampingRatio = 0.9f,
+                    stiffness = if (closeRequested) 360f else 300f,
+                    visibilityThreshold = 0.001f
                 )
-            }
-        } else {
-            progress.snapTo(0f)
+            )
         }
-        currentOnFinished()
+        if (closeRequested) currentOnFinished() else settled = true
     }
 
     val rectState = remember(startRect, targetRect, normalStyle) {
@@ -123,10 +196,10 @@ fun LiquidGlassMorphPopup(
     val rowAlpha = { if (normalStyle) 0f else startContentAlpha(progress.value) }
     val targetContentAlpha = { if (normalStyle) 1f else targetContentAlpha(progress.value) }
     val outlineAlpha = { if (normalStyle) 1f else outlineRevealAlpha(progress.value) }
-    val startRadiusPx = with(density) { startRadius.toPx() }
-    val targetRadiusPx = with(density) { targetRadius.toPx() }
+    val startRadiusPx = with(density) { style.startRadius.toPx() }
+    val targetRadiusPx = with(density) { style.targetRadius.toPx() }
     val shapeRadius = if (normalStyle) {
-        targetRadius
+        style.targetRadius
     } else {
         with(density) { lerp(startRadiusPx, targetRadiusPx, progress.value).toDp() }
     }
@@ -171,6 +244,7 @@ fun LiquidGlassMorphPopup(
     ) {
         OutlinedLiquidGlassSurface(
             shape = shape,
+            backdrop = backdrop,
             fallbackColor = AppColors.CardBg,
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.TopStart,
@@ -193,6 +267,9 @@ fun LiquidGlassMorphPopup(
                                 (startContentRect.top - rect.top).roundToInt()
                             )
                         }
+                        // requiredSize alone centers oversized children inside the animated
+                        // constraints. Keep both text layers in their root-space rectangles.
+                        .wrapContentSize(Alignment.TopStart, unbounded = true)
                         .requiredSize(startContentWidthDp, startContentHeightDp)
                         .graphicsLayer { alpha = rowAlpha() }
                         .clip(shape)
@@ -208,6 +285,7 @@ fun LiquidGlassMorphPopup(
                                 (targetRect.top - rect.top).roundToInt()
                             )
                         }
+                        .wrapContentSize(Alignment.TopStart, unbounded = true)
                         .requiredSize(targetWidthDp, targetHeightDp)
                         .graphicsLayer { alpha = targetContentAlpha() }
                         .clip(shape)

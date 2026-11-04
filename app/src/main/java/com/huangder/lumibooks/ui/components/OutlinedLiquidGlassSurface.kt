@@ -1,7 +1,6 @@
 package com.huangder.lumibooks.ui.components
 
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,30 +62,27 @@ fun OutlinedLiquidGlassSurface(
         activeBackdrop != null &&
         !LocalReduceTransparency.current &&
         lensActive
-    Box(modifier) {
-        LiquidGlassSurface(
-            shape = surfaceShape,
-            fallbackColor = fallbackColor,
-            modifier = Modifier.matchParentSize(),
-            backdrop = backdrop,
-            contentScrimColor = contentScrimColor,
-            transparencyOverride = transparencyOverride,
-            interactive = false,
-            contentAlignment = contentAlignment,
-            outlineAlpha = resolvedOutlineAlpha,
-            content = content
+    val outlineModifier = if (liquidTheme && !liquidOpticsActive && outlinesEnabled && resolvedOutlineAlpha > 0f) {
+        val outlineColor = if (LocalIsDarkTheme.current) Color.White else Color.Black
+        Modifier.border(
+            width = 0.5.dp,
+            color = outlineColor.copy(alpha = resolvedOutlineAlpha),
+            shape = surfaceShape
         )
-        if (liquidTheme && !liquidOpticsActive && outlinesEnabled && resolvedOutlineAlpha > 0f) {
-            val outlineColor = if (LocalIsDarkTheme.current) Color.White else Color.Black
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .border(
-                        width = 0.5.dp,
-                        color = outlineColor.copy(alpha = resolvedOutlineAlpha),
-                        shape = surfaceShape
-                    )
-            )
-        }
+    } else {
+        Modifier
     }
+    LiquidGlassSurface(
+        shape = surfaceShape,
+        fallbackColor = fallbackColor,
+        modifier = modifier,
+        backdrop = backdrop,
+        contentScrimColor = contentScrimColor,
+        transparencyOverride = transparencyOverride,
+        interactive = false,
+        contentAlignment = contentAlignment,
+        outlineAlpha = resolvedOutlineAlpha,
+        decorationModifier = outlineModifier,
+        content = content
+    )
 }
