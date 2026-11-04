@@ -1861,7 +1861,8 @@ internal fun BookshelfCollection(
                             downloadState = downloadStates[book.id],
                             onHaptic = onHaptic,
                             onSelectionToggle = { onSelectionToggle(book) },
-                            onClick = { bounds -> onBookClick(book, bounds) }
+                            onClick = { bounds -> onBookClick(book, bounds) },
+                            onBookDetails = { onBookDetails(book) }
                         )
                     }
                 }
@@ -2528,7 +2529,8 @@ private fun AnimatedBookGridItem(
     downloadState: BookDownloadState?,
     onHaptic: () -> Unit,
     onSelectionToggle: () -> Unit,
-    onClick: (Rect?) -> Unit
+    onClick: (Rect?) -> Unit,
+    onBookDetails: () -> Unit
 ) {
     val scale by animateFloatAsState(
         targetValue = when {
@@ -2568,7 +2570,8 @@ private fun AnimatedBookGridItem(
             downloadState = downloadState,
             onHaptic = onHaptic,
             onSelectionToggle = onSelectionToggle,
-            onClick = onClick
+            onClick = onClick,
+            onBookDetails = onBookDetails
         )
     }
 }
@@ -2586,7 +2589,8 @@ private fun BookGridItem(
     downloadState: BookDownloadState?,
     onHaptic: () -> Unit,
     onSelectionToggle: () -> Unit,
-    onClick: (Rect?) -> Unit
+    onClick: (Rect?) -> Unit,
+    onBookDetails: () -> Unit
 ) {
     val coverCorner = if (LocalAppTheme.current == "liquid_glass") 16.dp else AppRadius.sm
     // 是否为当前操作的目标书本（在组合期间读取，确保触发重组）
@@ -2623,6 +2627,17 @@ private fun BookGridItem(
     val selectionColor = AppColors.Accent
     val selectionShape = AppRoundedCornerShape(22.dp)
 
+    val onBookLongClick: (() -> Unit)? = if (isEditing) null else {
+        {
+            onHaptic()
+            contextMenuState.onLongPressConfirmed(
+                book = book,
+                bounds = coverCoordinates[0]?.boundsInRoot() ?: Rect.Zero,
+                onHaptic = onHaptic
+            )
+        }
+    }
+
     Column(
         modifier = Modifier
             .graphicsLayer { alpha = overlayAlpha }
@@ -2644,21 +2659,9 @@ private fun BookGridItem(
             }
             .combinedClickable(
                 indication = null,
-                interactionSource = interactionSource,
-                onClick = if (isEditing) onSelectionToggle else {
-                    { onClick(coverCoordinates[0]?.boundsInRoot()) }
-                },
-                onLongClick = if (isEditing) null else {
-                    {
-                        onHaptic()
-                        contextMenuState.onLongPressConfirmed(
-                            book = book,
-                            bounds = coverCoordinates[0]?.boundsInRoot()
-                                ?: androidx.compose.ui.geometry.Rect.Zero,
-                            onHaptic = onHaptic
-                        )
-                    }
-                }
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = if (isEditing) onSelectionToggle else onBookDetails,
+                onLongClick = onBookLongClick
             )
     ) {
         // 封面（3:4 比例）— 按下缩小 + overlay 状态控制
@@ -2681,6 +2684,14 @@ private fun BookGridItem(
                         textAlignCenter = true,
                         takeCharacters = 8
                     )
+                )
+                .combinedClickable(
+                    indication = null,
+                    interactionSource = interactionSource,
+                    onClick = if (isEditing) onSelectionToggle else {
+                        { onClick(coverCoordinates[0]?.boundsInRoot()) }
+                    },
+                    onLongClick = onBookLongClick
                 )
                 .graphicsLayer {
                     scaleX = coverScale
@@ -2729,8 +2740,11 @@ private fun BookGridItem(
 
         Spacer(Modifier.height(AppSpace.sm))
 
-        // 书名（收藏时加心形）
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // 封面下方的信息区域统一沿用卡片的详情入口。
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
                 text = book.title,
                 fontSize = AppType.BodySmall,

@@ -514,6 +514,10 @@ internal fun BookshelfSearchResultItem(
         Modifier
     }
 
+    val onBookLongClick = {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (selectionMode) onSelectionToggle() else onExpandedChange()
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -521,7 +525,12 @@ internal fun BookshelfSearchResultItem(
     ) {
         BookshelfSearchResultCard(
             book = book,
-            coverModifier = coverModifier,
+            coverModifier = coverModifier.combinedClickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = if (selectionMode) onSelectionToggle else onClick,
+                onLongClick = onBookLongClick
+            ),
             tagNames = tagNames,
             selected = selected,
             isSynced = isSynced,
@@ -529,11 +538,8 @@ internal fun BookshelfSearchResultItem(
             modifier = Modifier.combinedClickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() },
-                onClick = if (selectionMode) onSelectionToggle else onClick,
-                onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    if (selectionMode) onSelectionToggle() else onExpandedChange()
-                }
+                onClick = if (selectionMode) onSelectionToggle else onBookDetails,
+                onLongClick = onBookLongClick
             )
         )
 
@@ -679,7 +685,8 @@ private fun BookshelfSearchResultCard(
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = resolveAppFontFamily(KaiTi),
                     maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(

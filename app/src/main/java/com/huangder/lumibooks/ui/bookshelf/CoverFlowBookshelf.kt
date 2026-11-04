@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -234,7 +235,9 @@ internal fun CoverFlowBookshelf(
                         },
                             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                             CoverFlowMetadata(books, state, syncedBookIds, downloadStates,
-                                Modifier.fillMaxWidth().height((100f * density.fontScale.coerceIn(1f, 1.6f)).dp))
+                                Modifier.fillMaxWidth().height((100f * density.fontScale.coerceIn(1f, 1.6f)).dp),
+                                enabled = enabled && libraryReady && !isEditing && !transferring,
+                                onBookDetails = { book -> state.dismissMenu(); actions.details(book) })
                             Box(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp), contentAlignment = Alignment.TopCenter) {
                                 CoverFlowScrollbar(
                                     state = state,
@@ -342,14 +345,24 @@ private fun CoverFlowMetadata(
     state: CoverFlowState,
     syncedIds: Set<String>,
     downloadStates: Map<String, BookDownloadState>,
-    modifier: Modifier
+    modifier: Modifier,
+    enabled: Boolean,
+    onBookDetails: (Book) -> Unit
 ) {
     val first by remember(state) { derivedStateOf { floor(state.position).toInt() } }
-    Box(modifier.clearAndSetSemantics { }, contentAlignment = Alignment.TopCenter) {
+    Box(
+        modifier.then(
+            if (enabled && state.isCentered(state.focusedIndex)) {
+                Modifier.clickable { books.getOrNull(state.focusedIndex)?.let(onBookDetails) }
+            } else Modifier
+        ),
+        contentAlignment = Alignment.TopCenter
+    ) {
         (first..first + 1).forEach { index ->
             val book = books.getOrNull(index) ?: return@forEach
             key(book.id) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                    .then(if (index != state.focusedIndex) Modifier.clearAndSetSemantics { } else Modifier)
                     .graphicsLayer { alpha = (1f - abs(index - state.position)).coerceIn(0f, 1f) },
                     horizontalAlignment = Alignment.CenterHorizontally) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
