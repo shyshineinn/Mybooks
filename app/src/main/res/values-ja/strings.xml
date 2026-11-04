@@ -1669,4 +1669,10 @@
     <string name="mybooks_edit_more_info">その他の書籍情報</string>
     <string name="mybooks_edit_more_expanded">展開済み</string>
     <string name="mybooks_edit_more_collapsed">折りたたみ</string>
+    <string name="import_metadata_preparing">入力中</string>
+    <string name="import_metadata_read_failed">書籍情報を読み取れません。確認してからインポートしてください</string>
+    <string name="import_metadata_multiple_isbns">複数の ISBN が見つかりました。版を確認してください</string>
+    <string name="import_metadata_not_found">利用可能な ISBN または豆瓣情報が見つかりません。情報を確認してください</string>
+    <string name="import_metadata_ambiguous">該当する版を特定できません。書籍情報を選択して確認してください</string>
+    <string name="import_metadata_incomplete">書籍情報が不完全です。ISBN と著者を確認してください</string>
 </resources>

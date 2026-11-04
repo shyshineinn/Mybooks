@@ -114,7 +114,9 @@ data class MyBooksEditUiState(
      * 本地正文副本要绑到同一本书并沿用同一份书名/作者：
      * 否则本地行会退回文件名/未知作者，下一轮同步再把这份文件来源的值推回服务器。
      */
-    val created: MyBooksCreatedBook? = null
+    val created: MyBooksCreatedBook? = null,
+    val importPreparing: Boolean = false,
+    val automaticImportDraft: String? = null
 )
 
 data class MyBooksSyncBadge(
@@ -306,9 +308,10 @@ class MyBooksEditViewModel @Inject constructor(
         }
     }
 
-    /** 新建模式：草稿从文件名起步，确认后提交到服务器并上传正文。 */
+    /** 本地导入先提取 ISBN 并填充，只有需要确认时才进入信息编辑。 */
     fun beginCreate(source: MyBooksCreateSource, localOnly: Boolean = false) {
         beginJob?.cancel()
+        lookupJob?.cancel()
         createSource = source
         book = null
         base = JSONObject()
@@ -318,19 +321,50 @@ class MyBooksEditViewModel @Inject constructor(
             loaded = true,
             title = source.fileName.substringBeforeLast('.'),
             author = "",
-            status = "wish"
+            status = "wish",
+            importPreparing = localOnly
         )
         // 自定义字段定义同样要在新建模式里加载，否则该区块无法填写。
         if (localOnly) {
-            viewModelScope.launch {
+            beginJob = viewModelScope.launch {
                 val columns = withContext(Dispatchers.IO) { readCachedColumns() }
-                _uiState.value = _uiState.value.copy(customColumns = columns)
+                val result = prepareLocalBookImport(
+                    initial = _uiState.value.copy(customColumns = columns),
+                    readMetadata = {
+                        withContext(Dispatchers.IO) {
+                            com.huangder.lumibooks.util.readImportBookMetadata(context, source.uri.toString(), source.fileName).let { metadata ->
+                                metadata.copy(isbns = metadata.isbns.ifEmpty {
+                                    com.huangder.lumibooks.util.findImportIsbns(source.fileName)
+                                })
+                            }
+                        }
+                    },
+                    lookupIsbn = { api.lookupIsbn(it) },
+                    searchTitle = { api.searchMetadata(it) }
+                )
+                val reviewMessage = when (result.reviewReason) {
+                    ImportReviewReason.READ_FAILED -> context.getString(R.string.import_metadata_read_failed)
+                    ImportReviewReason.MULTIPLE_ISBNS -> context.getString(R.string.import_metadata_multiple_isbns) + "\n" + result.state.lookupMessage.orEmpty()
+                    ImportReviewReason.NOT_FOUND -> context.getString(R.string.import_metadata_not_found)
+                    ImportReviewReason.AMBIGUOUS, ImportReviewReason.CONFLICT -> context.getString(R.string.import_metadata_ambiguous)
+                    ImportReviewReason.INCOMPLETE -> context.getString(R.string.import_metadata_incomplete)
+                    ImportReviewReason.BLOCKED -> context.getString(R.string.mybooks_douban_blocked)
+                    ImportReviewReason.LOOKUP_FAILED -> result.failure?.let(::doubanError) ?: context.getString(R.string.mybooks_douban_failed)
+                    null -> null
+                }
+                val prepared = result.state.copy(importPreparing = false, lookupMessage = reviewMessage, dirty = false)
+                val errors = if (result.reviewReason == null) validate(prepared) else emptyMap()
+                _uiState.value = prepared.copy(fieldErrors = errors, error = errors.values.firstOrNull())
+                if (result.reviewReason == null && errors.isEmpty()) {
+                    _uiState.value = _uiState.value.copy(automaticImportDraft = localImportDraft())
+                }
             }
         } else refreshCustomColumns()
     }
 
     fun localImportDraft(): String? {
-        val current = _uiState.value
+        // 新导入的书统一从“想读”开始，不沿用刮削来源的阅读状态。
+        val current = _uiState.value.copy(status = "wish")
         val errors = validate(current)
         if (errors.isNotEmpty()) {
             _uiState.value = current.copy(fieldErrors = errors, error = errors.values.firstOrNull())

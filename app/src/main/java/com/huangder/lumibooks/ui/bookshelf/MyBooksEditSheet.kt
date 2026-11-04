@@ -119,14 +119,35 @@ fun MyBooksEditSheet(
     var saved = false
     val createMode = createSource != null
     var localDraft by remember(createSource?.uri) { mutableStateOf<String?>(null) }
+    var sourceStarted by remember(createSource?.uri) { mutableStateOf(false) }
     LaunchedEffect(createSource?.uri, book?.id) {
         if (createSource != null) {
             viewModel.beginCreate(createSource, localOnly = localImport)
+            sourceStarted = true
         } else if (book != null) {
             viewModel.begin(book, meta)
         }
     }
     DisposableEffect(Unit) { onDispose { viewModel.dismiss() } }
+
+    if (localImport) {
+        val automaticDraft = state.automaticImportDraft
+        LaunchedEffect(sourceStarted, automaticDraft) {
+            if (sourceStarted && automaticDraft != null) onLocalImportSaved?.invoke(automaticDraft)
+        }
+        if (!sourceStarted || state.importPreparing) {
+            LiquidGlassBottomSheetScaffold(onDismiss = { onDismiss(null) }) { requestDismiss ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AppSpace.md)) {
+                    CircularProgressIndicator(Modifier.size(22.dp), color = AppColors.Accent, strokeWidth = 2.dp)
+                    Text(stringResource(R.string.import_metadata_preparing), color = AppColors.TextPrimary, modifier = Modifier.weight(1f))
+                    LiquidGlassTextButton(text = stringResource(R.string.cancel), onClick = requestDismiss,
+                        contentColor = AppColors.TextSecondary, modifier = Modifier.height(44.dp))
+                }
+            }
+            return
+        }
+        if (automaticDraft != null) return
+    }
 
     // 外壳与书架的标签弹窗共用：对话框宿主层（浮在标签栏之上）+ 底部对齐的抽屉动效。
     LiquidGlassBottomSheetScaffold(

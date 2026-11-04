@@ -1669,4 +1669,10 @@
     <string name="mybooks_edit_more_info">추가 도서 정보</string>
     <string name="mybooks_edit_more_expanded">펼쳐짐</string>
     <string name="mybooks_edit_more_collapsed">접힘</string>
+    <string name="import_metadata_preparing">채우는 중</string>
+    <string name="import_metadata_read_failed">도서 정보를 읽을 수 없습니다. 확인 후 가져오세요</string>
+    <string name="import_metadata_multiple_isbns">여러 ISBN을 찾았습니다. 판본을 확인하세요</string>
+    <string name="import_metadata_not_found">사용 가능한 ISBN 또는 Douban 정보를 찾지 못했습니다. 정보를 확인하세요</string>
+    <string name="import_metadata_ambiguous">일치하는 판본이 불분명합니다. 도서 정보를 선택하고 확인하세요</string>
+    <string name="import_metadata_incomplete">도서 정보가 불완전합니다. ISBN과 저자를 확인하세요</string>
 </resources>

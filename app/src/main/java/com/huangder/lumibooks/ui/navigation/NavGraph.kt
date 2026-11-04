@@ -1453,13 +1453,15 @@ fun MainNavGraph(
             informationSources = emptyList(); informationIndex = 0; informationDrafts = emptyMap(); importRequestFolderId = null
         }
         informationSources.getOrNull(informationIndex)?.let { source ->
-            MyBooksEditSheet(book = null, meta = null, createSource = source, localImport = true,
-                onDismiss = { commitConfirmedImports(informationDrafts) },
-                onLocalImportSaved = { draft ->
-                    val updated = informationDrafts + (source.uri.toString() to draft)
-                    informationDrafts = updated
-                    if (informationIndex + 1 < informationSources.size) informationIndex++ else commitConfirmedImports(updated)
-                })
+            androidx.compose.runtime.key(source.uri.toString()) {
+                MyBooksEditSheet(book = null, meta = null, createSource = source, localImport = true,
+                    onDismiss = { commitConfirmedImports(informationDrafts) },
+                    onLocalImportSaved = { draft ->
+                        val updated = informationDrafts + (source.uri.toString() to draft)
+                        informationDrafts = updated
+                        if (informationIndex + 1 < informationSources.size) informationIndex++ else commitConfirmedImports(updated)
+                    })
+            }
         }
 
         ReadingGoalSheet(

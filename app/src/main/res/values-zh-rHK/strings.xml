@@ -1667,4 +1667,10 @@
     <string name="mybooks_edit_more_info">更多書籍資訊</string>
     <string name="mybooks_edit_more_expanded">已展開</string>
     <string name="mybooks_edit_more_collapsed">已收合</string>
+    <string name="import_metadata_preparing">正在填充</string>
+    <string name="import_metadata_read_failed">無法讀取書籍資訊，請檢查後繼續匯入</string>
+    <string name="import_metadata_multiple_isbns">識別到多個 ISBN，請確認本書版本後填入</string>
+    <string name="import_metadata_not_found">未找到可用的 ISBN 或豆瓣資訊，請補充後匯入</string>
+    <string name="import_metadata_ambiguous">匹配版本不明確，請選擇並確認書籍資訊</string>
+    <string name="import_metadata_incomplete">書籍資訊不完整，請補充 ISBN、作者等資訊</string>
 </resources>
