@@ -23,9 +23,11 @@ class MyBooksAuthClient(serverUrl: String) {
         }
         check(status.optBoolean("initialized")) { "服务器尚未初始化，请在服务器运行 npm run setup" }
     }
-    suspend fun login(username: String, password: String, deviceName: String): String {
+    suspend fun login(username: String, password: String, deviceName: String, deviceKey: String,
+        previousToken: String? = null): String {
+        require(deviceKey.isNotBlank()) { "设备标识不能为空" }
         val result = request("login", JSONObject().put("username", username).put("password", password)
-            .put("device_name", deviceName))
+            .put("device_name", deviceName).put("device_key", deviceKey), previousToken)
         return result.optString("token").takeIf { it.isNotBlank() }
             ?: error("服务器未返回设备登录凭据")
     }

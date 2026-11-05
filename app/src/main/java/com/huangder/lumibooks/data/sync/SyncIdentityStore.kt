@@ -3,6 +3,8 @@ package com.huangder.lumibooks.data.sync
 import com.huangder.lumibooks.data.local.dao.SyncStateDao
 import com.huangder.lumibooks.data.local.entity.SyncStateEntity
 import java.util.UUID
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -12,15 +14,16 @@ class SyncIdentityStore @Inject constructor(
 ) {
     @Volatile
     private var cachedDeviceId: String? = null
+    private val deviceIdMutex = Mutex()
 
-    suspend fun deviceId(): String {
-        cachedDeviceId?.let { return it }
+    suspend fun deviceId(): String = deviceIdMutex.withLock {
+        cachedDeviceId?.let { return@withLock it }
         val stored = syncStateDao.getValue(DEVICE_ID_KEY)?.takeIf { it.isNotBlank() }
         val resolved = stored ?: UUID.randomUUID().toString().also {
             syncStateDao.putState(SyncStateEntity(DEVICE_ID_KEY, it))
         }
         cachedDeviceId = resolved
-        return resolved
+        resolved
     }
 
     companion object {

@@ -24,13 +24,29 @@ class MyBooksAuthClientTest {
             server.enqueue(MockResponse().setBody("""{"token":"device-session"}"""))
             val client = MyBooksAuthClient(server.url("/").toString())
             client.testConnection()
-            assertEquals("device-session", client.login("admin", "test-password", "phone"))
+            assertEquals("device-session", client.login("admin", "test-password", "phone", "android:device-one"))
             assertEquals("/api/auth/status", server.takeRequest().path)
             val login = server.takeRequest()
             assertEquals("POST", login.method)
             assertEquals("/api/auth/login", login.path)
-            assertEquals("test-password", JSONObject(login.body.readUtf8()).getString("password"))
+            val body = JSONObject(login.body.readUtf8())
+            assertEquals("test-password", body.getString("password"))
+            assertEquals("android:device-one", body.getString("device_key"))
             assertNull(login.getHeader("Authorization"))
+        } finally { server.shutdown() }
+    }
+    @Test fun reloginSendsStableDeviceKeyAndPreviousSession() = runBlocking {
+        val server = MockWebServer()
+        try {
+            server.start()
+            repeat(2) { server.enqueue(MockResponse().setBody("""{"token":"new-session"}""")) }
+            repeat(2) { index ->
+                val client = MyBooksAuthClient(server.url("/").toString())
+                client.login("admin", "test-password", "same-model", "android:stable", "previous-$index")
+                val request = server.takeRequest()
+                assertEquals("android:stable", JSONObject(request.body.readUtf8()).getString("device_key"))
+                assertEquals("Bearer previous-$index", request.getHeader("Authorization"))
+            }
         } finally { server.shutdown() }
     }
     @Test fun refusesLoginRedirectsWithoutForwardingPassword() = runBlocking {
@@ -40,9 +56,10 @@ class MyBooksAuthClientTest {
             source.start(); destination.start()
             source.enqueue(MockResponse().setResponseCode(307).setHeader("Location", destination.url("/collect")))
             try {
-                MyBooksAuthClient(source.url("/").toString()).login("admin", "test-password", "phone")
+                MyBooksAuthClient(source.url("/").toString()).login("admin", "test-password", "phone", "android:device-one", "old-session")
                 fail("Redirect must be rejected")
             } catch (error: MyBooksHttpException) { assertEquals(307, error.status) }
+            assertEquals("Bearer old-session", source.takeRequest().getHeader("Authorization"))
             assertNull(destination.takeRequest(200, TimeUnit.MILLISECONDS))
         } finally { source.shutdown(); destination.shutdown() }
     }

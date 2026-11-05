@@ -11,6 +11,7 @@ import com.huangder.lumibooks.data.sync.MyBooksEndpoint
 import com.huangder.lumibooks.data.sync.MyBooksSyncDirection
 import com.huangder.lumibooks.data.sync.MyBooksSyncPreferencesStore
 import com.huangder.lumibooks.data.sync.MyBooksSyncManager
+import com.huangder.lumibooks.data.sync.SyncIdentityStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -43,6 +44,7 @@ class MyBooksSettingsViewModel @Inject constructor(
     private val syncManager: MyBooksSyncManager,
     private val preferencesStore: MyBooksSyncPreferencesStore,
     private val syncScheduler: com.huangder.lumibooks.data.sync.MyBooksSyncScheduler,
+    private val syncIdentityStore: SyncIdentityStore,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val state = MutableStateFlow(MyBooksSettingsUiState())
@@ -128,7 +130,9 @@ class MyBooksSettingsViewModel @Inject constructor(
             state.value = state.value.copy(loginCompleted = true)
             return@runOperation context.getString(R.string.mybooks_server_login_success)
         }
-        val token = client.login(username.trim(), password, "${Build.MANUFACTURER} ${Build.MODEL}".take(100))
+        val previousToken = MyBooksConfig.adminToken.takeIf { url == MyBooksConfig.SERVER_URL && it.isNotBlank() }
+        val token = client.login(username.trim(), password, "${Build.MANUFACTURER} ${Build.MODEL}".take(100),
+            "android:${syncIdentityStore.deviceId()}", previousToken)
         try {
             syncManager.saveConnection(url, username.trim(), token)
         } catch (error: Exception) {
