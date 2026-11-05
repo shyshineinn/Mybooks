@@ -30,8 +30,8 @@ internal fun ReadingStatus.toServerStatus(): String = when (this) {
  */
 internal object MyBooksReadStatus {
     /**
-     * 三态切换：想读/在读只改分类，不动阅读进度与历史完成记录；
-     * 已读沿用现有规则补完成日期，已有完成记录时不重复写。
+     * 三态切换：首次在读记录开始日期；后续分类切换保留已有轮次与历史记录；
+     * 已读优先完成当前轮次，没有未完成轮次时不重复写历史完成记录。
      */
     fun transition(
         currentLogs: List<MyBooksReadLog>,
@@ -43,19 +43,15 @@ internal object MyBooksReadStatus {
             ReadingStatus.WISH ->
                 MyBooksReadToggle(status = "wish", logs = logs)
             ReadingStatus.READING ->
-                MyBooksReadToggle(status = "reading", logs = logs)
+                MyBooksReadToggle(status = "reading", logs = if (logs.isEmpty()) listOf(MyBooksReadLog(start = today)) else logs)
             ReadingStatus.DONE -> {
-                if (logs.any { it.finish.isNotBlank() }) {
-                    MyBooksReadToggle(status = "done", logs = logs)
-                } else {
-                    val pending = logs.indexOfLast { it.start.isNotBlank() && it.finish.isBlank() }
-                    val completed = if (pending >= 0) {
-                        logs.toMutableList().also { it[pending] = it[pending].copy(finish = today) }
-                    } else {
-                        logs + MyBooksReadLog(start = today, finish = today)
-                    }
-                    MyBooksReadToggle(status = "done", logs = canonical(completed))
+                val pending = logs.indexOfLast { it.start.isNotBlank() && it.finish.isBlank() }
+                val completed = when {
+                    pending >= 0 -> logs.toMutableList().also { it[pending] = it[pending].copy(finish = today) }
+                    logs.any { it.finish.isNotBlank() } -> logs
+                    else -> logs + MyBooksReadLog(start = today, finish = today)
                 }
+                MyBooksReadToggle(status = "done", logs = canonical(completed))
             }
         }
     }
@@ -78,15 +74,30 @@ internal object MyBooksReadStatus {
             )
         }
 
-        if (logs.none { it.finish.isNotBlank() }) {
-            val pending = logs.indexOfLast { it.start.isNotBlank() && it.finish.isBlank() }
-            if (pending >= 0) {
-                logs[pending] = logs[pending].copy(finish = today)
-            } else {
-                logs += MyBooksReadLog(start = today, finish = today)
-            }
+        return transition(logs, ReadingStatus.DONE, today)
+    }
+
+    /** An explicit reread starts one new round; repeated taps keep the pending round. */
+    fun startNextReading(currentLogs: List<MyBooksReadLog>, today: String): MyBooksReadToggle {
+        val logs = canonical(currentLogs)
+        val hasPending = logs.any { it.start.isNotBlank() && it.finish.isBlank() }
+        val next = if (!hasPending && logs.any { it.finish.isNotBlank() }) {
+            logs + MyBooksReadLog(start = today)
+        } else logs
+        return MyBooksReadToggle(status = "reading", logs = canonical(next))
+    }
+
+    /** Remove only the newest unfinished round, never a completed historical record. */
+    fun abandonCurrentReading(currentLogs: List<MyBooksReadLog>): MyBooksReadToggle {
+        val logs = canonical(currentLogs).toMutableList()
+        val pending = logs.indexOfLast { it.start.isNotBlank() && it.finish.isBlank() }
+        if (pending >= 0) logs.removeAt(pending)
+        val status = when {
+            logs.any { it.start.isNotBlank() && it.finish.isBlank() } -> "reading"
+            logs.any { it.finish.isNotBlank() } -> "done"
+            else -> "wish"
         }
-        return MyBooksReadToggle(status = "done", logs = canonical(logs))
+        return MyBooksReadToggle(status, logs)
     }
 
     fun parseLogs(raw: Any?): List<MyBooksReadLog> {
@@ -117,8 +128,8 @@ internal object MyBooksReadStatus {
     fun canonical(logs: List<MyBooksReadLog>): List<MyBooksReadLog> =
         logs.map { MyBooksReadLog(it.start.trim(), it.finish.trim()) }
             .filter { it.start.isNotEmpty() || it.finish.isNotEmpty() }
-            .distinct()
-            .sortedWith(compareBy({ it.start }, { it.finish }))
+            // Same-day rereads can legitimately have identical start and finish dates.
+            .sortedWith(compareBy<MyBooksReadLog> { it.start.ifBlank { it.finish } }.thenBy { it.finish.isBlank() }.thenBy { it.finish })
 
     /** 阅读进度首次达到 100% 的那一次写入才需要自动同步服务器。 */
     fun becameFinished(previousProgress: Float, newProgress: Float): Boolean =

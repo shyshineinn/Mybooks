@@ -288,4 +288,13 @@ class MyBooksMergeTest {
         val cached = JSONObject(remote.toString()).put("translators", "[\"甲\",\"乙\"]")
         assertFalse(merge(base=cached, remote=remote).hasLocalChanges)
     }
+
+    @Test fun sameDayRereadRemainsARealChangeInTheSyncPatch() {
+        val log = JSONObject().put("start", "2026-11-04").put("finish", "2026-11-04")
+        val base = baseJson().put("read_logs", JSONArray().put(log))
+        val overrides = JSONObject().put("read_logs", JSONArray().put(log).put(JSONObject(log.toString())))
+        val result = merge(base = base, overrides = overrides)
+        assertEquals(2, result.patch.getJSONArray("read_logs").length())
+        assertTrue(result.conflicts.isEmpty())
+    }
 }

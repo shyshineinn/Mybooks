@@ -335,7 +335,7 @@ object MyBooksMerge {
             if (start.isEmpty() && finish.isEmpty()) continue
             out += start to finish
         }
-        return out.distinct().sortedWith(compareBy({ it.first }, { it.second }))
+        return out.sortedWith(compareBy<Pair<String, String>> { it.first.ifBlank { it.second } }.thenBy { it.second.isBlank() }.thenBy { it.second })
     }
 
     private fun logsToJson(logs: List<Pair<String, String>>): JSONArray {

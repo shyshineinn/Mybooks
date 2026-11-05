@@ -55,7 +55,6 @@ import com.huangder.lumibooks.data.sync.ServerBookMeta
 import com.huangder.lumibooks.data.sync.resolveUrl
 import com.huangder.lumibooks.domain.model.Book
 import com.huangder.lumibooks.ui.bookshelf.DetailRow
-import com.huangder.lumibooks.ui.components.AnnotationTagChips
 import com.huangder.lumibooks.ui.components.LiquidGlassTextButton
 import com.huangder.lumibooks.ui.icons.AppIcons
 import com.huangder.lumibooks.ui.theme.AppColors
@@ -315,48 +314,6 @@ internal fun SummaryRow(summary: String, expanded: Boolean, onExpandedChange: (B
             color = AppColors.TextSecondary,
             maxLines = if (expanded) Int.MAX_VALUE else 4,
             overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-internal fun ReadingRecordBlock(meta: ServerBookMeta) {
-    val labels = readingLogLabels(meta)
-    if (labels.isNotEmpty()) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = AppSpace.md, vertical = 14.dp)
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    stringResource(R.string.server_meta_read_logs),
-                    fontSize = AppType.Body,
-                    color = AppColors.TextPrimary,
-                    modifier = Modifier.weight(1f)
-                )
-                readCountLabel(meta)?.let { count ->
-                    Text(count, fontSize = AppType.Caption, color = AppColors.TextSecondary)
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            AnnotationTagChips(labels, icon = AppIcons.BookOpen)
-        }
-        return
-    }
-
-    readingDateLabel(meta)?.let { dates ->
-        DetailRow(stringResource(R.string.server_meta_read_date), dates, false)
-        return
-    }
-    if (meta.readCount > 0) {
-        DetailRow(
-            stringResource(R.string.server_meta_read_count),
-            stringResource(R.string.server_meta_read_count_value, meta.readCount),
-            false
         )
     }
 }

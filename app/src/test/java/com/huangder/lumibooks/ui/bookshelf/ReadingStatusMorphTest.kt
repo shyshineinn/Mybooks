@@ -74,4 +74,10 @@ class ReadingStatusMorphTest {
         assertEquals(102.dp, LiquidGlassMorphSelectorDefaults.Width)
         assertEquals(188.dp, LiquidGlassMorphSelectorDefaults.contentHeight(1f))
     }
+
+    @Test fun tallSelectorIsClampedToTheSafeHeightOfAShortWindow() {
+        val rect = target(hostH = 300f)
+        assertEquals(safeTop + margin, rect.top, .001f)
+        assertEquals(300f - safeBottom - margin, rect.bottom, .001f)
+    }
 }

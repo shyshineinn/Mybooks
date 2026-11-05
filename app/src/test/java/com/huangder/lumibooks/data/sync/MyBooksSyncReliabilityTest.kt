@@ -13,6 +13,7 @@ import com.huangder.lumibooks.data.repository.BookRepositoryImpl
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONArray
@@ -703,5 +704,99 @@ class MyBooksSyncReliabilityTest {
         assertNotNull(db.bookDao().getBookById("mybooks-1"))
         assertFalse(db.myBooksSyncStateDao().get("mybooks-1")!!.remoteDeleted)
         assertTrue(manager.shouldKeepCloudPlaceholder("mybooks-1"))
+    }
+
+    @Test fun rereadStartsAtZeroWithANewDateAndFinishesWithoutErasingHistory() = runBlocking {
+        localBook()
+        val original = db.bookDao().getBookById("mybooks-1")!!
+        db.bookDao().updateBook(original.copy(readingProgress = 1f, locatorJson = "old-last-page"))
+        val first = JSONObject().put("start", "2026-10-27").put("finish", "2026-11-01")
+        val base = remote().put("status", "done").put("read_count", 1)
+            .put("read_logs", JSONArray().put(first))
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = base.toString()))
+        manager.setReadingStatus("mybooks-1", com.huangder.lumibooks.domain.model.ReadingStatus.READING, startNewReading = true)
+        val started = db.bookDao().getBookById("mybooks-1")!!
+        assertEquals(0f, started.readingProgress)
+        assertNull(started.locatorJson)
+        assertEquals(original.title, started.title)
+        assertEquals(original.filePath, started.filePath)
+        assertTrue(started.lastReadTime > original.lastReadTime)
+        val fields = JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+        assertEquals("reading", fields.getString("status"))
+        val logs = fields.getJSONArray("read_logs")
+        assertEquals(2, logs.length())
+        assertEquals("2026-10-27", logs.getJSONObject(0).getString("start"))
+        assertEquals("2026-11-01", logs.getJSONObject(0).getString("finish"))
+        assertEquals(java.time.LocalDate.now().toString(), logs.getJSONObject(1).getString("start"))
+        assertEquals("", logs.getJSONObject(1).getString("finish"))
+        // Idempotence: a stale second tap cannot reset an in-progress reread again.
+        db.bookDao().updateBook(started.copy(readingProgress = .25f, locatorJson = "second-position"))
+        manager.setReadingStatus("mybooks-1", com.huangder.lumibooks.domain.model.ReadingStatus.READING, startNewReading = true)
+        assertEquals(.25f, db.bookDao().getBookById("mybooks-1")!!.readingProgress)
+        // The reader invokes this same method when progress first reaches 100%.
+        manager.setReadStatus("mybooks-1", true)
+        val finished = JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+        assertEquals("done", finished.getString("status"))
+        assertEquals(2, finished.getJSONArray("read_logs").length())
+        assertEquals(java.time.LocalDate.now().toString(), finished.getJSONArray("read_logs").getJSONObject(1).getString("finish"))
+        assertEquals("2026-11-01", finished.getJSONArray("read_logs").getJSONObject(0).getString("finish"))
+    }
+
+    @Test fun abandoningAnOpenRereadKeepsTheCompletedCycle() = runBlocking {
+        localBook()
+        val logs = JSONArray().put(JSONObject().put("start", "2026-10-27").put("finish", "2026-11-01"))
+            .put(JSONObject().put("start", "2026-11-04").put("finish", ""))
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1,
+            baseJson = remote().put("status", "reading").put("read_logs", logs).toString()))
+        manager.setReadingStatus("mybooks-1", com.huangder.lumibooks.domain.model.ReadingStatus.DONE, abandonCurrentReading = true)
+        val result = JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+        assertEquals("done", result.getString("status"))
+        assertEquals(1, result.getJSONArray("read_logs").length())
+        assertEquals("2026-10-27", result.getJSONArray("read_logs").getJSONObject(0).getString("start"))
+        assertEquals("2026-11-01", result.getJSONArray("read_logs").getJSONObject(0).getString("finish"))
+    }
+
+    @Test fun concurrentRereadRequestsCreateOnlyOnePendingRound() = runBlocking {
+        localBook()
+        val first = JSONObject().put("start", "2026-10-27").put("finish", "2026-11-01")
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1,
+            baseJson = remote().put("status", "done").put("read_logs", JSONArray().put(first)).toString()))
+        kotlinx.coroutines.withTimeout(10_000) {
+            kotlinx.coroutines.coroutineScope {
+                repeat(4) {
+                    launch(kotlinx.coroutines.Dispatchers.Default) {
+                        manager.setReadingStatus("mybooks-1", com.huangder.lumibooks.domain.model.ReadingStatus.READING, startNewReading = true)
+                    }
+                }
+            }
+        }
+        val result = JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+        assertEquals("reading", result.getString("status"))
+        assertEquals(2, result.getJSONArray("read_logs").length())
+    }
+
+    @Test fun legacyCompletedSummaryIsNotReplacedByAFakeFirstReading() = runBlocking {
+        localBook()
+        val base = remote().put("status", "done").put("read_count", 3)
+            .put("start_date", "2026-10-27").put("finish_date", "2026-11-01")
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = base.toString()))
+        manager.setReadingStatus("mybooks-1", com.huangder.lumibooks.domain.model.ReadingStatus.READING)
+        val fields = JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+        assertEquals("reading", fields.getString("status"))
+        assertFalse(fields.has("read_logs"))
+        assertEquals(3, JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.baseJson).getInt("read_count"))
+    }
+
+    @Test fun unreadBookWithNullableDatesRecordsItsFirstReadingStart() = runBlocking {
+        localBook()
+        val base = remote().put("status", "wish").put("read_count", 0)
+            .put("start_date", JSONObject.NULL).put("finish_date", JSONObject.NULL).put("read_logs", JSONArray())
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = base.toString()))
+        manager.setReadingStatus("mybooks-1", com.huangder.lumibooks.domain.model.ReadingStatus.READING)
+        val fields = JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+        assertEquals("reading", fields.getString("status"))
+        assertEquals(1, fields.getJSONArray("read_logs").length())
+        assertEquals(java.time.LocalDate.now().toString(), fields.getJSONArray("read_logs").getJSONObject(0).getString("start"))
+        assertEquals("", fields.getJSONArray("read_logs").getJSONObject(0).getString("finish"))
     }
 }

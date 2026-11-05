@@ -1675,4 +1675,23 @@
     <string name="import_metadata_not_found">利用可能な ISBN または豆瓣情報が見つかりません。情報を確認してください</string>
     <string name="import_metadata_ambiguous">該当する版を特定できません。書籍情報を選択して確認してください</string>
     <string name="import_metadata_incomplete">書籍情報が不完全です。ISBN と著者を確認してください</string>
+
+    <!-- Reading history timeline -->
+    <string name="book_detail_reading_statistics">読書統計</string>
+    <string name="reading_timeline_open">すべての読書記録を開く</string>
+    <string name="reading_timeline_started">%1$s回目の読書を開始</string>
+    <string name="reading_timeline_finished">%1$s回目の読書を完了</string>
+    <string name="reading_timeline_same_day">同じ日</string>
+    <plurals name="reading_timeline_elapsed">
+        <item quantity="other">今回の読書期間：%1$d日間</item>
+    </plurals>
+    <plurals name="reading_timeline_reread_gap">
+        <item quantity="other">%1$d日後に再読</item>
+    </plurals>
+    <plurals name="reading_timeline_gap">
+        <item quantity="other">%1$d日間の間隔</item>
+    </plurals>
+    <string name="reading_timeline_start_next">%1$s回目の読書を始める</string>
+    <string name="reading_timeline_abandon">%1$s回目の読書を中止</string>
+    <string name="reading_timeline_title">読書記録・%1$s</string>
 </resources>

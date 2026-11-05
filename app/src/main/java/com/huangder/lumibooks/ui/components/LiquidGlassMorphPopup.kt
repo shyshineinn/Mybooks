@@ -77,7 +77,8 @@ internal fun liquidGlassMorphPopupTargetRect(
     val width = widthPx.coerceIn(1f, maxWidth)
     val maxLeft = (hostWidthPx - marginPx - width).coerceAtLeast(marginPx)
     val left = (originCenterX - width / 2f).coerceIn(marginPx, maxLeft)
-    val cardHeight = heightPx.coerceAtLeast(1f)
+    val availableHeight = (hostHeightPx - safeTopPx - safeBottomPx - marginPx * 2f).coerceAtLeast(1f)
+    val cardHeight = heightPx.coerceIn(1f, availableHeight)
     val minTop = safeTopPx + marginPx
     val maxTop = (hostHeightPx - safeBottomPx - marginPx - cardHeight).coerceAtLeast(minTop)
     val top = (originCenterY - cardHeight / 2f).coerceIn(minTop, maxTop)

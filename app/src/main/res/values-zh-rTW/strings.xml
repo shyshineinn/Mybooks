@@ -1673,4 +1673,23 @@
     <string name="import_metadata_not_found">未找到可用的 ISBN 或豆瓣資訊，請補充後匯入</string>
     <string name="import_metadata_ambiguous">匹配版本不明確，請選擇並確認書籍資訊</string>
     <string name="import_metadata_incomplete">書籍資訊不完整，請補充 ISBN、作者等資訊</string>
+
+    <!-- Reading history timeline -->
+    <string name="book_detail_reading_statistics">閱讀統計</string>
+    <string name="reading_timeline_open">檢視完整閱讀記錄</string>
+    <string name="reading_timeline_started">開始%1$s刷</string>
+    <string name="reading_timeline_finished">完成%1$s刷</string>
+    <string name="reading_timeline_same_day">同一天</string>
+    <plurals name="reading_timeline_elapsed">
+        <item quantity="other">本次歷時 %1$d 天</item>
+    </plurals>
+    <plurals name="reading_timeline_reread_gap">
+        <item quantity="other">間隔 %1$d 天後再讀</item>
+    </plurals>
+    <plurals name="reading_timeline_gap">
+        <item quantity="other">相隔 %1$d 天</item>
+    </plurals>
+    <string name="reading_timeline_start_next">開始%1$s刷</string>
+    <string name="reading_timeline_abandon">放棄%1$s刷</string>
+    <string name="reading_timeline_title">閱讀記錄·%1$s</string>
 </resources>

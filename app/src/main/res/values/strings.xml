@@ -2017,4 +2017,23 @@
     <string name="import_metadata_not_found">未找到可用的 ISBN 或豆瓣信息，请补充后导入</string>
     <string name="import_metadata_ambiguous">匹配版本不明确，请选择并确认书籍信息</string>
     <string name="import_metadata_incomplete">书籍信息不完整，请补充 ISBN、作者等信息</string>
+
+    <!-- Reading history timeline -->
+    <string name="book_detail_reading_statistics">阅读统计</string>
+    <string name="reading_timeline_open">查看完整阅读记录</string>
+    <string name="reading_timeline_started">开始%1$s刷</string>
+    <string name="reading_timeline_finished">完成%1$s刷</string>
+    <string name="reading_timeline_same_day">同一天</string>
+    <plurals name="reading_timeline_elapsed">
+        <item quantity="other">本次历时 %1$d 天</item>
+    </plurals>
+    <plurals name="reading_timeline_reread_gap">
+        <item quantity="other">间隔 %1$d 天后再读</item>
+    </plurals>
+    <plurals name="reading_timeline_gap">
+        <item quantity="other">相隔 %1$d 天</item>
+    </plurals>
+    <string name="reading_timeline_start_next">开始%1$s刷</string>
+    <string name="reading_timeline_abandon">放弃%1$s刷</string>
+    <string name="reading_timeline_title">阅读记录·%1$s</string>
 </resources>

@@ -274,9 +274,15 @@ class MyBooksSyncManager @Inject constructor(
         bookId: String,
         fields: Map<String, Any?>,
         editedAt: Long = System.currentTimeMillis()
-    ) = editMutex.withLock {
-        if (fields.isEmpty()) return@withLock
-        val state = myBooksSyncStateDao.get(bookId) ?: return@withLock
+    ) = editMutex.withLock { recordLocalEditLocked(bookId, fields, editedAt) }
+
+    private suspend fun recordLocalEditLocked(
+        bookId: String,
+        fields: Map<String, Any?>,
+        editedAt: Long = System.currentTimeMillis()
+    ) {
+        if (fields.isEmpty()) return
+        val state = myBooksSyncStateDao.get(bookId) ?: return
         val overrides = runCatching { JSONObject(state.overridesJson) }.getOrDefault(JSONObject())
         val edits = runCatching { JSONObject(state.editedAtJson) }.getOrDefault(JSONObject())
         fields.forEach { (key, value) ->
@@ -297,8 +303,8 @@ class MyBooksSyncManager @Inject constructor(
      * 快捷“标记已读/取消已读”同步到服务器：
      * 标记时补一条读完记录，取消时清掉最后一条 finish；两者与 status 一起进入现有合并通道。
      */
-    suspend fun setReadStatus(bookId: String, finished: Boolean) {
-        val state = myBooksSyncStateDao.get(bookId) ?: return
+    suspend fun setReadStatus(bookId: String, finished: Boolean) = editMutex.withLock {
+        val state = myBooksSyncStateDao.get(bookId) ?: return@withLock
         val base = runCatching { JSONObject(state.baseJson) }.getOrDefault(JSONObject())
         val overrides = runCatching { JSONObject(state.overridesJson) }.getOrDefault(JSONObject())
         val currentLogs = MyBooksReadStatus.parseLogs(
@@ -316,18 +322,24 @@ class MyBooksSyncManager @Inject constructor(
         } else {
             base.optString("status")
         }).ifBlank { "wish" }
-        if (toggle.status == currentStatus && !logsChanged) return
+        if (toggle.status == currentStatus && !logsChanged) return@withLock
 
         val fields = linkedMapOf<String, Any?>("status" to toggle.status)
         if (logsChanged) fields["read_logs"] = MyBooksReadStatus.logsToJson(toggle.logs)
-        recordLocalEdit(bookId, fields)
+        recordLocalEditLocked(bookId, fields)
     }
 
     /**
-     * 详情页三态选择：只改服务器 status；想读/在读不清理 read_logs，
+     * 详情页三态选择保留历史记录；显式开始重读同时清零当前位置，
      * 已读才按既有规则补一条完成记录，随后进入同一条离线 override 推送通道。
      */
-    suspend fun setReadingStatus(bookId: String, target: ReadingStatus) {
+    suspend fun setReadingStatus(
+        bookId: String,
+        target: ReadingStatus,
+        startNewReading: Boolean = false,
+        abandonCurrentReading: Boolean = false
+    ) = editMutex.withLock {
+        require(!startNewReading || !abandonCurrentReading)
         val state = myBooksSyncStateDao.get(bookId)
             ?: error(context.getString(R.string.mybooks_edit_save_failed))
         val base = runCatching { JSONObject(state.baseJson) }.getOrDefault(JSONObject())
@@ -335,11 +347,17 @@ class MyBooksSyncManager @Inject constructor(
         val currentLogs = MyBooksReadStatus.parseLogs(
             if (overrides.has("read_logs")) overrides.opt("read_logs") else base.opt("read_logs")
         )
-        val transition = MyBooksReadStatus.transition(
-            currentLogs = currentLogs,
-            target = target,
-            today = LocalDate.now().toString()
-        )
+        val today = LocalDate.now().toString()
+        val transition = if (startNewReading) {
+            require(target == ReadingStatus.READING)
+            MyBooksReadStatus.startNextReading(currentLogs, today)
+        } else if (abandonCurrentReading) {
+            MyBooksReadStatus.abandonCurrentReading(currentLogs)
+        } else if (currentLogs.isEmpty() && !overrides.has("read_logs") &&
+            (base.optInt("read_count", 0) > 0 || (!base.isNull("finish_date") && base.optString("finish_date").isNotBlank()))) {
+            // A legacy summary has no complete per-round history to replace safely.
+            MyBooksReadToggle(target.toServerStatus(), currentLogs)
+        } else MyBooksReadStatus.transition(currentLogs, target, today)
         val logsChanged = MyBooksReadStatus.canonical(transition.logs) !=
             MyBooksReadStatus.canonical(currentLogs)
         val currentStatus = (if (overrides.has("status")) {
@@ -347,11 +365,24 @@ class MyBooksSyncManager @Inject constructor(
         } else {
             base.optString("status")
         }).ifBlank { "wish" }
-        if (transition.status == currentStatus && !logsChanged) return
+        if (transition.status == currentStatus && !logsChanged) return@withLock
 
         val fields = linkedMapOf<String, Any?>("status" to transition.status)
         if (logsChanged) fields["read_logs"] = MyBooksReadStatus.logsToJson(transition.logs)
-        recordLocalEdit(bookId, fields)
+        if (startNewReading && logsChanged) {
+            database.withTransaction {
+                val book = bookRepository.getBookById(bookId)
+                    ?: error(context.getString(R.string.mybooks_edit_save_failed))
+                // A null locator passed to updateReadingProgress preserves the old position.
+                // Explicitly clear it, and publish a newer position for multi-device sync.
+                bookRepository.updateBook(book.copy(
+                    readingProgress = 0f,
+                    locatorJson = null,
+                    lastReadTime = maxOf(System.currentTimeMillis(), book.lastReadTime + 1)
+                ))
+                recordLocalEditLocked(bookId, fields)
+            }
+        } else recordLocalEditLocked(bookId, fields)
     }
 
     fun recordCoverChange(bookId: String, editedAt: Long = System.currentTimeMillis()) {

@@ -4,7 +4,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.foundation.border
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -48,7 +47,7 @@ fun Modifier.cardOutline(shape: Shape, alpha: Float = 1f): Modifier {
         LocalAppTheme.current == "liquid_glass"
     ) return this
     val outlineColor = if (LocalIsDarkTheme.current) Color.White else Color.Black
-    return border(width = 0.5.dp, color = outlineColor.copy(alpha = alpha.coerceIn(0f, 1f)), shape = shape)
+    return vectorCardOutline(width = 0.5.dp, color = outlineColor.copy(alpha = alpha.coerceIn(0f, 1f)), shape = shape)
 }
 
 enum class MotionPreference {

@@ -2308,17 +2308,19 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * 详情页三态分类：只写服务器 status / read_logs，不改本地阅读进度。
+     * 详情页分类沿用 status / read_logs；仅显式开始新一轮时清零本地进度与位置。
      * 失败时回传错误，由选择卡片恢复原状态并提示。
      */
     fun setReadingStatus(
         book: Book,
         status: ReadingStatus,
+        startNewReading: Boolean = false,
+        abandonCurrentReading: Boolean = false,
         onResult: (success: Boolean, message: String?) -> Unit = { _, _ -> }
     ) {
         viewModelScope.launch {
             try {
-                myBooksSyncManager.setReadingStatus(book.id, status)
+                myBooksSyncManager.setReadingStatus(book.id, status, startNewReading, abandonCurrentReading)
                 onResult(true, null)
             } catch (cancelled: CancellationException) {
                 throw cancelled

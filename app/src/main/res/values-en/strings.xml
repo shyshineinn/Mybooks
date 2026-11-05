@@ -1993,4 +1993,26 @@
     <string name="import_metadata_not_found">No usable ISBN or Douban information found. Review before importing.</string>
     <string name="import_metadata_ambiguous">The matching edition is unclear. Select and confirm the book information.</string>
     <string name="import_metadata_incomplete">Book information is incomplete. Review the ISBN and author.</string>
+
+    <!-- Reading history timeline -->
+    <string name="book_detail_reading_statistics">Reading statistics</string>
+    <string name="reading_timeline_open">Open complete reading history</string>
+    <string name="reading_timeline_started">Started reading #%1$s</string>
+    <string name="reading_timeline_finished">Finished reading #%1$s</string>
+    <string name="reading_timeline_same_day">Same day</string>
+    <plurals name="reading_timeline_elapsed">
+        <item quantity="one">This read spanned %1$d day</item>
+        <item quantity="other">This read spanned %1$d days</item>
+    </plurals>
+    <plurals name="reading_timeline_reread_gap">
+        <item quantity="one">Reread after %1$d day</item>
+        <item quantity="other">Reread after %1$d days</item>
+    </plurals>
+    <plurals name="reading_timeline_gap">
+        <item quantity="one">%1$d day apart</item>
+        <item quantity="other">%1$d days apart</item>
+    </plurals>
+    <string name="reading_timeline_start_next">Start reading #%1$s</string>
+    <string name="reading_timeline_abandon">Abandon reading #%1$s</string>
+    <string name="reading_timeline_title">Reading history · %1$s</string>
 </resources>

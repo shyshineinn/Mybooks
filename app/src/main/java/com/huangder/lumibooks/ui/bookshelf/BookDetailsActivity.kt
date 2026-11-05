@@ -41,6 +41,8 @@ import com.huangder.lumibooks.ui.theme.AppRoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -68,6 +70,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -75,6 +78,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -317,17 +321,17 @@ fun BookDetailsScreen(
         statusMorphAnchor = anchor
     }
 
-    fun selectReadingStatus(anchor: ReadingStatusMorphAnchor, target: ReadingStatus) {
+    fun selectReadingStatus(anchor: ReadingStatusMorphAnchor, target: ReadingStatus, startNewReading: Boolean = false, abandonCurrentReading: Boolean = false) {
         val previous = selectorStatus.value ?: anchor.status
         if (selectorSaving) return
-        if (target == effectiveReadingStatus) {
+        if (target == effectiveReadingStatus && !startNewReading && !abandonCurrentReading) {
             statusMorphCloseRequested = true
             return
         }
         val token = ++statusUpdateToken
         selectorStatus.value = target
         selectorSaving = true
-        homeViewModel.setReadingStatus(book, target) { success, message ->
+        homeViewModel.setReadingStatus(book, target, startNewReading, abandonCurrentReading) { success, message ->
             if (token != statusUpdateToken) return@setReadingStatus
             if (success) {
                 // Keep the options locked through the feedback beat and the reverse morph.
@@ -447,6 +451,8 @@ fun BookDetailsScreen(
         }
     }
 
+    val timelineEvents = remember(metaState.meta) { metaState.meta?.let(::readingTimelineEvents).orEmpty() }
+    val openReadingTimeline = { ReadingTimelineActivity.start(context, book.id, book.title) }
     LiquidGlassMorphPopupHost(
         active = statusSelectorOpen,
         content = {
@@ -613,12 +619,16 @@ fun BookDetailsScreen(
                             item {
                                 MetricGrid(book, details.totalReadingTime, details.activeDays, details.bookmarkCount, details.noteCount)
                             }
+                            metaState.meta?.let { meta ->
+                                if (timelineEvents.isNotEmpty() || meta.readCount > 0) {
+                                    item { ReadingRecordBlock(meta, timelineEvents, openReadingTimeline) }
+                                }
+                            }
                             item {
                                 InformationCard(
                                     contentPadding = PaddingValues(0.dp),
                                     verticalArrangement = Arrangement.Top
                                 ) {
-                                    metaState.meta?.let { ReadingRecordBlock(it) }
                                     if (!book.isCloudOnly) {
                                         DetailRow(stringResource(R.string.book_detail_last_read), dateText(book.lastReadTime), false)
                                     }
@@ -649,6 +659,10 @@ fun BookDetailsScreen(
                     selected = selectorStatus.value ?: anchor.status,
                     saving = selectorSaving,
                     closeRequested = statusMorphCloseRequested,
+                    nextRound = remember(anchor) { if (anchor.status == ReadingStatus.DONE) nextReadingRound(metaState.meta) else null },
+                    activeRound = remember(anchor) { pendingReadingRound(metaState.meta) },
+                    onStartNextReading = { selectReadingStatus(anchor, ReadingStatus.READING, startNewReading = true) },
+                    onAbandonReading = { selectReadingStatus(anchor, readingStatusAfterAbandon(metaState.meta), abandonCurrentReading = true) },
                     onSelect = { target -> selectReadingStatus(anchor, target) },
                     onDismiss = {
                         if (!statusMorphCloseRequested) statusMorphCloseRequested = true
@@ -848,30 +862,86 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
     }
 }
 
-@Composable private fun MetricGrid(book: Book, duration: Long, days: Int, bookmarks: Int, notes: Int) {
-    val metrics = listOf(
+@Composable internal fun MetricGrid(book: Book, duration: Long, days: Int, bookmarks: Int, notes: Int) {
+    val coreMetrics = listOf(
         stringResource(R.string.book_detail_progress) to AnnotatedString("${(book.readingProgress * 100).toInt()}%"),
         stringResource(R.string.book_detail_reading_time) to compactReadingDuration(duration, AppColors.TextSecondary),
-        stringResource(R.string.book_detail_notes) to AnnotatedString(notes.toString()),
-        stringResource(R.string.book_detail_bookmarks) to AnnotatedString(bookmarks.toString()),
         stringResource(R.string.book_detail_active_days) to AnnotatedString(days.toString())
     )
+    val valueStyle = LocalTextStyle.current.copy(
+        fontSize = AppType.Section, lineHeight = 26.sp,
+        fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center
+    )
+    val labelStyle = LocalTextStyle.current.copy(
+        fontSize = AppType.Caption, lineHeight = 16.sp, textAlign = TextAlign.Center
+    )
+    val auxiliaryStyle = labelStyle.copy(fontSize = AppType.BodySmall, lineHeight = 20.sp)
+    val auxiliaryMetrics = listOf(
+        stringResource(R.string.book_detail_bookmarks) to bookmarks,
+        stringResource(R.string.book_detail_notes) to notes
+    ).map { (label, count) ->
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = AppColors.TextPrimary, fontWeight = FontWeight.SemiBold)) {
+                append(count.toString())
+            }
+            append(' ')
+            withStyle(SpanStyle(fontSize = AppType.Caption)) { append(label) }
+        }
+    }
+    val textMeasurer = rememberTextMeasurer()
+    val coreWidths = coreMetrics.map { (label, value) ->
+        maxOf(
+            textMeasurer.measure(value, style = valueStyle, softWrap = false).size.width,
+            textMeasurer.measure(label, style = labelStyle, softWrap = false).size.width
+        )
+    }
+    val auxiliaryWidths = auxiliaryMetrics.map {
+        textMeasurer.measure(it, style = auxiliaryStyle, softWrap = false).size.width
+    }
     InformationCard(
-        contentPadding = PaddingValues(AppSpace.sm),
-        verticalArrangement = Arrangement.Top
+        title = stringResource(R.string.book_detail_reading_statistics),
+        contentPadding = PaddingValues(AppSpace.md),
+        verticalArrangement = Arrangement.spacedBy(AppSpace.sm)
     ) {
-        metrics.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
-                row.forEach { (label, value) ->
-                    Column(
-                        Modifier.weight(1f).padding(AppSpace.sm),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(value, fontSize = AppType.Section, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
-                        Text(label, fontSize = AppType.Caption, color = AppColors.TextSecondary)
-                    }
-                }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
+        ReadingMetricRow(coreWidths) { index, modifier ->
+            val (label, value) = coreMetrics[index]
+            Column(
+                modifier.semantics(mergeDescendants = true) {},
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(value, modifier = Modifier.fillMaxWidth(), style = valueStyle, color = AppColors.TextPrimary)
+                Text(label, modifier = Modifier.fillMaxWidth(), style = labelStyle, color = AppColors.TextSecondary)
+            }
+        }
+        HorizontalDivider(color = AppColors.Divider)
+        ReadingMetricRow(auxiliaryWidths) { index, modifier ->
+            Text(
+                auxiliaryMetrics[index], modifier = modifier,
+                style = auxiliaryStyle, color = AppColors.TextSecondary
+            )
+        }
+    }
+}
+
+/** Keep equal columns when every value and translated label fits at the current font scale. */
+@Composable private fun ReadingMetricRow(
+    requiredWidths: List<Int>,
+    content: @Composable (Int, Modifier) -> Unit
+) {
+    val density = LocalDensity.current
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val gap = AppSpace.sm
+        val columnWidth = (constraints.maxWidth - with(density) { gap.roundToPx() } * (requiredWidths.size - 1)) / requiredWidths.size
+        if (requiredWidths.any { it > columnWidth }) {
+            // Stack the entire group rather than leaving an unbalanced final row.
+            // Text remains free to wrap in exceptionally narrow windows.
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(gap)) {
+                requiredWidths.indices.forEach { content(it, Modifier.fillMaxWidth()) }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                requiredWidths.indices.forEach { content(it, Modifier.weight(1f)) }
             }
         }
     }

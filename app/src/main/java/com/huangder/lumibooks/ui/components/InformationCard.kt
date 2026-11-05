@@ -1,6 +1,5 @@
 package com.huangder.lumibooks.ui.components
 
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -27,6 +26,7 @@ import com.huangder.lumibooks.ui.theme.AppType
 import com.huangder.lumibooks.ui.theme.LocalAppTheme
 import com.huangder.lumibooks.ui.theme.LocalCardOutlinesEnabled
 import com.huangder.lumibooks.ui.theme.LocalEInkMode
+import com.huangder.lumibooks.ui.theme.vectorCardOutline
 import com.huangder.lumibooks.ui.theme.LocalIsDarkTheme
 import com.huangder.lumibooks.ui.theme.LocalLiquidGlassCapability
 
@@ -54,7 +54,14 @@ fun InformationCard(
         dark -> Color.White
         else -> Color.Black
     }
+    // Keep the vector edge outside elevation/glass layers so scrolling does not
+    // resample the high-contrast stroke together with a cached shadow texture.
     val decoration = Modifier
+        .then(
+            if (eInk || highContrast) {
+                Modifier.vectorCardOutline(if (glass) 0.5.dp else 1.dp, borderColor, shape)
+            } else Modifier
+        )
         .then(
             if (eInk) Modifier else Modifier.shadow(
                 elevation = 4.dp,
@@ -63,11 +70,6 @@ fun InformationCard(
                 ambientColor = Color.Black.copy(alpha = if (dark) 0.18f else 0.06f),
                 spotColor = Color.Black.copy(alpha = if (dark) 0.24f else 0.08f)
             )
-        )
-        .then(
-            if (eInk || highContrast) {
-                Modifier.border(if (glass) 0.5.dp else 1.dp, borderColor, shape)
-            } else Modifier
         )
 
     // This card owns the optional outline, avoiding a second global border.
