@@ -77,4 +77,31 @@ class ReadingTimelineDataTest {
         assertNull(nextReadingRound(legacy))
         assertNull(pendingReadingRound(legacy))
     }
+
+    @Test fun sortedRoundsKeepTheUnsortedOriginalSourceAndLegacyEventsAreNotEditable() {
+        val book = meta(JSONArray().put(row("2026-02-01", "2026-02-20")).put(row("2026-01-01", "2026-01-20")), 2)
+        val firstRound = readingTimelineEvents(book).filter { it.round == 1 }
+        assertTrue(firstRound.all { it.source?.record?.start == "2026-01-01" })
+        assertTrue(readingTimelineEvents(meta(count = 4, finish = "2026-01-20")).all { it.source == null })
+    }
+
+    @Test fun duplicateRowsHideEditingWhileDifferentRowsWithSharedDatesRemainEditable() {
+        val duplicate = meta(JSONArray().put(row("2026-01-01", "2026-01-20")).put(row("2026-01-01", "2026-01-20")), 2)
+        assertEquals(4, readingTimelineEvents(duplicate).size)
+        assertTrue(readingTimelineEvents(duplicate).all { it.source == null })
+        val distinct = meta(JSONArray().put(row("2026-01-01", "2026-01-20")).put(row("2026-01-01", "2026-01-21")), 2)
+        assertTrue(readingTimelineEvents(distinct).all { it.source != null })
+    }
+
+    @Test fun savedDatesReorderEventsAndRecalculateGapsWithoutChangingCountOrStatus() {
+        val book = meta(JSONArray().put(row("2026-01-01", "2026-01-20")).put(row("2026-02-01")), 1)
+        val original = readingTimelineEvents(book)
+        val changed = com.huangder.lumibooks.data.sync.editReadLogDate(
+            JSONArray().put(row("2026-01-01", "2026-01-20")).put(row("2026-02-01")),
+            original.first().source!!, com.huangder.lumibooks.data.sync.ReadLogDateField.START, "2026-01-10")
+        val updated = readingTimelineEvents(meta(changed, book.readCount))
+        assertEquals(listOf("2026-01-20", "2026-01-10", "2026-01-01"), updated.map { it.date.toString() })
+        assertEquals(10, readingTimelineGapDays(updated[0], updated[1]))
+        assertEquals(9, readingTimelineGapDays(updated[1], updated[2]))
+    }
 }

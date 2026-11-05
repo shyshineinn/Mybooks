@@ -331,7 +331,7 @@
     <string name="filter_downloaded">EPUB &amp; MOBI</string>
     <string name="filter_pdf">PDF</string>
     <string name="filter_favorites">收藏</string>
-    <string name="reading_status_wish">想读</string>
+    <string name="reading_status_wish">未读</string>
     <string name="reading_status_reading">在读</string>
     <string name="reading_status_done">已读</string>
     <string name="bookshelf_categories_title">分类与标签</string>
@@ -1683,7 +1683,7 @@
     <string name="mybooks_edit_series_required">填写序号前请先填写系列</string>
     <string name="mybooks_edit_status_done">已读</string>
     <string name="mybooks_edit_status_reading">在读</string>
-    <string name="mybooks_edit_status_wish">想读</string>
+    <string name="mybooks_edit_status_wish">未读</string>
     <string name="mybooks_edit_summary_too_long">简介最多 1000 字</string>
     <string name="mybooks_edit_text_too_long">最多 %1$d 个字符</string>
     <string name="mybooks_edit_title">编辑书籍信息</string>
@@ -1792,4 +1792,10 @@
     <string name="reading_timeline_start_next">开始%1$s刷</string>
     <string name="reading_timeline_abandon">放弃%1$s刷</string>
     <string name="reading_timeline_title">阅读记录·%1$s</string>
+    <string name="reading_timeline_edit_time">编辑时间</string>
+    <string name="reading_timeline_start_time">开始时间</string>
+    <string name="reading_timeline_finish_time">完成时间</string>
+    <string name="reading_timeline_date_changed">阅读记录已变化，请关闭弹窗后重新选择事件。</string>
+    <string name="calendar_previous_month">上个月</string>
+    <string name="calendar_next_month">下个月</string>
 </resources>

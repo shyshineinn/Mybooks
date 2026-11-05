@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -98,7 +99,8 @@ internal fun ReadingTimelineDetailsScreen(
     meta: ServerBookMeta?,
     events: List<ReadingTimelineEvent>,
     onBack: () -> Unit,
-    loading: Boolean = false
+    loading: Boolean = false,
+    onEditEvent: ((ReadingTimelineEvent) -> Unit)? = null
 ) {
     Surface(Modifier.fillMaxSize().testTag("reading_timeline_details"), color = AppColors.PageBg) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = AppSpace.md)) {
@@ -157,7 +159,8 @@ internal fun ReadingTimelineDetailsScreen(
                 } else {
                     LazyColumn(Modifier.fillMaxSize().testTag("reading_timeline_list"), contentPadding = PaddingValues(AppSpace.md)) {
                         itemsIndexed(events, key = { _, event -> "${event.round}:${event.type}:${event.date}" }) { index, event ->
-                            ReadingTimelineItem(event, events.getOrNull(index + 1), index == 0)
+                            ReadingTimelineItem(event, events.getOrNull(index + 1), index == 0,
+                                onEdit = if (event.source != null && onEditEvent != null) ({ onEditEvent(event) }) else null)
                         }
                     }
                 }
@@ -171,7 +174,8 @@ internal fun ReadingTimelineDetailsScreen(
 private fun ReadingTimelineItem(
     event: ReadingTimelineEvent,
     older: ReadingTimelineEvent?,
-    highlighted: Boolean
+    highlighted: Boolean,
+    onEdit: (() -> Unit)? = null
 ) {
     val locale = LocalConfiguration.current.locales[0]
     val round = readingRoundLabel(event.round)
@@ -187,7 +191,8 @@ private fun ReadingTimelineItem(
             drawLine(lineColor, Offset(x, 24.dp.toPx()), Offset(x, size.height), strokeWidth = 1.dp.toPx())
         }
     }) {
-        Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.Top) {
+        Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
+            verticalAlignment = if (onEdit == null) Alignment.Top else Alignment.CenterVertically) {
             Icon(
                 if (event.type == ReadingTimelineEventType.START) AppIcons.BookOpen else AppIcons.CheckCircle,
                 contentDescription = null,
@@ -206,7 +211,13 @@ private fun ReadingTimelineItem(
                 },
                 fontSize = AppType.Body, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold,
                 color = AppColors.TextPrimary, modifier = Modifier.weight(1f)
+                    .testTag("timeline_event_text_${event.round}_${event.type}")
             )
+            if (onEdit != null) IconButton(onClick = onEdit,
+                modifier = Modifier.size(44.dp).testTag("timeline_edit_${event.round}_${event.type}")) {
+                Icon(AppIcons.PencilSimple, stringResource(R.string.reading_timeline_edit_time),
+                    tint = AppColors.TextSecondary, modifier = Modifier.size(20.dp))
+            }
         }
         if (older != null) {
             val days = readingTimelineGapDays(event, older)

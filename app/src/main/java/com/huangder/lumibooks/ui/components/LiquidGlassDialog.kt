@@ -51,7 +51,12 @@ import androidx.compose.ui.window.DialogProperties
 import com.huangder.lumibooks.ui.theme.AppColors
 import com.huangder.lumibooks.ui.theme.LocalAppTheme
 import com.huangder.lumibooks.ui.theme.LocalMotionEnabled
+import com.huangder.lumibooks.ui.theme.LocalCardOutlinesEnabled
+import com.huangder.lumibooks.ui.theme.LocalLumiBackgroundBackdrop
 import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -152,10 +157,16 @@ fun LiquidGlassDialogHost(
     val isLiquidGlass = LocalAppTheme.current == "liquid_glass"
     val motionEnabled = LocalMotionEnabled.current
     val inheritedBackdrop = LocalLiquidGlassBackdrop.current
-    val activeBackdrop = backdrop ?: inheritedBackdrop
+    val pageBackdrop = rememberLayerBackdrop()
+    val backgroundBackdrop = LocalLumiBackgroundBackdrop.current ?: inheritedBackdrop
+    val capturedBackdrop = if (backgroundBackdrop != null) {
+        rememberCombinedBackdrop(backgroundBackdrop, pageBackdrop)
+    } else pageBackdrop
+    val activeBackdrop = backdrop ?: capturedBackdrop
     val scope = rememberCoroutineScope()
     val state = remember(scope) { LiquidGlassDialogHostState(scope) }
     val currentSpec = state.spec
+    val capturePage = isLiquidGlass && backdrop == null && currentSpec != null
     val scrimProgress by animateFloatAsState(
         targetValue = if (state.visible) 1f else 0f,
         animationSpec = tween(if (state.visible) 160 else 220),
@@ -169,8 +180,13 @@ fun LiquidGlassDialogHost(
         Box(modifier = modifier) {
             Box(
                 modifier = Modifier.fillMaxSize()
+                    .then(if (capturePage) Modifier.layerBackdrop(pageBackdrop) else Modifier)
             ) {
-                content()
+                // The overlay samples this private sibling capture. Page controls retain
+                // their original source, so they cannot sample their own render nodes.
+                CompositionLocalProvider(
+                    LocalLiquidGlassBackdrop provides if (backdrop == null) inheritedBackdrop else activeBackdrop
+                ) { content() }
             }
 
             AnimatedVisibility(
@@ -280,23 +296,25 @@ fun LiquidGlassDialogHost(
                                         ),
                                     contentAlignment = targetSpec.alignment
                                 ) {
-                                    OutlinedLiquidGlassSurface(
-                                        shape = targetSpec.shape,
-                                        fallbackColor = AppColors.CardBg,
-                                        backdrop = targetSpec.backdrop ?: activeBackdrop,
-                                        contentScrimColor = targetSpec.contentScrimColor,
-                                        transparencyOverride = targetSpec.transparencyOverride,
-                                        modifier = Modifier
-                                            .widthIn(max = 560.dp)
-                                            .then(targetSpec.modifier)
-                                            .fillMaxWidth()
-                                            .clickable(
-                                                indication = null,
-                                                interactionSource = remember { MutableInteractionSource() }
-                                            ) { },
-                                        contentAlignment = Alignment.TopStart,
-                                        content = targetSpec.content
-                                    )
+                                    CompositionLocalProvider(LocalCardOutlinesEnabled provides false) {
+                                        OutlinedLiquidGlassSurface(
+                                            shape = targetSpec.shape,
+                                            fallbackColor = AppColors.CardBg,
+                                            backdrop = targetSpec.backdrop ?: activeBackdrop,
+                                            contentScrimColor = targetSpec.contentScrimColor,
+                                            transparencyOverride = targetSpec.transparencyOverride,
+                                            modifier = Modifier
+                                                .widthIn(max = 560.dp)
+                                                .then(targetSpec.modifier)
+                                                .fillMaxWidth()
+                                                .clickable(
+                                                    indication = null,
+                                                    interactionSource = remember { MutableInteractionSource() }
+                                                ) { },
+                                            contentAlignment = Alignment.TopStart,
+                                            content = targetSpec.content
+                                        )
+                                    }
                                 }
                             }
                         }

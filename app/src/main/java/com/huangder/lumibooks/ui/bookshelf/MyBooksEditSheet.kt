@@ -254,7 +254,7 @@ internal fun ColumnScope.EditSheetContent(
     var moreExpanded by rememberSaveable { mutableStateOf(false) }
     val advancedHasErrors = state.fieldErrors.keys.any { key ->
         key == "summary" || key.startsWith("identifier.") ||
-            key.startsWith("custom.") || key.startsWith("readlog.")
+            key.startsWith("custom.")
     }
     LaunchedEffect(advancedHasErrors) {
         if (advancedHasErrors) moreExpanded = true
@@ -344,8 +344,6 @@ internal fun ColumnScope.EditSheetContent(
                     Spacer(Modifier.height(24.dp))
                     CustomFieldsSection(state, viewModel)
                 }
-                Spacer(Modifier.height(24.dp))
-                ReadingLogsSection(state, viewModel)
             }
             state.error?.let { error ->
                 Text(
@@ -900,120 +898,6 @@ private fun CustomFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEdi
             }
         }
     }
-}
-
-@Composable
-private fun ReadingLogsSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
-    SectionHeader(stringResource(R.string.mybooks_edit_section_read_logs))
-    Column(verticalArrangement = Arrangement.spacedBy(AppSpace.sm)) {
-        state.readLogs.forEachIndexed { index, row ->
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val stack = maxWidth.value / LocalDensity.current.fontScale < 360f
-                val error = state.fieldErrors["readlog.$index"]
-                Column {
-                    if (stack) {
-                        Column(verticalArrangement = Arrangement.spacedBy(AppSpace.xs)) {
-                            DateField(
-                                label = stringResource(R.string.mybooks_edit_read_start),
-                                value = row.start,
-                                enabled = !state.saving
-                            ) { viewModel.updateReadLog(index, start = it) }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                DateField(
-                                    label = stringResource(R.string.mybooks_edit_read_finish),
-                                    value = row.finish,
-                                    enabled = !state.saving,
-                                    modifier = Modifier.weight(1f)
-                                ) { viewModel.updateReadLog(index, finish = it) }
-                                DeleteIcon(enabled = !state.saving) { viewModel.removeReadLog(index) }
-                            }
-                        }
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            DateField(
-                                label = stringResource(R.string.mybooks_edit_read_start),
-                                value = row.start,
-                                enabled = !state.saving,
-                                modifier = Modifier.weight(1f)
-                            ) { viewModel.updateReadLog(index, start = it) }
-                            Spacer(Modifier.width(AppSpace.xs))
-                            Text(
-                                text = stringResource(R.string.mybooks_edit_read_to),
-                                fontSize = AppType.Caption,
-                                color = AppColors.TextSecondary
-                            )
-                            Spacer(Modifier.width(AppSpace.xs))
-                            DateField(
-                                label = stringResource(R.string.mybooks_edit_read_finish),
-                                value = row.finish,
-                                enabled = !state.saving,
-                                modifier = Modifier.weight(1f)
-                            ) { viewModel.updateReadLog(index, finish = it) }
-                            DeleteIcon(enabled = !state.saving) { viewModel.removeReadLog(index) }
-                        }
-                    }
-                    if (error != null) {
-                        Text(
-                            text = error,
-                            fontSize = AppType.Caption,
-                            color = errorColor(),
-                            modifier = Modifier.padding(top = AppSpace.xs)
-                        )
-                    }
-                }
-            }
-        }
-    }
-    Spacer(Modifier.height(AppSpace.xs))
-    LiquidGlassTextButton(
-        text = stringResource(R.string.mybooks_edit_add_read),
-        enabled = !state.saving,
-        contentColor = AppColors.TextSecondary,
-        onClick = { viewModel.addReadLog() },
-        modifier = Modifier.height(44.dp)
-    )
-    Spacer(Modifier.height(AppSpace.xs))
-    Text(
-        text = readLogSummary(state.readLogs),
-        fontSize = AppType.Caption,
-        color = AppColors.TextSecondary
-    )
-}
-
-@Composable
-private fun readLogSummary(logs: List<MyBooksReadLogDraft>): String {
-    val finished = logs.filter { it.finish.isNotBlank() }
-    val starts = logs.mapNotNull { it.start.takeIf(String::isNotBlank) }
-    val finishes = finished.mapNotNull { it.finish.takeIf(String::isNotBlank) }
-    return when {
-        finished.isNotEmpty() && starts.isNotEmpty() && finishes.isNotEmpty() ->
-            stringResource(
-                R.string.mybooks_edit_read_summary,
-                finished.size,
-                starts.maxOrNull().orEmpty(),
-                finishes.maxOrNull().orEmpty()
-            )
-        starts.isNotEmpty() -> stringResource(R.string.mybooks_edit_read_summary_reading, starts.maxOrNull().orEmpty())
-        else -> stringResource(R.string.mybooks_edit_read_none)
-    }
-}
-
-@Composable
-private fun DateField(
-    label: String,
-    value: String,
-    enabled: Boolean,
-    modifier: Modifier = Modifier,
-    onValueChange: (String) -> Unit
-) {
-    EditorTextField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = "$label ${stringResource(R.string.mybooks_edit_date_placeholder)}",
-        keyboardType = KeyboardType.Ascii,
-        enabled = enabled,
-        modifier = modifier
-    )
 }
 
 @Composable

@@ -787,6 +787,79 @@ class MyBooksSyncReliabilityTest {
         assertEquals(3, JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.baseJson).getInt("read_count"))
     }
 
+    @Test fun dateOnlyEditPersistsOfflineAndPushesOnlyReadLogsWithRevision() = runBlocking {
+        localBook()
+        val log = MyBooksReadLog("2026-10-01", "2026-10-17")
+        val logs = MyBooksReadStatus.logsToJson(listOf(log))
+        val base = remote().put("status", "done").put("read_count", 1).put("read_logs", logs)
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = base.toString()))
+        val result = manager.editReadLogDate("mybooks-1", readLogDateSource(log, listOf(log))!!,
+            ReadLogDateField.FINISH, "2026-10-20")
+        val pending = db.myBooksSyncStateDao().get("mybooks-1")!!
+        val fields = JSONObject(pending.overridesJson)
+        assertEquals(setOf("read_logs"), fields.keys().asSequence().toSet())
+        assertEquals(1, JSONObject(result).getInt("read_count"))
+        assertEquals("done", JSONObject(result).getString("status"))
+        assertEquals("2026-10-01", fields.getJSONArray("read_logs").getJSONObject(0).getString("start"))
+        assertEquals(1, store.pendingCount.first())
+        assertEquals(0, server.requestCount)
+        val updated = JSONObject(base.toString()).put("read_logs", fields.getJSONArray("read_logs")).put("revision", 2)
+        server.enqueue(MockResponse().setBody(snapshot(base)))
+        server.enqueue(MockResponse().setBody(base.toString()))
+        server.enqueue(MockResponse().setBody(updated.toString()))
+        assertTrue(manager.syncNow(scheduleRetry = false).success)
+        val patch = (0 until 3).map { server.takeRequest() }.single { it.method == "PATCH" }
+        val body = JSONObject(patch.body.readUtf8())
+        assertTrue(body.has("read_logs"))
+        assertEquals(1, body.getInt("expected_revision"))
+        assertEquals("book-one", body.getString("expected_uuid"))
+        assertFalse(body.has("status"))
+        assertFalse(body.has("title"))
+        assertEquals("2026-10-20", body.getJSONArray("read_logs").getJSONObject(0).getString("finish"))
+        assertEquals("{}", db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+    }
+
+    @Test fun sourceUpdateWhileWaitingForSyncLockRejectsDateEditWithoutOverwritingIt() = runBlocking {
+        localBook()
+        val log = MyBooksReadLog("2026-10-01", "2026-10-17")
+        val base = remote().put("read_logs", MyBooksReadStatus.logsToJson(listOf(log)))
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = base.toString()))
+        var failure: ReadLogDateFailure? = null
+        lateinit var job: kotlinx.coroutines.Job
+        manager.withBookTransfer {
+            job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                try {
+                    manager.editReadLogDate("mybooks-1", readLogDateSource(log, listOf(log))!!,
+                        ReadLogDateField.FINISH, "2026-10-20")
+                    fail("Stale source must be rejected")
+                } catch (error: ReadLogDateException) { failure = error.reason }
+            }
+            val latest = JSONObject(base.toString()).put("read_logs", MyBooksReadStatus.logsToJson(listOf(log.copy(start = "2026-10-02"))))
+            db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = latest.toString()))
+        }
+        job.join()
+        assertEquals(ReadLogDateFailure.CHANGED, failure)
+        assertEquals("{}", db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson)
+    }
+
+    @Test fun dateOnlyEditPreservesUnrelatedPendingMetadataAndReportsServerLogConflict() = runBlocking {
+        localBook()
+        val log = MyBooksReadLog("2026-10-01", "2026-10-17")
+        val base = remote().put("status", "done").put("read_logs", MyBooksReadStatus.logsToJson(listOf(log)))
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1, baseJson = base.toString(),
+            overridesJson = "{\"summary\":\"Keep this\"}"))
+        manager.editReadLogDate("mybooks-1", readLogDateSource(log, listOf(log))!!,
+            ReadLogDateField.START, "2026-10-02")
+        assertEquals("Keep this", JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson).getString("summary"))
+        val changedRemote = JSONObject(base.toString()).put("read_logs", MyBooksReadStatus.logsToJson(listOf(log.copy(finish = "2026-10-18"))))
+        server.enqueue(MockResponse().setBody(snapshot(changedRemote)))
+        server.enqueue(MockResponse().setBody(changedRemote.toString()))
+        assertFalse(manager.syncNow(scheduleRetry = false).success)
+        assertEquals(2, server.requestCount)
+        assertTrue(db.myBooksSyncStateDao().get("mybooks-1")!!.conflictFieldsJson.contains("read_logs"))
+        assertTrue(JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson).has("read_logs"))
+    }
+
     @Test fun unreadBookWithNullableDatesRecordsItsFirstReadingStart() = runBlocking {
         localBook()
         val base = remote().put("status", "wish").put("read_count", 0)

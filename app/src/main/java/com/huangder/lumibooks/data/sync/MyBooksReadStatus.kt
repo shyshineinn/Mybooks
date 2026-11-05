@@ -25,7 +25,7 @@ internal fun ReadingStatus.toServerStatus(): String = when (this) {
 /**
  * “标记已读”与服务端 status/read_logs 的转换规则。
  *
- * 服务端语义：read_logs 是读完日期与读过次数的唯一来源；status 单独表示想读/在读/已读。
+ * 服务端语义：read_logs 是读完日期与读过次数的唯一来源；status 单独表示未读/在读/已读。
  * 标记已读时补一条读完记录，取消时清掉最后一条 finish，与网页端的状态联动一致。
  */
 internal object MyBooksReadStatus {

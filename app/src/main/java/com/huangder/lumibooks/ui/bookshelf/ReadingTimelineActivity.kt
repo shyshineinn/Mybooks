@@ -14,6 +14,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -110,6 +112,8 @@ private fun ReadingTimelineRoute(
 ) {
     val details by detailsViewModel.uiState.collectAsState()
     val metaState by editViewModel.metaState.collectAsState()
+    val editState by editViewModel.uiState.collectAsState()
+    var editing by remember(bookId) { mutableStateOf<ReadingTimelineEvent?>(null) }
     LaunchedEffect(bookId) { detailsViewModel.load(bookId) }
     LaunchedEffect(details.book?.id) { details.book?.let { editViewModel.loadMeta(it) } }
     val events = remember(metaState.meta) { metaState.meta?.let(::readingTimelineEvents).orEmpty() }
@@ -118,6 +122,17 @@ private fun ReadingTimelineRoute(
         meta = metaState.meta,
         events = events,
         onBack = onBack,
-        loading = details.isLoading || (metaState.loading && metaState.meta == null)
+        loading = details.isLoading || (metaState.loading && metaState.meta == null),
+        onEditEvent = { event ->
+            details.book?.let { book ->
+                editViewModel.begin(book, metaState.meta)
+                editing = event
+            }
+        }
     )
+    editing?.let { event ->
+        ReadingTimelineDateDialog(event, editState.saving, editState.loaded && !editState.loading,
+            editState.error, onDismiss = { editing = null },
+            onSave = { date -> editViewModel.saveReadLogDate(event, date) { editing = null } })
+    }
 }

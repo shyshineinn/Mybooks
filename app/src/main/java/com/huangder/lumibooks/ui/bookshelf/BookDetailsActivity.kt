@@ -285,6 +285,16 @@ fun BookDetailsScreen(
     LaunchedEffect(book.id) {
         editViewModel.loadMeta(book)
     }
+    val timelineLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(timelineLifecycle, book.id) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                editViewModel.loadMeta(book, forceRefresh = true)
+            }
+        }
+        timelineLifecycle.lifecycle.addObserver(observer)
+        onDispose { timelineLifecycle.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(myBooksSyncing) {
         if (!myBooksSyncing && MyBooksConfig.isMyBooks(book)) {
             editViewModel.refreshSyncBadge(book.id)

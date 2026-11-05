@@ -1,6 +1,9 @@
 package com.huangder.lumibooks.ui.bookshelf
 
 import com.huangder.lumibooks.data.sync.ServerBookMeta
+import com.huangder.lumibooks.data.sync.MyBooksReadLog
+import com.huangder.lumibooks.data.sync.ReadLogDateSource
+import com.huangder.lumibooks.data.sync.readLogDateSource
 import com.huangder.lumibooks.domain.model.ReadingStatus
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
@@ -10,24 +13,26 @@ internal enum class ReadingTimelineEventType { START, FINISH }
 internal data class ReadingTimelineEvent(
     val round: Int,
     val type: ReadingTimelineEventType,
-    val date: LocalDate
+    val date: LocalDate,
+    val source: ReadLogDateSource? = null
 )
 
-private data class TimelineReadLog(val start: LocalDate?, val finish: LocalDate?)
+private data class TimelineReadLog(val start: LocalDate?, val finish: LocalDate?, val source: ReadLogDateSource?)
 
 /** Project recorded dates into UI events without creating missing starts or finishes. */
 internal fun readingTimelineEvents(meta: ServerBookMeta): List<ReadingTimelineEvent> {
     fun date(value: String?) = value?.trim()?.takeIf { it.isNotEmpty() }
         ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-    val logs = meta.readLogs.map { TimelineReadLog(date(it.start), date(it.finish)) }
+    val snapshot = meta.readLogs.map { MyBooksReadLog(it.start.orEmpty().trim(), it.finish.orEmpty().trim()) }
+    val logs = snapshot.map { TimelineReadLog(date(it.start), date(it.finish), readLogDateSource(it, snapshot)) }
         .filter { it.start != null || it.finish != null }
         .sortedWith(compareBy<TimelineReadLog> { it.start ?: it.finish!! }
             .thenBy { it.finish ?: LocalDate.MAX })
     val events = buildList {
         if (logs.isNotEmpty()) {
             logs.forEachIndexed { index, log ->
-                log.start?.let { add(ReadingTimelineEvent(index + 1, ReadingTimelineEventType.START, it)) }
-                log.finish?.let { add(ReadingTimelineEvent(index + 1, ReadingTimelineEventType.FINISH, it)) }
+                log.start?.let { add(ReadingTimelineEvent(index + 1, ReadingTimelineEventType.START, it, log.source)) }
+                log.finish?.let { add(ReadingTimelineEvent(index + 1, ReadingTimelineEventType.FINISH, it, log.source)) }
             }
         } else {
             // Legacy metadata can contain only the latest start/finish and completed count.

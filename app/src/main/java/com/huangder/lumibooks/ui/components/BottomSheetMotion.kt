@@ -164,6 +164,7 @@ fun LiquidGlassBottomSheetScaffold(
     shape: Shape = AppRoundedCornerShape(AppRadius.capsule),
     fallbackColor: Color = AppColors.CardBg,
     contentPadding: PaddingValues = PaddingValues(horizontal = AppSpace.lg, vertical = AppSpace.md),
+    glassContentScrimColor: Color = fallbackColor.copy(alpha = 0.82f),
     content: @Composable ColumnScope.(requestDismiss: () -> Unit) -> Unit
 ) {
     val isLiquidGlass = LocalAppTheme.current == "liquid_glass"
@@ -196,7 +197,7 @@ fun LiquidGlassBottomSheetScaffold(
             modifier = modifier.imePadding(),
             alignment = Alignment.BottomCenter,
             shape = shape,
-            contentScrimColor = fallbackColor.copy(alpha = 0.82f),
+            contentScrimColor = glassContentScrimColor,
             backgroundScrimColor = Color.Black.copy(alpha = 0.12f),
             motion = LiquidGlassDialogMotion.BOTTOM_SHEET
         ) {

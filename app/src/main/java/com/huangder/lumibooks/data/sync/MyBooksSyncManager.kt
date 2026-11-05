@@ -269,6 +269,32 @@ class MyBooksSyncManager @Inject constructor(
         }
     }
 
+    /** Validate the source under both sync/edit locks, then reuse the normal local edit queue. */
+    internal suspend fun editReadLogDate(
+        bookId: String,
+        source: ReadLogDateSource,
+        field: ReadLogDateField,
+        date: String
+    ): String = syncMutex.withLock {
+        editMutex.withLock {
+            val state = myBooksSyncStateDao.get(bookId)
+                ?: throw ReadLogDateException(ReadLogDateFailure.CHANGED)
+            if (state.remoteDeleted) throw ReadLogDateException(ReadLogDateFailure.CHANGED)
+            val base = JSONObject(state.baseJson)
+            val overrides = JSONObject(state.overridesJson)
+            val raw = if (overrides.has("read_logs")) overrides.opt("read_logs") else base.opt("read_logs")
+            val logs = editReadLogDate(raw, source, field, date)
+            recordLocalEditLocked(bookId, mapOf("read_logs" to logs))
+            overrides.put("read_logs", logs)
+            overrides.keys().forEach { key -> base.put(key, overrides.get(key)) }
+            val dates = MyBooksReadStatus.parseLogs(logs)
+            base.put("read_count", dates.count { it.finish.isNotBlank() })
+            base.put("start_date", dates.map { it.start }.maxOrNull().orEmpty())
+            base.put("finish_date", dates.map { it.finish }.maxOrNull().orEmpty())
+            base.toString()
+        }
+    }
+
     /** 编辑页/标签操作后记录本地 field overrides,并 debounce 推送。 */
     suspend fun recordLocalEdit(
         bookId: String,

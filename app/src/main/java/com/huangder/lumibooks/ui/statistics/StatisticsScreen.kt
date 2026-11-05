@@ -94,6 +94,9 @@ import com.huangder.lumibooks.ui.theme.SansSerif
 import com.huangder.lumibooks.ui.theme.resolveAppFontFamily
 import com.huangder.lumibooks.ui.theme.cardOutline
 import java.util.Calendar
+import java.time.YearMonth
+import com.huangder.lumibooks.ui.components.AppMonthCalendar
+import com.huangder.lumibooks.ui.components.AppMonthCalendarMode
 
 @Composable
 fun StatisticsScreen(
@@ -560,13 +563,7 @@ private fun WeeklyOverview(
 private fun MonthlyHeatmap(uiState: StatisticsUiState, viewModel: StatisticsViewModel) {
     val year = uiState.displayYear
     val month = uiState.displayMonth
-    val now = Calendar.getInstance()
-    val isCurrentMonth = (year == now.get(Calendar.YEAR) && month == now.get(Calendar.MONTH))
-    val today = if (isCurrentMonth) now.get(Calendar.DAY_OF_MONTH) else -1
-
-    val firstDay = Calendar.getInstance().apply { set(year, month, 1) }
-    val startDayOfWeek = firstDay.get(Calendar.DAY_OF_WEEK) - 1
-    val daysInMonth = firstDay.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val isCurrentMonth = YearMonth.of(year, month + 1) == YearMonth.now()
 
     val totalMinutes = (uiState.monthlyReadingTime / 1000 / 60).toInt()
     val hours = totalMinutes / 60
@@ -583,147 +580,18 @@ private fun MonthlyHeatmap(uiState: StatisticsUiState, viewModel: StatisticsView
             .lumiCardSurface(shape = AppRoundedCornerShape(AppRadius.lg))
             .padding(AppSpace.md)
     ) {
-        // 月份标题 + 导航箭头
-        val monthNames = listOf(
-            stringResource(R.string.month_january),
-            stringResource(R.string.month_february),
-            stringResource(R.string.month_march),
-            stringResource(R.string.month_april),
-            stringResource(R.string.month_may),
-            stringResource(R.string.month_june),
-            stringResource(R.string.month_july),
-            stringResource(R.string.month_august),
-            stringResource(R.string.month_september),
-            stringResource(R.string.month_october),
-            stringResource(R.string.month_november),
-            stringResource(R.string.month_december)
+        AppMonthCalendar(
+            month = YearMonth.of(year, month + 1),
+            onPreviousMonth = viewModel::previousMonth,
+            onNextMonth = viewModel::nextMonth,
+            mode = AppMonthCalendarMode.Statistics,
+            nextEnabled = !isCurrentMonth,
+            dailyData = uiState.monthlyDailyData,
+            subtitle = {
+                Text(stringResource(R.string.reading_time_hours, hours, minutes, activeDays),
+                    fontSize = AppType.Caption, color = AppColors.TextSecondary)
+            }
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                stringResource(R.string.year_format, year) + monthNames[month],
-                fontSize = AppType.Section,
-                fontWeight = FontWeight.Bold,
-                fontFamily = resolveAppFontFamily(KaiTi),
-                color = AppColors.TextPrimary,
-                modifier = Modifier.weight(1f)
-            )
-            // 左箭头
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(AppRoundedCornerShape(6.dp))
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { viewModel.previousMonth() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = directionalIcon(AppIcons.CaretLeft, AppIcons.CaretRight),
-                    contentDescription = null,
-                    tint = AppColors.TextPrimary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            Spacer(Modifier.width(4.dp))
-            // 右箭头（当前月禁用）
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(AppRoundedCornerShape(6.dp))
-                    .clickable(
-                        enabled = !isCurrentMonth,
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { viewModel.nextMonth() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = directionalIcon(AppIcons.CaretRight, AppIcons.CaretLeft),
-                    contentDescription = null,
-                    tint = if (isCurrentMonth) AppColors.TextSecondary.copy(alpha = 0.3f) else AppColors.TextPrimary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        // 汇总信息
-        Text(stringResource(R.string.reading_time_hours, hours, minutes, activeDays), fontSize = AppType.Caption, color = AppColors.TextSecondary)
-
-        Spacer(Modifier.height(AppSpace.md))
-
-        // 星期标题
-        val weekLabels = listOf(
-            stringResource(R.string.day_sunday),
-            stringResource(R.string.day_monday),
-            stringResource(R.string.day_tuesday),
-            stringResource(R.string.day_wednesday),
-            stringResource(R.string.day_thursday),
-            stringResource(R.string.day_friday),
-            stringResource(R.string.day_saturday)
-        )
-        Row(modifier = Modifier.fillMaxWidth()) {
-            weekLabels.forEach { label ->
-                Text(
-                    text = label,
-                    fontSize = 11.sp,
-                    color = AppColors.TextSecondary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-
-        Spacer(Modifier.height(AppSpace.xs))
-
-        // 日历网格
-        val totalCells = startDayOfWeek + daysInMonth
-        val rows = (totalCells + 6) / 7
-
-        repeat(rows) { row ->
-            Row(modifier = Modifier.fillMaxWidth()) {
-                repeat(7) { col ->
-                    val dayIndex = row * 7 + col - startDayOfWeek + 1
-                    if (dayIndex in 1..daysInMonth) {
-                        val dateStr = String.format("%04d-%02d-%02d", year, month + 1, dayIndex)
-                        val duration = uiState.monthlyDailyData[dateStr] ?: 0
-                        val minutesForDay = (duration / 1000 / 60).toInt()
-                        val isToday = dayIndex == today
-
-                        val color = when {
-                            minutesForDay == 0 -> AppColors.BgGray
-                            minutesForDay < 15 -> AppColors.Accent.copy(alpha = 0.2f)
-                            minutesForDay < 30 -> AppColors.Accent.copy(alpha = 0.4f)
-                            minutesForDay < 60 -> AppColors.Accent.copy(alpha = 0.7f)
-                            else -> AppColors.Accent
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .aspectRatio(1f)
-                                .padding(2.dp)
-                                .clip(AppRoundedCornerShape(4.dp))
-                                .background(color)
-                                .then(
-                                    if (isToday) Modifier.border(1.5.dp, AppColors.Accent, AppRoundedCornerShape(4.dp))
-                                    else Modifier
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "$dayIndex",
-                                fontSize = 10.sp,
-                                color = if (minutesForDay > 0 && minutesForDay >= 30) Color.White else AppColors.TextSecondary,
-                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
-                            )
-                        }
-                    } else {
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
-                }
-            }
-        }
     }
 }
 

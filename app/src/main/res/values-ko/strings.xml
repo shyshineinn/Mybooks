@@ -289,7 +289,7 @@
     <string name="filter_downloaded">EPUB &amp; MOBI</string>
     <string name="filter_pdf">PDF</string>
     <string name="filter_favorites">즐겨찾기</string>
-    <string name="reading_status_wish">읽고 싶음</string>
+    <string name="reading_status_wish">읽지 않음</string>
     <string name="reading_status_reading">읽는 중</string>
     <string name="reading_status_done">다 읽음</string>
     <string name="edit_book_info">도서 정보 수정</string>
@@ -1585,7 +1585,7 @@
     <string name="mybooks_edit_series_required">권 번호를 입력하기 전에 시리즈를 입력하세요</string>
     <string name="mybooks_edit_status_done">다 읽음</string>
     <string name="mybooks_edit_status_reading">읽는 중</string>
-    <string name="mybooks_edit_status_wish">읽고 싶음</string>
+    <string name="mybooks_edit_status_wish">읽지 않음</string>
     <string name="mybooks_edit_summary_too_long">소개는 최대 1000자입니다</string>
     <string name="mybooks_edit_text_too_long">최대 %1$d자</string>
     <string name="mybooks_edit_title">책 정보 편집</string>
@@ -1694,4 +1694,10 @@
     <string name="reading_timeline_start_next">%1$s회차 읽기 시작</string>
     <string name="reading_timeline_abandon">%1$s회차 읽기 포기</string>
     <string name="reading_timeline_title">독서 기록 · %1$s</string>
+    <string name="reading_timeline_edit_time">날짜 편집</string>
+    <string name="reading_timeline_start_time">시작 날짜</string>
+    <string name="reading_timeline_finish_time">완료 날짜</string>
+    <string name="reading_timeline_date_changed">독서 기록이 변경되었습니다. 창을 닫고 이벤트를 다시 선택하세요.</string>
+    <string name="calendar_previous_month">이전 달</string>
+    <string name="calendar_next_month">다음 달</string>
 </resources>

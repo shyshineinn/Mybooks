@@ -415,7 +415,7 @@
     <string name="filter_downloaded">EPUB &amp; MOBI</string>
     <string name="filter_pdf">PDF</string>
     <string name="filter_favorites">Favorites</string>
-    <string name="reading_status_wish">Want to read</string>
+    <string name="reading_status_wish">Unread</string>
     <string name="reading_status_reading">Reading</string>
     <string name="reading_status_done">Read</string>
     <string name="edit_book_info">Edit Book Info</string>
@@ -1814,7 +1814,7 @@
     <string name="mybooks_edit_series_required">Enter the series before the volume</string>
     <string name="mybooks_edit_status_done">Read</string>
     <string name="mybooks_edit_status_reading">Reading</string>
-    <string name="mybooks_edit_status_wish">Want to read</string>
+    <string name="mybooks_edit_status_wish">Unread</string>
     <string name="mybooks_edit_summary_too_long">Summary must be at most 1000 characters</string>
     <string name="mybooks_edit_text_too_long">At most %1$d characters</string>
     <string name="mybooks_edit_title">Edit book information</string>
@@ -2015,4 +2015,10 @@
     <string name="reading_timeline_start_next">Start reading #%1$s</string>
     <string name="reading_timeline_abandon">Abandon reading #%1$s</string>
     <string name="reading_timeline_title">Reading history · %1$s</string>
+    <string name="reading_timeline_edit_time">Edit time</string>
+    <string name="reading_timeline_start_time">Start date</string>
+    <string name="reading_timeline_finish_time">Finish date</string>
+    <string name="reading_timeline_date_changed">Reading records have changed. Close this dialog and select the event again.</string>
+    <string name="calendar_previous_month">Previous month</string>
+    <string name="calendar_next_month">Next month</string>
 </resources>

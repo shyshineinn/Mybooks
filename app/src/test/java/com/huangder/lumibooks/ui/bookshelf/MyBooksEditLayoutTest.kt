@@ -42,7 +42,8 @@ class MyBooksEditLayoutTest {
     private fun verify(width: Int, height: Int, importing: Boolean) {
         compose.setContent {
             Column(Modifier.size(width.dp, height.dp).background(AppColors.CardBg).padding(horizontal=AppSpace.lg, vertical=AppSpace.md)) {
-                EditSheetContent(MyBooksEditUiState(loading=false, loaded=true, dirty=true, title="Book", author="Author", translators="甲、乙"),
+                EditSheetContent(MyBooksEditUiState(loading=false, loaded=true, dirty=true, title="Book", author="Author", translators="甲、乙",
+                    readLogs=listOf(MyBooksReadLogDraft("2026-10-01", "2026-10-17"))),
                     createMode=importing, localImport=importing, onClose={}, onCancel={}, onSave={}, viewModel=actions)
             }
         }
@@ -61,7 +62,11 @@ class MyBooksEditLayoutTest {
         compose.onNodeWithTag("mybooks-more-info").performScrollTo().performClick()
         // Expanding content may grow the sheet; scrolling must keep its actions pinned.
         val before = compose.onNodeWithText(text(save)).fetchSemanticsNode().boundsInRoot
-        compose.onNodeWithText(text(R.string.mybooks_edit_add_read)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.mybooks_edit_field_summary)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.mybooks_edit_add_read)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.mybooks_edit_section_read_logs)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.mybooks_edit_read_start), substring = true).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.mybooks_edit_read_finish), substring = true).assertDoesNotExist()
         assertEquals(before, compose.onNodeWithText(text(save)).fetchSemanticsNode().boundsInRoot)
         compose.onNodeWithText(text(title)).assertIsDisplayed()
         compose.onNodeWithText(text(save)).assertIsDisplayed()

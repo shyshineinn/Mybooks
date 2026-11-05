@@ -16,6 +16,9 @@ import com.huangder.lumibooks.data.sync.MyBooksCreatedBook
 import com.huangder.lumibooks.data.sync.MyBooksHttpException
 import com.huangder.lumibooks.data.sync.MyBooksMetaCache
 import com.huangder.lumibooks.data.sync.MyBooksSyncManager
+import com.huangder.lumibooks.data.sync.ReadLogDateField
+import com.huangder.lumibooks.data.sync.ReadLogDateException
+import com.huangder.lumibooks.data.sync.ReadLogDateFailure
 import com.huangder.lumibooks.data.sync.ServerBookMeta
 import com.huangder.lumibooks.data.sync.normalizeRemoteAuthor
 import com.huangder.lumibooks.data.sync.optTextAt
@@ -203,7 +206,9 @@ class MyBooksEditViewModel @Inject constructor(
                     ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
                     ?: JSONObject()
             }
-            val cachedRaw = withContext(Dispatchers.IO) { metaCache.read(remoteId) }
+            val cachedRaw = withContext(Dispatchers.IO) {
+                metaCache.read(remoteId) ?: syncStateDao.get(book.id)?.baseJson
+            }
             val cachedMeta = cachedRaw?.let {
                 runCatching { ServerBookMeta.fromJson(effectiveJson(it, overrides).toString(), remoteId) }.getOrNull()
             }
@@ -363,7 +368,7 @@ class MyBooksEditViewModel @Inject constructor(
     }
 
     fun localImportDraft(): String? {
-        // 新导入的书统一从“想读”开始，不沿用刮削来源的阅读状态。
+        // 新导入的书统一从“未读”开始，不沿用刮削来源的阅读状态。
         val current = _uiState.value.copy(status = "wish")
         val errors = validate(current)
         if (errors.isNotEmpty()) {
@@ -516,6 +521,50 @@ class MyBooksEditViewModel @Inject constructor(
         )
     }
 
+    /** Date-only editing deliberately avoids the general form's normalization and metadata writes. */
+    internal fun saveReadLogDate(event: ReadingTimelineEvent, date: LocalDate, onSaved: () -> Unit) {
+        val activeBook = book ?: return
+        val source = event.source ?: return
+        if (_uiState.value.saving || !_uiState.value.loaded) return
+        metaJob?.cancel()
+        _uiState.value = _uiState.value.copy(saving = true, error = null)
+        viewModelScope.launch {
+            try {
+                val raw = withContext(Dispatchers.IO) {
+                    syncManager.editReadLogDate(activeBook.id, source,
+                        if (event.type == ReadingTimelineEventType.START) ReadLogDateField.START
+                        else ReadLogDateField.FINISH, date.toString())
+                }
+                val meta = ServerBookMeta.fromJson(effectiveJson(raw, JSONObject()).toString(),
+                    MyBooksConfig.remoteIdOf(activeBook.id) ?: return@launch)
+                _metaState.value = MyBooksMetaUiState(meta = meta, loading = false)
+                _uiState.value = _uiState.value.copy(saving = false, dirty = false)
+                refreshSyncBadge(activeBook.id)
+                onSaved()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (error is ReadLogDateException &&
+                    error.reason == ReadLogDateFailure.CHANGED) {
+                    // Keep the dialog's draft, but refresh the list behind it for a safe reopen.
+                    val latest = withContext(Dispatchers.IO) { syncStateDao.get(activeBook.id) }
+                    if (latest != null) {
+                        _metaState.value = MyBooksMetaUiState(meta = ServerBookMeta.fromJson(
+                            effectiveJson(latest.baseJson, JSONObject(latest.overridesJson)).toString(), latest.remoteId), loading = false)
+                    }
+                }
+                val message = if (error is ReadLogDateException) {
+                    context.getString(when (error.reason) {
+                        ReadLogDateFailure.CHANGED -> R.string.reading_timeline_date_changed
+                        ReadLogDateFailure.INVALID -> R.string.mybooks_edit_date_invalid
+                        ReadLogDateFailure.ORDER -> R.string.mybooks_edit_date_order
+                    })
+                } else error.message ?: context.getString(R.string.mybooks_edit_save_failed)
+                _uiState.value = _uiState.value.copy(saving = false, error = message)
+            }
+        }
+    }
+
     fun save(onSaved: (String?) -> Unit) {
         if (createSource != null) {
             saveCreate(onSaved)
@@ -546,7 +595,8 @@ class MyBooksEditViewModel @Inject constructor(
                 collectScalarChanges(current, changed, managed)
                 collectIdentifierChanges(current, changed, managed, existingOverrides)
                 collectCustomChanges(current, changed, managed, existingOverrides)
-                collectReadLogChanges(current, changed, managed)
+                // Reading history is edited only through its date-only timeline flow.
+                // Leave pending read_logs overrides untouched when saving book metadata.
                 withContext(Dispatchers.IO) {
                     syncManager.replaceLocalEdits(activeBook.id, changed, managed)
                     // 被改动的字段用草稿值；没改动的字段用服务器基线值。
@@ -900,26 +950,6 @@ class MyBooksEditViewModel @Inject constructor(
             // 与 identifiers 同理：override 用扁平 key，多值字段的值形态交给合并层转换。
             changed[key] = customToServerValue(column, draft)
         }
-    }
-
-    private fun collectReadLogChanges(
-        state: MyBooksEditUiState,
-        changed: MutableMap<String, Any?>,
-        managed: MutableSet<String>
-    ) {
-        managed += "read_logs"
-        val draft = state.readLogs
-            .map { it.start.trim() to it.finish.trim() }
-            .filter { it.first.isNotBlank() || it.second.isNotBlank() }
-            .distinct()
-            .sortedWith(compareBy({ it.first }, { it.second }))
-        val baseLogs = readLogsFrom(base.opt("read_logs"))
-        if (draft == baseLogs) return
-        val array = JSONArray()
-        draft.forEach { (start, finish) ->
-            array.put(JSONObject().put("start", start).put("finish", finish))
-        }
-        changed["read_logs"] = array
     }
 
     // ────────────────────────── validation ──────────────────────────
