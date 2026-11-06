@@ -21,6 +21,37 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class PortableServerApplyTest {
+    @Test fun serverOrganizationPreservesCurrentTagNamesAssignmentsAndEditsMadeAfterCapture() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        val manager = PortableSnapshotManager(context, db, DataStoreManager(context), SyncIdentityStore(db.syncStateDao()),
+            MineruTokenStore(context), ExternalTtsTokenStore(context), TranslationTokenStore(context))
+        try {
+            val bookId = "mybooks-1"
+            db.bookDao().insertBook(BookEntity(bookId, "Book", "Author", "", null, "EPUB", 0, 0f, null, 1))
+            val current = com.huangder.lumibooks.data.local.entity.TagEntity("current", "Web tag", "web tag", 1, updatedAt = 2)
+            val old = com.huangder.lumibooks.data.local.entity.TagEntity("old", "Removed", "removed", 1)
+            db.tagDao().createAndAssignTag(bookId, current)
+            val snapshot = PortableSyncRules.empty("remote").copy(
+                tags = listOf(current.copy(name = "Stale name", normalizedName = "stale name", updatedAt = Long.MAX_VALUE), old),
+                bookTagLinks = listOf(com.huangder.lumibooks.data.local.entity.BookTagCrossRefEntity(bookId, old.id, Long.MAX_VALUE)),
+                tombstones = listOf(SyncTombstoneEntity("tag", current.id, Long.MAX_VALUE, "remote"),
+                    SyncTombstoneEntity("book_tag", "$bookId:${current.id}", Long.MAX_VALUE, "remote"))
+            )
+            suspend fun apply() = manager.apply(snapshot, emptyMap(), replace = false, replaceAssetDirectories = false,
+                preserveLocalBookIdentity = true, preserveNewerRows = true, preserveBookTags = true)
+            apply()
+            assertEquals(listOf("Web tag"), db.tagDao().getTagsForBook(bookId).map { it.name })
+            assertTrue(db.syncStateDao().getAllTombstones().isEmpty())
+            // 请求期间的新编辑以事务内的当前关系为准，不还原捕获时的标签。
+            db.tagDao().deleteBookTagLink(bookId, current.id)
+            val edited = com.huangder.lumibooks.data.local.entity.TagEntity("edited", "Edited during request", "edited during request", 3)
+            db.tagDao().createAndAssignTag(bookId, edited)
+            apply()
+            assertEquals(listOf(edited.name), db.tagDao().getTagsForBook(bookId).map { it.name })
+        } finally { db.close() }
+    }
+
     @Test fun applyingServerOrganizationKeepsActualBodyLatestReadingAndNewerFolderEdit() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
         val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()

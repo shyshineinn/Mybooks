@@ -152,7 +152,9 @@ class PortableSnapshotManager @Inject constructor(
         replace: Boolean,
         replaceAssetDirectories: Boolean = replace,
         preserveLocalBookIdentity: Boolean = false,
-        preserveNewerRows: Boolean = false
+        preserveNewerRows: Boolean = false,
+        // My Books 的标签关联来自书目同步，组织快照只补充目录与层级信息。
+        preserveBookTags: Boolean = false
     ) = withContext(Dispatchers.IO) {
         val deviceId = syncIdentityStore.deviceId()
         validateSnapshot(snapshot, assetFiles)
@@ -190,6 +192,8 @@ class PortableSnapshotManager @Inject constructor(
                 val existingTags = syncDao.getAllTags().associateBy { it.id }
                 val existingFolderLinks = syncDao.getAllBookFolderLinks().associateBy { it.bookId }
                 val existingTagLinks = syncDao.getAllBookTagLinks().associateBy { it.bookId + ":" + it.tagId }
+                val protectedTagIds = if (preserveBookTags && !replace) existingTagLinks.values.mapTo(mutableSetOf()) { it.tagId } else emptySet()
+                val protectedTagNames = protectedTagIds.mapNotNull { existingTags[it]?.normalizedName }.toSet()
                 val existingRecords = syncDao.getAllReadingRecords().associateBy {
                     "${it.bookId}\u0000${it.date}\u0000${it.sourceDeviceId}"
                 }
@@ -250,10 +254,18 @@ class PortableSnapshotManager @Inject constructor(
                     else existingFolders.mapTo(mutableSetOf()) { it.id } + snapshot.folders.map { it.id }
                 val tagMerge = mergePortableTags(
                     (if (replace) emptyList() else existingTags.values.toList()) + snapshot.tags.map { incoming ->
-                        existingTags[incoming.id]?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
+                        val current = existingTags[incoming.id]
+                        val selected = current?.takeIf { preserveNewerRows && !replace && it.updatedAt > incoming.updatedAt } ?: incoming
+                        if (current != null && current.id in protectedTagIds) selected.copy(name = current.name, normalizedName = current.normalizedName)
+                        else selected
                     },
-                    (if (replace) emptyList() else existingTagLinks.values.toList()) + snapshot.bookTagLinks
+                    (if (replace) emptyList() else existingTagLinks.values.toList()) +
+                        (if (preserveBookTags && !replace) emptyList() else snapshot.bookTagLinks)
                 )
+                val protectedCanonicalTagIds = tagMerge.tags.filter { it.normalizedName in protectedTagNames }.mapTo(mutableSetOf()) { it.id }
+                val effectiveTombstones = snapshot.tombstones.filterNot { tombstone -> preserveBookTags && !replace &&
+                    (tombstone.namespace == "book_tag" || tombstone.namespace == "tag" &&
+                        (tombstone.itemId in protectedTagIds || tombstone.itemId in protectedCanonicalTagIds)) }
                 val availableTagIds = tagMerge.tags.mapTo(mutableSetOf()) { it.id }
                 val folderLinks = snapshot.bookFolderLinks.filter {
                     it.bookId in availableBookIds && it.folderId in availableFolderIds
@@ -319,7 +331,7 @@ class PortableSnapshotManager @Inject constructor(
                             (existing.updatedAt == incoming.updatedAt && existing.isDeleted)
                     )) existing else incoming
                 })
-                if (snapshot.tombstones.isNotEmpty()) syncDao.upsertTombstones(snapshot.tombstones)
+                if (effectiveTombstones.isNotEmpty()) syncDao.upsertTombstones(effectiveTombstones)
                 if (snapshot.highlightRules.isNotEmpty()) {
                     database.highlightRuleDao().upsertRules(snapshot.highlightRules)
                 }
@@ -332,11 +344,12 @@ class PortableSnapshotManager @Inject constructor(
                 if (snapshot.highlightRuleExclusions.isNotEmpty()) {
                     database.highlightRuleDao().upsertExclusions(snapshot.highlightRuleExclusions)
                 }
-                applyTombstones(if (preserveNewerRows && !replace) snapshot.copy(
+                val tombstoneSnapshot = snapshot.copy(tombstones = effectiveTombstones)
+                applyTombstones(if (preserveNewerRows && !replace) tombstoneSnapshot.copy(
                     books = emptyList(), folders = syncDao.getAllFolders(), tags = syncDao.getAllTags(),
                     bookFolderLinks = syncDao.getAllBookFolderLinks(), bookTagLinks = syncDao.getAllBookTagLinks(),
                     bookmarks = syncDao.getAllBookmarks(), notes = syncDao.getAllNotes()
-                ) else snapshot)
+                ) else tombstoneSnapshot)
             }
             preparedAssets.finish()
         } catch (error: Throwable) {

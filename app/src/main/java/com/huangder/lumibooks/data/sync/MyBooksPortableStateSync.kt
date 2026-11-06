@@ -24,7 +24,7 @@ class MyBooksPortableStateSync @Inject constructor(
     private val engine = MyBooksPortableStateEngine(context, MyBooksApiClient(),
         capture = { snapshots.capture(includeBookFiles = false) },
         apply = { snapshot, files -> snapshots.apply(snapshot, files, replace = false, replaceAssetDirectories = false,
-            preserveLocalBookIdentity = true, preserveNewerRows = true) },
+            preserveLocalBookIdentity = true, preserveNewerRows = true, preserveBookTags = true) },
         identities = { database.myBooksSyncStateDao().getAll().filterNot { it.remoteDeleted }.mapNotNull { state ->
             runCatching { state.bookId to JSONObject(state.baseJson).getString("uuid") }.getOrNull()
         }.toMap() },
@@ -140,15 +140,17 @@ internal class MyBooksPortableStateEngine(
         val state = PortableSyncRules.stripRuleLibrary(PortableSnapshot.fromJson(raw.toString()))
         val ids = state.books.filter { active[it.id] != null && identities.optString(it.id) == active[it.id] }.mapTo(mutableSetOf()) { it.id }
         val snapshot = state.copy(books = state.books.filter { it.id in ids }, bookFolderLinks = state.bookFolderLinks.filter { it.bookId in ids },
-            bookTagLinks = state.bookTagLinks.filter { it.bookId in ids }, readingRecords = emptyList(), bookmarks = emptyList(), notes = emptyList(),
-            highlightRuleExclusions = emptyList(), tombstones = state.tombstones.filter { it.namespace in setOf("folder", "tag", "book_folder", "book_tag") },
+            // 服务器书籍的标签关联只由书目三方合并维护；旧快照不能重新添加或删除关联。
+            bookTagLinks = emptyList(), readingRecords = emptyList(), bookmarks = emptyList(), notes = emptyList(),
+            highlightRuleExclusions = emptyList(), tombstones = state.tombstones.filter { it.namespace in setOf("folder", "tag", "book_folder") },
             assets = state.assets.filter { it.kind != "book_cover" || it.ownerId in ids })
         return snapshot.copy(assets = snapshot.assets.filter { PortableSyncRules.referenced(snapshot, it.id) })
     }
     private fun wire(snapshot: PortableSnapshot) = snapshot.copy(books = snapshot.books.map { it.copy(
         lastReadTime = 0, readingProgress = 0f, locatorJson = null, bodyAssetId = null,
         remoteLibraryKey = null, remoteFileName = null, remoteFileSize = 0, remoteFileSha256 = null
-    ) }, readingRecords = emptyList(), bookmarks = emptyList(), notes = emptyList())
+    ) }, bookTagLinks = emptyList(), tombstones = snapshot.tombstones.filterNot { it.namespace == "book_tag" },
+        readingRecords = emptyList(), bookmarks = emptyList(), notes = emptyList())
     private fun materialize(source: PortableAssetSource, directory: File): File {
         val file = File(directory, source.asset.fileName)
         source.openStream().use { input -> file.outputStream().use { output -> input.copyTo(output) } }

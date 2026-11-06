@@ -79,11 +79,12 @@ class MyBooksPortableStateSyncTest {
         var sources = emptyMap<String, PortableAssetSource>()
         var received = emptyMap<String, ByteArray>()
     }
-    private suspend fun sync(device: Device, selection: SyncContentSelection = SyncContentSelection(), direction: MyBooksSyncDirection = MyBooksSyncDirection.BOTH) {
+    private suspend fun sync(device: Device, selection: SyncContentSelection = SyncContentSelection(), direction: MyBooksSyncDirection = MyBooksSyncDirection.BOTH,
+        active: Map<String, String> = emptyMap()) {
         MyBooksPortableStateEngine(context, MyBooksApiClient(),
             capture = { PortableSnapshotBundle(device.state, device.sources) },
             apply = { snapshot, files -> device.state = snapshot; device.received = files.mapValues { it.value.readBytes() }; device.applied++ },
-            identities = { emptyMap() }, revision = { device.revision }, rememberRevision = { _, value -> device.revision = value })
+            identities = { active }, revision = { device.revision }, rememberRevision = { _, value -> device.revision = value })
             .sync("library", selection, direction)
     }
     @Test fun twoDevicesMergeProfileAndFoldersWithoutReadingInjection() = runBlocking {
@@ -158,5 +159,39 @@ class MyBooksPortableStateSyncTest {
         val a = Device(empty()); a.revision = 2
         try { sync(a); fail("version rollback must stop sync") } catch (_: IllegalArgumentException) { }
         assertEquals(0, a.applied); assertEquals(2L, a.revision); assertEquals(0, puts)
+    }
+
+    @Test fun webTagReplacementIsNotRestoredByAnOlderOrganizationSnapshot() = runBlocking {
+        val book = PortableBook("mybooks-1", "Book", "Author", "EPUB", 0, 0f, null, 1,
+            false, true, 1, null, null, null, null, 0, null)
+        val oldTag = com.huangder.lumibooks.data.local.entity.TagEntity("old", "Old", "old", 1)
+        val newTag = com.huangder.lumibooks.data.local.entity.TagEntity("new", "New", "new", 2)
+        val oldLink = com.huangder.lumibooks.data.local.entity.BookTagCrossRefEntity(book.id, oldTag.id, 1)
+        val newLink = com.huangder.lumibooks.data.local.entity.BookTagCrossRefEntity(book.id, newTag.id, 2)
+        remote = JSONObject(empty("b").copy(books = listOf(book), tags = listOf(oldTag), bookTagLinks = listOf(oldLink)).toJson())
+            .put("bookIdentities", JSONObject().put(book.id, "uuid"))
+        remoteRevision = 1
+        val device = Device(empty().copy(books = listOf(book), tags = listOf(oldTag, newTag), bookTagLinks = listOf(newLink)))
+        repeat(2) {
+            sync(device, active = mapOf(book.id to "uuid"))
+            val names = device.state.bookTagLinks.map { link -> device.state.tags.single { it.id == link.tagId }.name }
+            assertEquals(listOf("New"), names)
+            assertEquals(listOf("New"), MyBooksMerge.mergeTags(listOf("New"), names, listOf("New")))
+        }
+        assertEquals(0, remote!!.getJSONArray("bookTagLinks").length())
+    }
+
+    @Test fun clearingWebTagsDoesNotResurrectOldLinksEvenWhenOnlyDownloading() = runBlocking {
+        val book = PortableBook("mybooks-1", "Book", "Author", "EPUB", 0, 0f, null, 1,
+            false, true, 1, null, null, null, null, 0, null)
+        val tag = com.huangder.lumibooks.data.local.entity.TagEntity("old", "Old", "old", 1)
+        remote = JSONObject(empty("b").copy(books = listOf(book), tags = listOf(tag), bookTagLinks = listOf(
+            com.huangder.lumibooks.data.local.entity.BookTagCrossRefEntity(book.id, tag.id, 1)
+        )).toJson()).put("bookIdentities", JSONObject().put(book.id, "uuid"))
+        remoteRevision = 1
+        val device = Device(empty().copy(books = listOf(book), tags = listOf(tag)))
+        sync(device, direction = MyBooksSyncDirection.DOWNLOAD, active = mapOf(book.id to "uuid"))
+        assertTrue(device.state.bookTagLinks.isEmpty())
+        assertEquals(0, puts)
     }
 }
