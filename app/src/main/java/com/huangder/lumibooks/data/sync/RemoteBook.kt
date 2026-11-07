@@ -9,7 +9,8 @@ data class RemoteBookFile(
     val format: String,
     val path: String,
     val size: Long,
-    val downloadUrl: String? = null
+    val downloadUrl: String? = null,
+    val version: String? = null
 )
 
 /**
@@ -29,11 +30,10 @@ data class RemoteBook(
     val files: List<RemoteBookFile>,
     val updatedAt: String? = null,
     val createdAt: String? = null,
-    val hasNotes: Boolean = false,
-    val notesSize: Long = 0L,
-    val notesUpdatedAt: String? = null,
     val uuid: String? = null,
-    val revision: Long? = null
+    val revision: Long? = null,
+    val favorite: Boolean? = null,
+    val directory: String? = null
 ) {
     fun fileFor(format: String): RemoteBookFile? =
         files.firstOrNull { it.format.equals(format, ignoreCase = true) }
@@ -105,11 +105,10 @@ private fun JSONObject.toRemoteBook(baseUrl: String): RemoteBook {
         files = files,
         updatedAt = optTextOrNull("updated_at"),
         createdAt = optTextOrNull("created_at"),
-        hasNotes = optBoolean("has_notes", false),
-        notesSize = optLong("notes_size", 0L),
-        notesUpdatedAt = optTextOrNull("notes_updated_at"),
         uuid = optTextOrNull("uuid"),
-        revision = optLong("revision", 0L).takeIf { it > 0 }
+        revision = optLong("revision", 0L).takeIf { it > 0 },
+        favorite = if (has("favorite")) optBoolean("favorite") else null,
+        directory = if (has("folder")) optTextOrEmpty("folder") else null
     )
 }
 
@@ -122,7 +121,7 @@ internal fun parseRemoteFiles(obj: JSONObject): List<RemoteBookFile> =
                 val path = file.optString("path")
                 if (format.isBlank() || path.isBlank()) continue
                 add(RemoteBookFile(format = format, path = path, size = file.optLong("size", 0L),
-                    downloadUrl = file.optTextOrNull("download_url")))
+                    downloadUrl = file.optTextOrNull("download_url"), version = file.optTextOrNull("file_version")))
             }
         }
     }.orEmpty()

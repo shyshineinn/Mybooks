@@ -25,6 +25,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
 import java.io.IOException
 import javax.net.ssl.SSLHandshakeException
 
@@ -56,7 +57,7 @@ class MyBooksSyncReliabilityTest {
         tokenField.set(null, "test-session")
         repository = BookRepositoryImpl(db.bookDao(), db.syncStateDao(), SyncIdentityStore(db.syncStateDao()))
         reading = MyBooksReadingSync(db, SyncIdentityStore(db.syncStateDao()), context)
-        store = MyBooksSyncStateStore(db.syncStateDao(), db.myBooksSyncStateDao(), repository, db.tagDao(), reading)
+        store = MyBooksSyncStateStore(db.syncStateDao(), db.myBooksSyncStateDao(), repository, db.tagDao(), reading, db.folderDao())
         manager = MyBooksSyncManager(repository, db.tagDao(), db.syncStateDao(), db.myBooksSyncStateDao(),
             store, MyBooksSyncScheduler(context, store, MyBooksSyncPreferencesStore(db.syncStateDao())),
             LocalNetworkAccessManager(context), reading, context, MyBooksSyncPreferencesStore(db.syncStateDao()),
@@ -105,7 +106,7 @@ class MyBooksSyncReliabilityTest {
         val failed = manager.syncNow(scheduleRetry = false)
         assertFalse(failed.success)
         assertEquals(MyBooksSyncFailure.TRANSIENT, failed.failure)
-        val reloaded = MyBooksSyncStateStore(db.syncStateDao(), db.myBooksSyncStateDao(), repository, db.tagDao(), reading).status.first()
+        val reloaded = MyBooksSyncStateStore(db.syncStateDao(), db.myBooksSyncStateDao(), repository, db.tagDao(), reading, db.folderDao()).status.first()
         assertEquals(successAt, reloaded.lastSuccessAt)
         assertEquals(MyBooksSyncFailure.TRANSIENT, reloaded.failure)
         assertTrue(reloaded.message.contains("temporarily unavailable"))
@@ -858,6 +859,111 @@ class MyBooksSyncReliabilityTest {
         assertEquals(2, server.requestCount)
         assertTrue(db.myBooksSyncStateDao().get("mybooks-1")!!.conflictFieldsJson.contains("read_logs"))
         assertTrue(JSONObject(db.myBooksSyncStateDao().get("mybooks-1")!!.overridesJson).has("read_logs"))
+    }
+
+    @Test fun nativeCloudDeleteUsesGuardedPendingBaseline() = runBlocking {
+        val cookie = okhttp3.Cookie.Builder().name("user_id").value("native-session")
+            .hostOnlyDomain(server.hostName).path("/").build()
+        val native = PoxenSession.encode(server.url("/").toString().trimEnd('/'), "test", listOf(cookie))
+        MyBooksConfig::class.java.getDeclaredField("deviceToken").apply { isAccessible = true }.set(null, native)
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1,
+            baseJson = JSONObject().put("uuid", "book-one").put("supports_guarded_delete", true).toString(),
+            serverUpdatedAt = "2026-10-28T00:00:00Z"))
+        db.myBooksSyncStateDao().upsertPendingDelete(MyBooksPendingDeleteEntity(remoteId = 1, bookId = "mybooks-1",
+            deletedAt = 1L, expectedUuid = "book-one", expectedUpdatedAt = "2026-10-28T00:00:00Z", title = "Remote"))
+        server.enqueue(MockResponse().setBody("""{"err":"ok"}"""))
+
+        assertTrue(manager.deleteRemoteBooks(setOf("mybooks-1")).success)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/book/1/delete", request.path)
+        val body = JSONObject(request.body.readUtf8())
+        assertEquals("book-one", body.getString("expected_uuid"))
+        assertEquals("2026-10-28T00:00:00Z", body.getString("expected_last_modified"))
+        assertNull(db.myBooksSyncStateDao().getPendingDelete(1))
+    }
+
+    @Test fun nativeUploadCreatesServerBookAndAdoptsLocalRows() = runBlocking {
+        val cookie = okhttp3.Cookie.Builder().name("user_id").value("native-session")
+            .hostOnlyDomain(server.hostName).path("/").build()
+        val native = PoxenSession.encode(server.url("/").toString().trimEnd('/'), "test", listOf(cookie))
+        MyBooksConfig::class.java.getDeclaredField("deviceToken").apply { isAccessible = true }.set(null, native)
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val bytes = "upload body".toByteArray()
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        val file = File(context.cacheDir, "native-upload-source.epub").apply { writeBytes(bytes) }
+        try {
+            db.bookDao().insertBook(BookEntity("local-upload", "Local Title", "Local Author", file.path,
+                null, "EPUB", 1L, 0f, null, 1L))
+            server.enqueue(MockResponse().setBody("""{"err":"ok","book_id":1,"sha256":"$hash"}"""))
+            server.enqueue(MockResponse().setBody("""{"err":"ok","book":{"id":1,"uuid":"book-one","title":"Server Title","authors":["Server Author"],"last_modified":"2026-11-01T00:00:00","files":[{"format":"EPUB","size":${bytes.size},"href":"/api/book/1.EPUB"}]}}"""))
+
+            val transfer = MyBooksBookTransfer(db, manager, context)
+            val target = transfer.uploadOneNative("local-upload", MyBooksConfig.LIBRARY_KEY) { _, _ -> }
+
+            assertEquals("mybooks-1", target)
+            assertNull(db.bookDao().getBookById("local-upload"))
+            val adopted = requireNotNull(db.bookDao().getBookById("mybooks-1"))
+            assertEquals("Local Title", adopted.title)
+            assertEquals("Local Author", adopted.author)
+            assertEquals(MyBooksConfig.LIBRARY_KEY, adopted.remoteLibraryKey)
+            assertEquals(hash, adopted.remoteFileSha256)
+            val state = requireNotNull(db.myBooksSyncStateDao().get("mybooks-1"))
+            val overrides = JSONObject(state.overridesJson)
+            assertEquals("Local Title", overrides.getString("title"))
+            assertEquals("Local Author", overrides.getString("author"))
+            assertNull(db.syncStateDao().getValue("mybooks_upload:" + MyBooksConfig.LIBRARY_KEY + ":local-upload"))
+            assertEquals("/api/book/upload", server.takeRequest().path)
+            assertEquals("/api/book/1", server.takeRequest().path)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test fun nativeDeletionFeedRemovesAnUnmodifiedLocalCopy() = runBlocking {
+        val cookie = okhttp3.Cookie.Builder().name("user_id").value("native-session")
+            .hostOnlyDomain(server.hostName).path("/").build()
+        val native = PoxenSession.encode(server.url("/").toString().trimEnd('/'), "test", listOf(cookie))
+        MyBooksConfig::class.java.getDeclaredField("deviceToken").apply { isAccessible = true }.set(null, native)
+        localBook()
+        db.myBooksSyncStateDao().upsert(MyBooksSyncStateEntity("mybooks-1", 1,
+            baseJson = JSONObject().put("uuid", "book-one").put("title", "Remote").put("author", "Author").toString()))
+        server.enqueue(MockResponse().setBody("""{"err":"ok","user":{"is_login":true}}"""))
+        server.enqueue(MockResponse().setBody("""{"err":"ok","total":0,"books":[]}"""))
+        server.enqueue(MockResponse().setBody("""{"err":"ok","deletions":[{"book_id":1,"uuid":"book-one","deleted_at":"2026-11-01T00:00:00Z"}]}"""))
+
+        assertTrue(manager.syncNow(scheduleRetry = false).success)
+        assertNull(db.bookDao().getBookById("mybooks-1"))
+        assertNull(db.myBooksSyncStateDao().get("mybooks-1"))
+    }
+
+    @Test fun nativeSyncPushesQueuedDeletionAndDropsItAfterSuccess() = runBlocking {
+        val cookie = okhttp3.Cookie.Builder().name("user_id").value("native-session")
+            .hostOnlyDomain(server.hostName).path("/").build()
+        val native = PoxenSession.encode(server.url("/").toString().trimEnd('/'), "test", listOf(cookie))
+        MyBooksConfig::class.java.getDeclaredField("deviceToken").apply { isAccessible = true }.set(null, native)
+        db.myBooksSyncStateDao().upsertPendingDelete(MyBooksPendingDeleteEntity(remoteId = 1, bookId = "mybooks-1",
+            deletedAt = 1L, expectedUuid = "book-one", expectedUpdatedAt = "2026-10-28T00:00:00Z", title = "Remote"))
+        server.enqueue(MockResponse().setBody("""{"err":"ok","user":{"is_login":true}}"""))
+        server.enqueue(MockResponse().setBody("""{"err":"ok","total":0,"books":[]}"""))
+        server.enqueue(MockResponse().setBody("""{"err":"ok","deletions":[]}"""))
+        server.enqueue(MockResponse().setBody("""{"err":"ok","book":{"id":1,"uuid":"book-one","title":"Remote","supports_guarded_delete":true}}"""))
+        server.enqueue(MockResponse().setBody("""{"err":"ok"}"""))
+
+        val result = manager.syncNow(scheduleRetry = false)
+        assertTrue(result.success)
+        assertEquals("/api/user/info", server.takeRequest().path)
+        assertEquals("/api/all?start=0&size=200", server.takeRequest().path)
+        assertEquals("/api/book/deletions", server.takeRequest().path)
+        assertEquals("/api/book/1", server.takeRequest().path)
+        val delete = server.takeRequest()
+        assertEquals("POST", delete.method)
+        assertEquals("/api/book/1/delete", delete.path)
+        val body = JSONObject(delete.body.readUtf8())
+        assertEquals("book-one", body.getString("expected_uuid"))
+        assertEquals("2026-10-28T00:00:00Z", body.getString("expected_last_modified"))
+        assertNull(db.myBooksSyncStateDao().getPendingDelete(1))
     }
 
     @Test fun unreadBookWithNullableDatesRecordsItsFirstReadingStart() = runBlocking {

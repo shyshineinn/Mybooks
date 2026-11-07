@@ -28,7 +28,7 @@ object MyBooksConfig {
 
     fun initialize(context: Context) {
         val store = MyBooksConnectionStore(context)
-        deviceToken = store.token()
+        deviceToken = store.token().takeIf(PoxenSession::isNative).orEmpty()
         state.value = MyBooksConnection(store.serverUrl ?: "", store.username, deviceToken.isNotBlank())
     }
     fun save(context: Context, serverUrl: String, username: String, token: String) {
@@ -50,6 +50,7 @@ object MyBooksConfig {
     }
 
     fun hasWriteToken(): Boolean = adminToken.isNotEmpty()
+    fun isPoxenServer(): Boolean = PoxenSession.isNative(deviceToken)
 
     /** 本地 Book.id → 服务器书 id；不是服务器书返回 null。 */
     fun remoteIdOf(bookId: String): Long? =
@@ -66,9 +67,7 @@ object MyBooksConfig {
      * 否则改动既不会推送也不会回显。
      */
     const val IDENTIFIER_OVERRIDE_PREFIX = "identifiers."
-    const val CUSTOM_OVERRIDE_PREFIX = "custom."
 
     fun identifierOverrideKey(type: String): String = IDENTIFIER_OVERRIDE_PREFIX + type
 
-    fun customOverrideKey(label: String): String = CUSTOM_OVERRIDE_PREFIX + label
 }

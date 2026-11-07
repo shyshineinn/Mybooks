@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mybooks_native_preview_notice">Download books, edit book details, and sync reading status.</string>
+    <string name="mybooks_native_action_unavailable">This action is not yet available for mybooks servers.</string>
+    <string name="mybooks_server_marks">Marks</string>
+    <string name="mybooks_server_wants">Want to read</string>
+</resources>

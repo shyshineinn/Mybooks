@@ -10,6 +10,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MyBooksMergeTest {
+    @Test
+    fun coverVersionSeparatesCoverChangesFromMetadataTimestampChanges() {
+        val base = JSONObject().put("cover", "/cover?t=1").put("cover_version", "original")
+        val metadataOnly = JSONObject().put("cover", "/cover?t=2").put("cover_version", "original")
+        val newCover = JSONObject().put("cover", "/cover?t=1").put("cover_version", "replacement")
+        assertFalse(myBooksCoverChanged(base, metadataOnly))
+        assertTrue(myBooksCoverChanged(base, newCover))
+    }
+
 
     private fun book(title: String, author: String = "Author") = Book(
         id = "mybooks-1",
@@ -123,26 +132,22 @@ class MyBooksMergeTest {
     }
 
     @Test
-    fun customMergePerLabel() {
+    fun legacyCustomFieldOverridesAreIgnored() {
         val base = baseJson().put(
             "custom",
             JSONObject().put("mood", "calm").put("score", 5)
         )
         val overrides = JSONObject().put("custom.mood", "happy")
         val result = merge(base = base, overrides = overrides)
-        val patch = requireNotNull(result.patch.optJSONObject("custom"))
-        assertEquals("happy", patch.optString("mood"))
-        assertFalse(patch.has("score"))
+        assertFalse(result.patch.has("custom"))
     }
 
     @Test
     fun overrideKeysBuiltByTheHelperAreConsumedByTheMerge() {
         val overrides = JSONObject()
             .put(MyBooksConfig.identifierOverrideKey("goodreads"), "5907")
-            .put(MyBooksConfig.customOverrideKey("mood"), "calm")
         val result = merge(overrides = overrides)
         assertEquals("5907", result.patch.optJSONObject("identifiers")?.optString("goodreads"))
-        assertEquals("calm", result.patch.optJSONObject("custom")?.optString("mood"))
     }
 
     @Test

@@ -33,12 +33,9 @@ class MyBooksEditMetadataTest {
             if (it.equals("douban", true) || it.equals("douban_id", true)) "豆瓣" else it
         }
         assertEquals("豆瓣", identifierRows(meta, labelFor).single { it.value == "123" }.label)
-        assertEquals("豆瓣", customRows(meta, labelFor = labelFor).single { it.value == "456" }.label)
     }
 
     @Test fun missingTranslatorsAndHiddenMetadataNeverEraseFilledValues() {
-        val legacyCustom = ServerBookMeta.fromJson("""{"title":"书","custom_display":{"译者":"旧自定义值"}}""", 1)
-        assertEquals("旧自定义值", customRows(legacyCustom).single { it.label == "译者" }.value)
         val original = MyBooksEditUiState(title="书", author="作者", translators="甲、乙", publisher="P", pubYear="2000", rating=8.8f, doubanId="123")
         val missing = requireNotNull(parseMyBooksCandidate(JSONObject().put("title", "改名")))
         val applied = applyMyBooksCandidate(original, missing, "完成")

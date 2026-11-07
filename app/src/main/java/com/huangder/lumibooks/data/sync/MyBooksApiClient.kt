@@ -1,22 +1,17 @@
 package com.huangder.lumibooks.data.sync
 
-import com.huangder.lumibooks.data.sync.MyBooksConfig.SERVER_URL
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /** 服务端返回非 2xx 时保留状态码与响应体,便于 409 冲突合并。 */
@@ -65,246 +60,124 @@ data class MyBooksCreatedBook(
     val revision: Long? = null
 )
 
-data class MyBooksNotesPayload(
-    val hasNotes: Boolean,
-    val content: String,
-    val size: Long,
-    val updatedAt: String?
-) {
-    companion object {
-        fun fromJson(json: String): MyBooksNotesPayload {
-            val obj = JSONObject(json)
-            return MyBooksNotesPayload(
-                hasNotes = obj.optBoolean("has_notes", false),
-                content = obj.optTextOrEmpty("content"),
-                size = obj.optLong("size", 0L),
-                updatedAt = obj.optTextOrNull("updated_at")
-            )
-        }
-    }
-}
-
-/**
- * my-books 服务端客户端。
- *
- * 默认私有访问；设备会话来自服务器登录，APK 不内置管理令牌。
- * 不记录 token,不把它拼进 URL。
- */
+/** Native mybooks-server access. The former custom backend protocol is retired. */
+@Suppress("UNUSED_PARAMETER")
 class MyBooksApiClient(
-    client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .callTimeout(180, TimeUnit.SECONDS)
-        .build(),
-    private val serverUrlProvider: () -> String = { MyBooksConfig.SERVER_URL }
+    client: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS).callTimeout(180, TimeUnit.SECONDS).build(),
+    private val serverUrlProvider: () -> String = { MyBooksConfig.SERVER_URL },
+    private val credentialProvider: () -> String = { MyBooksConfig.adminToken }
 ) {
-    private val SERVER_URL: String get() = serverUrlProvider()
-    // 每次网络请求（包括重定向）都检查来源；设备凭据只发给当前服务器。
+    private val SERVER_URL: String get() = MyBooksEndpoint.normalize(serverUrlProvider())
+    private val libraryId: String get() = "mybooks:" + SERVER_URL.substringAfter("://")
     private val client = client.newBuilder().addNetworkInterceptor { chain ->
         val request = chain.request()
         val server = SERVER_URL.toHttpUrl()
         val sameOrigin = request.url.scheme == server.scheme && request.url.host == server.host && request.url.port == server.port
-        val builder = request.newBuilder()
-        if (sameOrigin) {
-            if (request.header("Authorization") == null && MyBooksConfig.adminToken.isNotBlank()) {
-                builder.header("Authorization", "Bearer ${MyBooksConfig.adminToken}")
-            }
-        } else {
-            builder.removeHeader("Authorization").removeHeader("X-Admin-Token")
+        val builder = request.newBuilder().removeHeader("Authorization").removeHeader("X-Admin-Token").removeHeader("Cookie")
+        val credential = credentialProvider()
+        if (sameOrigin && PoxenSession.isNative(credential)) {
+            val cookies = PoxenSession.cookieHeader(credential, request.url)
+            if (cookies.isNotBlank()) builder.header("Cookie", cookies)
         }
         chain.proceed(builder.build())
     }.build()
-    private val jsonMediaType: MediaType = "application/json; charset=utf-8".toMediaType()
+    private fun native() = PoxenApiClient(SERVER_URL, credentialProvider, client)
 
     suspend fun fetchSyncSnapshot(cursor: String? = null): MyBooksSyncSnapshot = withContext(Dispatchers.IO) {
-        val url = SERVER_URL.toHttpUrl().newBuilder().addPathSegments("api/sync/changes")
-            .apply { if (!cursor.isNullOrBlank()) addQueryParameter("cursor", cursor) }.build()
-        val request = Request.Builder().url(url).header("Accept", "application/json").build()
-        client.newCall(request).execute().use { response ->
-            if (response.code == 410 && !cursor.isNullOrBlank()) return@withContext fetchSyncSnapshot(null)
-            if (response.code == 404) return@withContext fetchLegacySyncSnapshot()
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            parseMyBooksChanges(body, SERVER_URL)
-        }
-    }
-
-    private suspend fun fetchLegacySyncSnapshot(): MyBooksSyncSnapshot {
-        val request = Request.Builder().url("$SERVER_URL/api/sync/books").header("Accept", "application/json").build()
-        client.newCall(request).execute().use { response ->
-            if (response.code == 404) return MyBooksSyncSnapshot(fetchBooks())
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            return parseMyBooksSyncSnapshot(body, SERVER_URL)
-        }
-    }
-
-    suspend fun fetchReadingState(id: Long, timeoutMs: Long = 0): JSONObject = withContext(Dispatchers.IO) {
-        val call = client.newCall(Request.Builder().url("$SERVER_URL/api/sync/reading/$id").build())
-        if (timeoutMs > 0) call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
-        call.execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            JSONObject(body)
-        }
-    }
-
-    suspend fun putReadingState(id: Long, libraryId: String, uuid: String, revision: Long, data: JSONObject, timeoutMs: Long = 0): JSONObject = withContext(Dispatchers.IO) {
-        val body = JSONObject().put("library_id", libraryId).put("expected_uuid", uuid)
-            .put("expected_revision", revision).put("data", data)
-        val request = Request.Builder().url("$SERVER_URL/api/sync/reading/$id").put(jsonBody(body.toString())).build()
-        val call = client.newCall(request)
-        if (timeoutMs > 0) call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
-        call.execute().use { response ->
-            val responseBody = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, responseBody)
-            JSONObject(responseBody)
-        }
-    }
-
-    /** 书架全量列表（不含 files）。 */
-    suspend fun fetchBooks(): List<RemoteBook> = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url("$SERVER_URL/api/books")
-            .header("Accept", "application/json")
-            .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
-            val body = response.body?.string().orEmpty()
-            if (body.isBlank()) error("返回了空数据")
-            try {
-                parseRemoteBooks(body, SERVER_URL)
-            } catch (error: Exception) {
-                throw IllegalStateException("数据格式无法识别", error)
+        val catalog = try { native().catalogChanges(cursor) }
+        catch (error: MyBooksHttpException) { if (error.status == 404) null else throw error }
+        val books = if (catalog == null) native().books() else {
+            val rows = catalog.getJSONArray("books")
+            val ids = mutableSetOf<Long>()
+            (0 until rows.length()).map { index ->
+                val book = parseRemoteBook(rows.getJSONObject(index).toString(), SERVER_URL)
+                require(book.id > 0 && !book.uuid.isNullOrBlank() && ids.add(book.id)) { "书库变更记录格式不正确" }
+                book
             }
         }
-    }
-
-    /** 拉取单本详情原始 JSON（含 files 与全部展示字段）。 */
-    suspend fun fetchBookJson(id: Long): String = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url("$SERVER_URL/api/books/$id")
-            .header("Accept", "application/json")
-            .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
-            val body = response.body?.string().orEmpty()
-            if (body.isBlank()) error("返回了空数据")
-            body
+        val nextCursor = catalog?.getString("cursor")?.also { require(it.isNotBlank() && it.length <= 4096) }
+        val complete = catalog?.let { it.get("complete") as? Boolean ?: error("书库变更记录格式不正确") } ?: true
+        val deleted = try { native().deletions() } catch (error: MyBooksHttpException) {
+            // Older forks do not expose explicit deletion records.
+            if (error.status == 404) emptyList() else throw error
         }
-    }
-
-    /** PATCH 局部更新;409 抛 [MyBooksHttpException],body 带当前书籍详情。 */
-    suspend fun patchBook(
-        id: Long,
-        patch: JSONObject,
-        token: String
-    ): String = withContext(Dispatchers.IO) {
-        require(token.isNotBlank()) { "只读模式：未配置写入令牌" }
-        val request = Request.Builder()
-            .url("$SERVER_URL/api/books/$id")
-            .header("Accept", "application/json")
-            .header("Authorization", "Bearer $token")
-            .patch(jsonBody(patch.toString()))
-            .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (response.code == 409) throw MyBooksHttpException(409, body)
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            if (body.isBlank()) error("服务器返回了空数据")
-            body
+        var readingSupported = true
+        val reading = try { native().readingHeads() } catch (error: MyBooksHttpException) {
+            if (error.status == 404) {
+                readingSupported = false
+                emptyList()
+            } else {
+                throw error
+            }
         }
+        val activeUuids = books.mapNotNull { it.uuid }.toSet()
+        val portableRevision = try { native().get("/api/user/app_portable?head=1").getLong("revision") }
+        catch (error: MyBooksHttpException) { if (error.status == 404) null else throw error }
+        MyBooksSyncSnapshot(books, deleted = deleted.filter { it.uuid !in activeUuids },
+            libraryId = libraryId, syncVersion = if (catalog == null) 2 else 3, cursor = nextCursor, isFull = complete,
+            supportsReadingSync = readingSupported, reading = reading,
+            supportsPortableSync = portableRevision != null, portableRevision = portableRevision ?: 0)
     }
+    suspend fun fetchBooks(): List<RemoteBook> = withContext(Dispatchers.IO) { native().books() }
+    suspend fun fetchBookJson(id: Long): String = withContext(Dispatchers.IO) { native().book(id) }
 
-    /** 软删除到服务器回收站;404 视为已删除。 */
+    // Keep local editing/reading data intact until the corresponding native sync is implemented.
+    // No retired endpoint is called as a fallback.
+    private fun unsupported(): Nothing = throw PoxenWriteUnavailable()
+    suspend fun fetchReadingState(id: Long, timeoutMs: Long = 0): JSONObject = withContext(Dispatchers.IO) {
+        PoxenApiClient(SERVER_URL, credentialProvider, client).readingState(id)
+    }
+    suspend fun putReadingState(id: Long, libraryId: String, uuid: String, revision: Long, data: JSONObject,
+        timeoutMs: Long = 0): JSONObject = withContext(Dispatchers.IO) {
+        PoxenApiClient(SERVER_URL, credentialProvider, client).putReadingState(id, libraryId, uuid, revision, data)
+    }
+    internal suspend fun patchBook(id: Long, patch: JSONObject, current: JSONObject, token: String): String =
+        withContext(Dispatchers.IO) {
+            PoxenApiClient(SERVER_URL, { token }, client).editBook(id, patch, current)
+        }
     suspend fun deleteBook(id: Long, token: String, expected: JSONObject): Boolean = withContext(Dispatchers.IO) {
-        require(token.isNotBlank()) { "只读模式：未配置写入令牌" }
-        val request = Request.Builder()
-            .url("$SERVER_URL/api/books/$id")
-            .header("Authorization", "Bearer $token")
-            .delete(jsonBody(expected.toString()))
-            .build()
-        client.newCall(request).execute().use { response ->
-            if (response.code == 404) return@withContext true
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
-            true
-        }
+        if (PoxenSession.isNative(token)) {
+            val uuid = expected.optString("expected_uuid")
+            val updatedAt = expected.optString("expected_updated_at")
+            require(uuid.isNotBlank() && updatedAt.isNotBlank()) { "缺少服务器书目版本记录" }
+            PoxenApiClient(SERVER_URL, { token }, client).deleteBook(id, uuid, updatedAt)
+        } else unsupported()
     }
-
-    /** 上传封面 data URL,返回服务端 /uploads/xxx。 */
-    suspend fun uploadCover(dataUrl: String, token: String): String = withContext(Dispatchers.IO) {
-        require(token.isNotBlank()) { "只读模式：未配置写入令牌" }
-        val payload = JSONObject().put("data", dataUrl)
-        val request = Request.Builder()
-            .url("$SERVER_URL/api/upload")
-            .header("Authorization", "Bearer $token")
-            .post(jsonBody(payload.toString()))
-            .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            JSONObject(body).optTextOrNull("url")
-                ?: error("服务器没有返回封面地址")
-        }
+    suspend fun uploadCover(dataUrl: String, token: String): String = unsupported()
+    suspend fun createBook(fields: JSONObject, token: String): MyBooksCreatedBook = unsupported()
+    suspend fun fetchPortableState(): JSONObject = withContext(Dispatchers.IO) {
+        native().get("/api/user/app_portable").put("library_id", libraryId)
     }
-
-    /** 自定义字段定义(公开 GET)。 */
-    suspend fun fetchCustomFields(): String = getRaw("/api/custom-fields")
-
-    /** 新建服务器书目，返回新书 id 与服务端归一化后的书名/作者。 */
-    suspend fun createBook(fields: JSONObject, token: String): MyBooksCreatedBook = withContext(Dispatchers.IO) {
-        require(token.isNotBlank()) { "只读模式：未配置写入令牌" }
-        val request = Request.Builder()
-            .url("$SERVER_URL/api/books")
-            .header("Accept", "application/json")
-            .header("Authorization", "Bearer $token")
-            .post(jsonBody(fields.toString()))
-            .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            val json = JSONObject(body)
-            val id = json.optLong("id", 0L).takeIf { it > 0L }
-                ?: throw MyBooksHttpException(response.code, body)
-            MyBooksCreatedBook(
-                id = id,
-                title = json.optTextOrEmpty("title"),
-                author = normalizeRemoteAuthor(json.optTextOrEmpty("author")),
-                uuid = json.optTextOrNull("uuid"),
-                revision = json.optLong("revision", 0L).takeIf { it > 0 }
-            )
-        }
-    }
-
-    suspend fun fetchPortableState(): JSONObject = JSONObject(getRaw("/api/sync/state"))
     suspend fun putPortableState(libraryId: String, revision: Long, data: JSONObject): JSONObject = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("$SERVER_URL/api/sync/state")
-            .put(jsonBody(JSONObject().put("library_id", libraryId).put("expected_revision", revision).put("data", data).toString())).build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            JSONObject(body)
-        }
+        require(libraryId == this@MyBooksApiClient.libraryId)
+        native().putPortableState(revision, data).put("library_id", libraryId)
     }
     suspend fun uploadPortableAsset(file: File, name: String) = withContext(Dispatchers.IO) {
-        require(name.matches(Regex("[a-f0-9]{64}[.][a-z0-9]{1,10}")))
-        val coroutine = kotlinx.coroutines.currentCoroutineContext()
-        val body = object : RequestBody() {
-            override fun contentType() = "application/octet-stream".toMediaType()
-            override fun contentLength() = file.length()
-            override fun writeTo(sink: okio.BufferedSink) {
-                file.inputStream().use { input -> val buffer = ByteArray(64 * 1024); while (true) {
-                    coroutine.ensureActive()
-                    val count = input.read(buffer); if (count < 0) break; sink.write(buffer, 0, count)
-                } }
-            }
-        }
-        client.newCall(Request.Builder().url("$SERVER_URL/api/sync/state/assets/$name").put(body).build()).execute().use { response ->
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, response.body?.string().orEmpty())
-        }
+        native().uploadPortableAsset(file, name)
     }
-    suspend fun downloadPortableAsset(name: String, target: File, size: Long) =
-        downloadFile("$SERVER_URL/api/sync/state/assets/$name", target, size) { _, _ -> }
+    suspend fun downloadPortableAsset(name: String, target: File, size: Long): MyBooksDownloadReceipt {
+        require(portableAssetName.matches(name))
+        return downloadFile("$SERVER_URL/api/user/app_portable/assets/$name", target, size) { _, _ -> }
+    }
+    suspend fun uploadBookFile(remoteId: Long, fileName: String, content: RequestBody, token: String): Boolean = unsupported()
+    internal suspend fun uploadNativeBook(file: File, fileName: String, sha256: String,
+        onProgress: (Long, Long) -> Unit): PoxenUploadResult = withContext(Dispatchers.IO) {
+        PoxenApiClient(SERVER_URL, credentialProvider, client).uploadBook(file, fileName, sha256, onProgress)
+    }
+    internal suspend fun addNativeBookFormat(bookId: Long, file: File, fileName: String, sha256: String,
+        onProgress: (Long, Long) -> Unit): PoxenUploadResult = withContext(Dispatchers.IO) {
+        PoxenApiClient(SERVER_URL, credentialProvider, client).addBookFormat(bookId, file, fileName, sha256, onProgress)
+    }
+    internal suspend fun uploadNativeCover(bookId: Long, bytes: ByteArray, current: JSONObject? = null) = withContext(Dispatchers.IO) {
+        PoxenApiClient(SERVER_URL, credentialProvider, client).uploadCover(bookId, bytes, current = current)
+    }
+    suspend fun lookupIsbn(isbn: String): String = withContext(Dispatchers.IO) {
+        PoxenMetadata.lookup(native().refer(isbn = isbn), isbn)
+    }
+    suspend fun searchMetadata(query: String): String = withContext(Dispatchers.IO) {
+        PoxenMetadata.search(native().refer(title = query))
+    }
 
     suspend fun fileSha256(url: String): String? = withContext(Dispatchers.IO) {
         client.newCall(Request.Builder().url(resolveUrl(SERVER_URL, url)).head().build()).execute().use { response ->
@@ -312,136 +185,20 @@ class MyBooksApiClient(
             response.header("X-Content-SHA256")?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
         }
     }
-
-    /** 上传正文文件（multipart，字段名 file）。 */
-    suspend fun uploadBookFile(
-        remoteId: Long,
-        fileName: String,
-        content: RequestBody,
-        token: String
-    ): Boolean = withContext(Dispatchers.IO) {
-        require(token.isNotBlank()) { "只读模式：未配置写入令牌" }
-        val payload = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("file", fileName, content)
-            .build()
-        val request = Request.Builder()
-            .url("$SERVER_URL/api/books/$remoteId/file")
-            .header("Authorization", "Bearer $token")
-            .post(payload)
-            .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            true
-        }
-    }
-
-    /** 读书心得(公开 GET)。 */
-    suspend fun fetchNotes(id: Long): MyBooksNotesPayload = withContext(Dispatchers.IO) {
-        MyBooksNotesPayload.fromJson(getRaw("/api/books/$id/notes"))
-    }
-
-    /** 保存读书心得;409 抛 [MyBooksHttpException]。 */
-    suspend fun saveNotes(
-        id: Long,
-        content: String,
-        expectedUpdatedAt: String?,
-        token: String
-    ): MyBooksNotesPayload = withContext(Dispatchers.IO) {
-        require(token.isNotBlank()) { "只读模式：未配置写入令牌" }
-        val payload = JSONObject().put("content", content)
-        if (!expectedUpdatedAt.isNullOrBlank()) payload.put("expected_updated_at", expectedUpdatedAt)
-        val request = Request.Builder()
-            .url("$SERVER_URL/api/books/$id/notes")
-            .header("Accept", "application/json")
-            .header("Authorization", "Bearer $token")
-            .put(jsonBody(payload.toString()))
-            .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (response.code == 409) throw MyBooksHttpException(409, body)
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            MyBooksNotesPayload.fromJson(if (body.isBlank()) "{}" else body)
-        }
-    }
-
-    /** 按 ISBN 查元数据(豆瓣优先,Open Library 兜底);返回原始 JSON。 */
-    suspend fun lookupIsbn(isbn: String): String =
-        getRaw("/api/isbn/lookup?isbn=${encode(isbn)}")
-
-    /** 按书名/ISBN 搜索豆瓣候选;返回原始 JSON。 */
-    suspend fun searchMetadata(query: String): String =
-        getRaw("/api/metadata/search?q=${encode(query)}")
-
-    /**
-     * 下载封面到 [dest]；失败（404/网络）返回 false，不抛异常。
-     * 外链封面走服务器的 /api/img-proxy,避免豆瓣防盗链。
-     */
     suspend fun fetchCover(url: String, dest: File): Boolean = withContext(Dispatchers.IO) {
         try {
-            val finalUrl = if (url.startsWith(SERVER_URL)) {
-                url
-            } else {
-                "$SERVER_URL/api/img-proxy?url=${encode(url)}"
-            }
-            val request = Request.Builder().url(finalUrl).build()
-            client.newCall(request).execute().use { response ->
+            client.newCall(Request.Builder().url(resolveUrl(SERVER_URL, url)).build()).execute().use { response ->
                 if (!response.isSuccessful) return@withContext false
                 val body = response.body ?: return@withContext false
                 dest.parentFile?.mkdirs()
-                body.byteStream().use { input ->
-                    FileOutputStream(dest).use { output ->
-                        input.copyTo(output)
-                    }
-                }
+                body.byteStream().use { input -> FileOutputStream(dest).use { output -> input.copyTo(output) } }
             }
             true
-        } catch (_: Exception) {
-            dest.delete()
-            false
-        }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { false }
     }
-
-    /** 流式下载到 [destination]，每 64KB 回报一次进度。 */
-    suspend fun downloadFile(
-        url: String,
-        destination: File,
-        expectedSize: Long = -1L,
-        onProgress: (bytesRead: Long, totalBytes: Long) -> Unit
-    ): MyBooksDownloadReceipt = withContext(Dispatchers.IO) {
+    suspend fun downloadFile(url: String, destination: File, expectedSize: Long = -1L,
+        onProgress: (bytesRead: Long, totalBytes: Long) -> Unit): MyBooksDownloadReceipt = withContext(Dispatchers.IO) {
         MyBooksResumableDownload(client).download(resolveUrl(SERVER_URL, url), destination, expectedSize, onProgress)
     }
-
-    private suspend fun getRaw(path: String): String = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url("$SERVER_URL$path")
-            .header("Accept", "application/json")
-            .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw MyBooksHttpException(response.code, body)
-            if (body.isBlank()) error("返回了空数据")
-            body
-        }
-    }
-
-    private fun jsonBody(value: String): RequestBody =
-        value.toRequestBody(jsonMediaType)
-
-    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
-}
-
-/** 解析服务端 books 数组/单本(供测试与新调用方复用)。 */
-internal fun parseServerNotesPayload(json: String): MyBooksNotesPayload =
-    MyBooksNotesPayload.fromJson(json)
-
-private fun serverError(code: Int): String = when (code) {
-    400 -> "请求参数不正确（400）"
-    401, 403 -> "无法写入服务器，请检查权限或更新 App（$code）"
-    404 -> "找不到该资源（404）"
-    409 -> "服务器内容已更新（409）"
-    429 -> "请求过于频繁，请稍后再试"
-    in 500..599 -> "网络请求出错（$code）"
-    else -> "请求返回 $code"
 }

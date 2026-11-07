@@ -38,35 +38,22 @@ class MyBooksSyncSafetyTest {
         val laterSameValue = sent.copy(editedAtJson = """{"title":11,"author":10}""")
         assertFalse(acknowledgedMyBooksKeys(sent, laterSameValue, setOf("title")).contains("title"))
     }
-    @Test fun oldServersFallbackToMetadataWithoutDeletionAuthority() = runBlocking {
-        val server = MockWebServer()
+    @Test fun retiredServerTokensCannotTriggerFallbackRequests() = runBlocking {
+        val server = MockWebServer().apply { start() }
         try {
-            server.start()
-            server.enqueue(MockResponse().setResponseCode(404))
-            server.enqueue(MockResponse().setResponseCode(404))
-            server.enqueue(MockResponse().setBody("[]"))
-            val client = MyBooksApiClient(serverUrlProvider = { server.url("/").toString().trimEnd('/') })
-            val result = client.fetchSyncSnapshot()
-            assertEquals(1, result.syncVersion)
-            assertTrue(result.deleted.isEmpty())
-            assertEquals("/api/sync/changes", server.takeRequest().path)
-            assertEquals("/api/sync/books", server.takeRequest().path)
-            assertEquals("/api/books", server.takeRequest().path)
+            val client = MyBooksApiClient(serverUrlProvider = { server.url("/").toString().trimEnd('/') }, credentialProvider = { "old-token" })
+            try { client.fetchSyncSnapshot(); fail("Retired credential accepted") }
+            catch (error: MyBooksHttpException) { assertEquals(401, error.status) }
+            assertNull(server.takeRequest(200, java.util.concurrent.TimeUnit.MILLISECONDS))
         } finally { server.shutdown() }
     }
-    @Test fun conditionalDeletesSendTheOriginalIdentityAndRevision() = runBlocking {
-        val server = MockWebServer()
+    @Test fun unimplementedNativeDeletesNeverSendARetiredEndpointRequest() = runBlocking {
+        val server = MockWebServer().apply { start() }
         try {
-            server.start()
-            server.enqueue(MockResponse().setBody("{}"))
             val client = MyBooksApiClient(serverUrlProvider = { server.url("/").toString().trimEnd('/') })
-            client.deleteBook(1, "device-token", JSONObject().put("expected_revision", 3).put("expected_uuid", "book-one"))
-            val request = server.takeRequest()
-            assertEquals("DELETE", request.method)
-            val body = JSONObject(request.body.readUtf8())
-            assertEquals(3, body.getInt("expected_revision"))
-            assertEquals("book-one", body.getString("expected_uuid"))
-            assertEquals("Bearer device-token", request.getHeader("Authorization"))
+            try { client.deleteBook(1, "old-token", JSONObject().put("expected_uuid", "book-one")); fail("Delete accepted") }
+            catch (_: PoxenWriteUnavailable) { }
+            assertNull(server.takeRequest(200, java.util.concurrent.TimeUnit.MILLISECONDS))
         } finally { server.shutdown() }
     }
 }

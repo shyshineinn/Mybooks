@@ -40,19 +40,15 @@ data class ServerBookMeta(
     val doubanId: String?,
     val startDate: String?,
     val finishDate: String?,
-    val notesUrl: String?,
     val readCount: Int,
     val readLogs: List<ServerReadLog>,
     val identifiers: List<ServerIdentifier>,
-    val customDisplay: Map<String, String>,
     val files: List<RemoteBookFile>,
-    val hasNotes: Boolean = false,
-    val notesSize: Long = 0L,
-    val notesUpdatedAt: String? = null,
     val identifiersRaw: Map<String, String> = emptyMap(),
-    val customRaw: Map<String, Any?> = emptyMap(),
     val translators: List<String> = emptyList(),
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    val serverFavorite: Boolean = false,
+    val serverCategory: String? = null
 ) {
     companion object {
         fun fromJson(json: String, remoteId: Long): ServerBookMeta {
@@ -79,26 +75,6 @@ data class ServerBookMeta(
                         val key = keys.next()
                         val value = map.optTextOrNull(key) ?: continue
                         add(ServerIdentifier(type = key, label = null, value = value, url = null))
-                    }
-                }
-            }
-
-            val customDisplay = buildMap {
-                val custom = obj.optJSONObject("custom_display") ?: return@buildMap
-                val keys = custom.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    val raw = custom.opt(key) ?: continue
-                    val display = when (raw) {
-                        is JSONArray -> buildList {
-                            for (i in 0 until raw.length()) {
-                                raw.optTextAt(i)?.let(::add)
-                            }
-                        }.joinToString("、")
-                        else -> raw.toString()
-                    }.trim()
-                    if (display.isNotBlank() && display != "[]" && display != "null") {
-                        put(key, display)
                     }
                 }
             }
@@ -138,29 +114,14 @@ data class ServerBookMeta(
                 }
             }
 
-            val customRaw = buildMap<String, Any?> {
-                val map = obj.optJSONObject("custom") ?: return@buildMap
-                val keys = map.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    when (val value = map.opt(key)) {
-                        is JSONArray -> put(key, buildList {
-                            for (i in 0 until value.length()) {
-                                value.optTextAt(i)?.let(::add)
-                            }
-                        })
-                        null, JSONObject.NULL -> Unit
-                        else -> put(key, value.toString())
-                    }
-                }
-            }
-
             return ServerBookMeta(
                 remoteId = remoteId,
                 title = obj.optTextOrEmpty("title").ifBlank { "未命名" },
                 translators = parseMyBooksTranslators(obj.opt("translators")),
                 author = normalizeRemoteAuthor(obj.optTextOrEmpty("author")),
                 status = obj.optTextOrEmpty("status"),
+                serverFavorite = obj.optBoolean("favorite", obj.optBoolean("server_favorite")),
+                serverCategory = if (obj.has("category")) optText("category") else optText("server_category"),
                 summary = obj.optTextOrEmpty("summary"),
                 tags = parseRemoteTags(obj.opt("tags")),
                 rating = rating,
@@ -173,17 +134,11 @@ data class ServerBookMeta(
                 doubanId = optText("douban_id"),
                 startDate = optText("start_date"),
                 finishDate = optText("finish_date"),
-                notesUrl = optText("notes_url"),
                 readCount = obj.optInt("read_count", 0),
                 readLogs = readLogs,
                 identifiers = identifiers,
-                customDisplay = customDisplay,
                 files = parseRemoteFiles(obj),
-                hasNotes = obj.optBoolean("has_notes", false),
-                notesSize = obj.optLong("notes_size", 0L),
-                notesUpdatedAt = optText("notes_updated_at"),
                 identifiersRaw = identifiersRaw,
-                customRaw = customRaw,
                 updatedAt = optText("updated_at")
             )
         }

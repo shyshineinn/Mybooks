@@ -6,7 +6,7 @@
   "update": {
     "latest_version_code": 2210,
     "latest_version_name": "2.2.10",
-    "download_url": "https://github.com/shyshineinn/Mybooks/releases/latest/download/Mybooks-arm64-v8a.apk",
+    "download_url": "https://github.com/shyshineinn/mybooks-android/releases/latest/download/Mybooks-arm64-v8a.apk",
     "title": "Mybooks 新版本",
     "message": "建议更新到最新版本，以获得更稳定的使用体验。",
     "changelog": "· 优化 服务器书库同步与封面加载\n· 优化 图书信息卡片排版\n· 优化 云端书库同步入口移至设置页",
@@ -27,8 +27,8 @@
       "fileName": "fandol_fang.ttf",
       "sizeBytes": 8824084,
       "urls": [
-        "https://raw.githubusercontent.com/shyshineinn/Mybooks/main/docs/fonts/fandol_fang.ttf",
-        "https://cdn.jsdelivr.net/gh/shyshineinn/Mybooks@main/docs/fonts/fandol_fang.ttf"
+        "https://raw.githubusercontent.com/shyshineinn/mybooks-android/main/docs/fonts/fandol_fang.ttf",
+        "https://cdn.jsdelivr.net/gh/shyshineinn/mybooks-android@main/docs/fonts/fandol_fang.ttf"
       ]
     }
   ]

@@ -1,6 +1,7 @@
 package com.huangder.lumibooks.data.sync
 
 import com.huangder.lumibooks.data.local.dao.MyBooksSyncStateDao
+import com.huangder.lumibooks.data.local.dao.FolderDao
 import com.huangder.lumibooks.data.local.dao.SyncStateDao
 import com.huangder.lumibooks.data.local.dao.TagDao
 import com.huangder.lumibooks.data.local.entity.SyncStateEntity
@@ -70,7 +71,8 @@ class MyBooksSyncStateStore @Inject constructor(
     myBooksSyncStateDao: MyBooksSyncStateDao,
     bookRepository: BookRepository,
     tagDao: TagDao,
-    readingSync: MyBooksReadingSync
+    readingSync: MyBooksReadingSync,
+    folderDao: FolderDao
 ) {
     val status = combine(
         syncStateDao.observeValue(STATUS_KEY),
@@ -89,13 +91,17 @@ class MyBooksSyncStateStore @Inject constructor(
         val namesByBook = links.groupBy { it.bookId }.mapValues { (_, values) ->
             values.mapNotNull { tagNames[it.tagId]?.lowercase() }.toSet()
         }
+        val native = MyBooksConfig.isPoxenServer()
         val pending = deletes.mapTo(mutableSetOf()) { it.bookId }
         for (state in states) {
             if (state.remoteDeleted) continue
             val base = runCatching { JSONObject(state.baseJson) }.getOrDefault(JSONObject())
             val book = booksById[state.bookId]
-            val changed = state.coverDirty ||
-                runCatching { JSONObject(state.overridesJson).length() > 0 }.getOrDefault(true) ||
+            val pendingFields = runCatching {
+                JSONObject(state.overridesJson).keys().asSequence().any { !native || it in poxenWritableBookFields }
+            }.getOrDefault(true)
+            val changed = state.coverDirty || pendingFields ||
+                (native && book != null && book.isFavorite != base.optBoolean("favorite")) ||
                 (book != null && (isLocalTitleAuthorEdit(book.title, base.optTextOrEmpty("title")) ||
                     isLocalTitleAuthorEdit(book.author, normalizeRemoteAuthor(base.optTextOrEmpty("author"))))) ||
                 namesByBook[state.bookId].orEmpty() != runCatching {
@@ -119,7 +125,24 @@ class MyBooksSyncStateStore @Inject constructor(
             root.optString("localBookId").ifBlank { root.optString("bookId") }.takeIf { it in ids }
         }.getOrNull() }.toSet()
     }
-    val pendingCount = combine(metadataPending, readingChanges, uploadPending) { metadata, reading, uploads -> (metadata + reading.keys + uploads).size }
+    private val directoryPending = combine(
+        myBooksSyncStateDao.observeAll(), folderDao.getAllFolders(), folderDao.getAllBookFolderLinks()
+    ) { states, folders, links ->
+        if (!MyBooksConfig.isPoxenServer()) return@combine emptySet()
+        val foldersById = folders.associateBy { it.id }
+        val folderIds = links.associate { it.bookId to it.folderId }
+        buildSet {
+            for (state in states) {
+                if (state.remoteDeleted) continue
+                val path = myBooksDirectoryForFolder(folderIds[state.bookId]) { foldersById[it] } ?: continue
+                val base = runCatching { JSONObject(state.baseJson).optTextOrEmpty("folder") }.getOrDefault("")
+                if (!path.equals(base, ignoreCase = true)) add(state.bookId)
+            }
+        }
+    }
+    val pendingCount = combine(metadataPending, directoryPending, readingChanges, uploadPending) { metadata, directories, reading, uploads ->
+        (metadata + directories + reading.keys + uploads).size
+    }
 
     suspend fun started(at: Long) {
         val old = status.first()

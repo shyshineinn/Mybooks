@@ -19,6 +19,9 @@ interface BookDao {
     @Query("SELECT * FROM books ORDER BY lastReadTime DESC")
     suspend fun getAllBooksSnapshot(): List<BookEntity>
 
+    @Query("UPDATE books SET isPinned = :pinned WHERE id = :bookId AND isPinned = :expected")
+    suspend fun applySyncedPin(bookId: String, pinned: Boolean, expected: Boolean): Int
+
     @Query("SELECT * FROM books WHERE id = :bookId")
     suspend fun getBookById(bookId: String): BookEntity?
 
@@ -60,6 +63,9 @@ interface BookDao {
 
     @Update
     suspend fun updateBook(book: BookEntity)
+
+    @Query("UPDATE books SET isFavorite = :favorite WHERE id = :bookId AND isFavorite = :expected")
+    suspend fun applySyncedFavorite(bookId: String, favorite: Boolean, expected: Boolean)
 
     @Query("""UPDATE books SET
         title=CASE WHEN title=:expectedTitle THEN :title ELSE title END,

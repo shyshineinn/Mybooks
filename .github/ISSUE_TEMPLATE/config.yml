@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: My books 自部署与构建指南
-    url: https://github.com/shyshineinn/Mybooks/blob/main/devdocs/mybooks-open-source.md
+    url: https://github.com/shyshineinn/mybooks-android/blob/main/devdocs/mybooks-open-source.md
     about: 本改版的问题请在当前仓库提交，上游原版问题请使用上游渠道。
   - name: 私下报告安全漏洞
-    url: https://github.com/shyshineinn/Mybooks/security/advisories/new
+    url: https://github.com/shyshineinn/mybooks-android/security/advisories/new
     about: 先阅读 SECURITY.md，不要公开账号、令牌或漏洞细节。

@@ -168,6 +168,17 @@ class MyBooksReadingSync @Inject constructor(
                 }
                 val saved = JSONObject(confirmed.toString()).put("local_shadowed", JSONArray(shadowed.toList()))
                     .put("pending_positions", JSONArray(pending))
+                val retained = JSONObject()
+                for (section in listOf("bookmarks", "notes")) {
+                    val acceptedAnnotations = readingItems(confirmed.getJSONObject("data"), section).associateBy { it.getString("syncId") }
+                    val stillPending = jsonItems(latest.optJSONObject("pending_annotations")?.optJSONArray(section)).filter {
+                        val acceptedItem = acceptedAnnotations[it.getString("syncId")]
+                        acceptedItem == null || acceptedItem.optString("format") != it.optString("format") ||
+                            acceptedItem.optString("fileSha256") != it.optString("fileSha256")
+                    }
+                    retained.put(section, JSONArray(stillPending))
+                }
+                saved.put("pending_annotations", retained)
                 dao.putState(SyncStateEntity(BASE + uuid(state), saved.toString()))
                 dao.deleteState(CONFLICT + uuid(state)); dao.deleteState(CHOICE + uuid(state))
             }
@@ -175,21 +186,26 @@ class MyBooksReadingSync @Inject constructor(
         }
     }
 
-    suspend fun markDownloaded(bookId: String, filePath: String, format: String, sha256: String) = db.withTransaction {
-        val book = db.bookDao().getBookById(bookId) ?: return@withTransaction
-        val state = db.myBooksSyncStateDao().get(bookId)
-        if (state != null && uuid(state).isNotBlank() && (fileHash(book) != sha256 || book.format != format)) {
-            val root = baseline(uuid(state))
-            val basePositions = readingItems(root.getJSONObject("data"), "positions").associateBy { readingItemKey("positions", it) }
-            val local = capture(book, root.getJSONObject("data"))
-            val pending = readingItems(local, "positions").filter {
-                readingCanonical(it) != readingCanonical(basePositions[readingItemKey("positions", it)])
+    suspend fun markDownloaded(bookId: String, filePath: String, format: String, sha256: String) {
+        ensureHash(bookId)
+        db.withTransaction {
+            val book = db.bookDao().getBookById(bookId) ?: return@withTransaction
+            val state = db.myBooksSyncStateDao().get(bookId)
+            if (state != null && uuid(state).isNotBlank() && (fileHash(book) != sha256 || book.format != format)) {
+                val root = baseline(uuid(state))
+                val basePositions = readingItems(root.getJSONObject("data"), "positions").associateBy { readingItemKey("positions", it) }
+                val local = capture(book, root.getJSONObject("data"))
+                val pending = readingItems(local, "positions").filter {
+                    readingCanonical(it) != readingCanonical(basePositions[readingItemKey("positions", it)])
+                }
+                val annotations = JSONObject().put("bookmarks", local.getJSONArray("bookmarks"))
+                    .put("notes", local.getJSONArray("notes"))
+                dao.putState(SyncStateEntity(BASE + uuid(state), root.put("book_id", state.remoteId).put("book_uuid", uuid(state))
+                    .put("pending_positions", JSONArray(pending)).put("pending_annotations", annotations).toString()))
+                db.bookDao().applyServerReadingPosition(bookId, 0f, null, 0L)
             }
-            dao.putState(SyncStateEntity(BASE + uuid(state), root.put("book_id", state.remoteId).put("book_uuid", uuid(state))
-                .put("pending_positions", JSONArray(pending)).toString()))
-            db.bookDao().applyServerReadingPosition(bookId, 0f, null, 0L)
+            db.bookDao().markServerBookDownloaded(bookId, filePath, format, sha256)
         }
-        db.bookDao().markServerBookDownloaded(bookId, filePath, format, sha256)
     }
 
     suspend fun applyKnownProgress(bookId: String) {
@@ -251,8 +267,11 @@ class MyBooksReadingSync @Inject constructor(
         val marks = snapshot.marks[book.id].orEmpty()
         val notes = snapshot.notes[book.id].orEmpty()
         val shadowed = stringItems(snapshot.roots[book.id]?.optJSONArray("local_shadowed"))
-        marks.forEach { result.getJSONArray("bookmarks").put(bindAnnotation(bookmarkToJson(it).apply { remove("bookId") }, book, base, "bookmarks", shadowed)) }
-        notes.forEach { result.getJSONArray("notes").put(bindAnnotation(noteToJson(it).apply { remove("bookId") }, book, base, "notes", shadowed)) }
+        val retained = snapshot.roots[book.id]?.optJSONObject("pending_annotations")
+        val retainedMarks = jsonItems(retained?.optJSONArray("bookmarks")).associateBy { it.getString("syncId") }
+        val retainedNotes = jsonItems(retained?.optJSONArray("notes")).associateBy { it.getString("syncId") }
+        marks.forEach { result.getJSONArray("bookmarks").put(bindAnnotation(bookmarkToJson(it).apply { remove("bookId") }, book, base, "bookmarks", shadowed, retainedMarks[it.syncId])) }
+        notes.forEach { result.getJSONArray("notes").put(bindAnnotation(noteToJson(it).apply { remove("bookId") }, book, base, "notes", shadowed, retainedNotes[it.syncId])) }
         val records = snapshot.records[book.id].orEmpty().map {
             readingRecordToJson(it).apply { remove("bookId"); if (optString("sourceDeviceId").isBlank()) put("sourceDeviceId", "legacy") }
         }.groupBy { readingItemKey("reading_records", it) }
@@ -276,10 +295,12 @@ class MyBooksReadingSync @Inject constructor(
     private fun annotationMatches(item: JSONObject, book: BookEntity): Boolean =
         item.optString("format", book.format) == book.format && item.optString("fileSha256") == fileHash(book)
 
-    private fun bindAnnotation(item: JSONObject, book: BookEntity, base: JSONObject, section: String, shadowed: Set<String>): JSONObject {
-        val old = readingItems(base, section).find { it.getString("syncId") == item.getString("syncId") }
+    private fun bindAnnotation(item: JSONObject, book: BookEntity, base: JSONObject, section: String, shadowed: Set<String>,
+        retained: JSONObject?): JSONObject {
         val fields = if (section == "bookmarks") listOf("chapterIndex", "position", "locatorJson")
             else listOf("chapterIndex", "startPosition", "endPosition", "startLocatorJson", "endLocatorJson")
+        val old = retained?.takeIf { original -> fields.all { readingCanonical(original.opt(it)) == readingCanonical(item.opt(it)) } }
+            ?: readingItems(base, section).find { it.getString("syncId") == item.getString("syncId") }
         val moved = old != null && fields.any { readingCanonical(old.opt(it)) != readingCanonical(item.opt(it)) }
         val namespace = if (section == "bookmarks") "bookmark" else "note"
         if (old != null && !moved && old.has("format")) {

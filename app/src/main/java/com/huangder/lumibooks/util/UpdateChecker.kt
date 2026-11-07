@@ -14,7 +14,7 @@ import java.net.URL
  * 配置来自本仓库 docs/app-config.json，更新包来自 GitHub Releases。
  *
  * Config URL:
- * https://raw.githubusercontent.com/shyshineinn/Mybooks/main/docs/app-config.json
+ * https://raw.githubusercontent.com/shyshineinn/mybooks-android/main/docs/app-config.json
  */
 object UpdateChecker {
 
@@ -22,7 +22,7 @@ object UpdateChecker {
 
     /** 本仓库的在线更新配置（GitHub Raw）。 */
     private const val CONFIG_URL =
-        "https://raw.githubusercontent.com/shyshineinn/Mybooks/main/docs/app-config.json"
+        "https://raw.githubusercontent.com/shyshineinn/mybooks-android/main/docs/app-config.json"
 
     /** Network request timeout. */
     private const val TIMEOUT_MS = 10_000

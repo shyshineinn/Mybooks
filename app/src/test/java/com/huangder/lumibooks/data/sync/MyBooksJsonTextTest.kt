@@ -14,8 +14,7 @@ import org.robolectric.annotation.Config
  * 此时 optString 返回的是字面量字符串 "null"；JVM 参考实现则会直接丢掉这个键。
  * 所以这里必须用 Robolectric 跑，才能复现设备上的真实行为。
  *
- * 服务端用 null 表示缺省（例如没有心得时的 notes_updated_at），
- * 一旦被当成真实值发回服务端，就会被判成版本冲突（409），导致首次上传心得永远失败。
+ * 服务端用 null 表示缺省，例如缺少书目修改时间。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -23,36 +22,10 @@ class MyBooksJsonTextTest {
 
     @Test
     fun jsonNullMustNotBeReadAsTheLiteralNullString() {
-        val obj = JSONObject("""{"notes_updated_at": null, "title": null}""")
-        assertEquals("null", obj.optString("notes_updated_at"))
-        assertNull(obj.optTextOrNull("notes_updated_at"))
+        val obj = JSONObject("""{"updated_at": null, "title": null}""")
+        assertEquals("null", obj.optString("updated_at"))
+        assertNull(obj.optTextOrNull("updated_at"))
         assertEquals("", obj.optTextOrEmpty("title"))
-    }
-
-    @Test
-    fun serverBookMetaTreatsMissingNotesAsAbsent() {
-        val meta = ServerBookMeta.fromJson(
-            """{"id":1,"title":"三体","author":"刘慈欣","has_notes":false,"notes_size":0,"notes_updated_at":null}""",
-            1L
-        )
-        assertNull(meta.notesUpdatedAt)
-    }
-
-    @Test
-    fun remoteBookTreatsMissingNotesAsAbsent() {
-        val book = parseRemoteBook(
-            """{"id":1,"title":"三体","author":"刘慈欣","has_notes":false,"notes_updated_at":null}""",
-            "https://helloac.top"
-        )
-        assertNull(book.notesUpdatedAt)
-    }
-
-    @Test
-    fun notesPayloadTreatsMissingUpdatedAtAsAbsent() {
-        val payload = MyBooksNotesPayload.fromJson(
-            """{"has_notes":false,"content":"","size":0,"updated_at":null}"""
-        )
-        assertNull(payload.updatedAt)
     }
 
     @Test

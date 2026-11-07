@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mybooks_native_preview_notice">도서 다운로드, 서지 정보 편집, 독서 상태 동기화를 지원합니다.</string>
+    <string name="mybooks_native_action_unavailable">이 작업은 아직 mybooks 서버에서 사용할 수 없습니다.</string>
+    <string name="mybooks_server_marks">표시</string>
+    <string name="mybooks_server_wants">읽고 싶음</string>
+</resources>

@@ -243,7 +243,8 @@ private fun SyncModePill(
 @Composable
 internal fun SyncContentSelector(
     selection: com.huangder.lumibooks.domain.model.SyncContentSelection,
-    onContentChange: (com.huangder.lumibooks.domain.model.SyncContent, Boolean) -> Unit
+    onContentChange: (com.huangder.lumibooks.domain.model.SyncContent, Boolean) -> Unit,
+    portableOnly: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -267,7 +268,7 @@ internal fun SyncContentSelector(
                 bottom = AppSpace.sm
             )
         )
-        SyncContentRow(
+        if (!portableOnly) SyncContentRow(
             title = stringResource(R.string.webdav_sync_content_books),
             description = stringResource(R.string.webdav_sync_content_books_description),
             checked = selection.bookFiles,
@@ -285,7 +286,7 @@ internal fun SyncContentSelector(
             checked = selection.libraryOrganization,
             onCheckedChange = { onContentChange(com.huangder.lumibooks.domain.model.SyncContent.LIBRARY_ORGANIZATION, it) }
         )
-        SyncContentRow(
+        if (!portableOnly) SyncContentRow(
             title = stringResource(R.string.webdav_sync_content_reading_data),
             description = stringResource(R.string.webdav_sync_content_reading_data_description),
             checked = selection.readingData,

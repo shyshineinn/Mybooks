@@ -58,6 +58,7 @@ class MyBooksBookTransfer @Inject constructor(
 
     private suspend fun performUpload(bookIds: Set<String>, progress: (MyBooksTransferProgress) -> Unit): MyBooksUploadResult {
         db.repairDanglingBookRelations()
+        if (MyBooksConfig.isPoxenServer()) return performNativeUpload(bookIds, progress)
         val snapshot = api.fetchSyncSnapshot()
         check(snapshot.syncVersion >= 3) { "请先升级服务器以支持经过正文校验的书籍上传" }
         val library = requireNotNull(snapshot.libraryId) { "请先升级服务器再上传书籍" }
@@ -83,6 +84,145 @@ class MyBooksBookTransfer @Inject constructor(
             }
         }
         return MyBooksUploadResult(uploaded, errors)
+    }
+
+    private suspend fun performNativeUpload(bookIds: Set<String>, progress: (MyBooksTransferProgress) -> Unit): MyBooksUploadResult {
+        val library = MyBooksConfig.LIBRARY_KEY
+        val uploaded = mutableSetOf<String>()
+        val errors = mutableListOf<String>()
+        for ((index, id) in bookIds.withIndex()) {
+            currentCoroutineContext().ensureActive()
+            val book = db.bookDao().getBookById(id) ?: continue
+            if (book.format == "MARKDOWN") continue
+            try {
+                if (id.startsWith(MyBooksConfig.BOOK_ID_PREFIX)) { uploaded += id; continue }
+                check(book.remoteLibraryKey.isNullOrBlank() && !book.isCloudOnly && !book.isMissing) { "请先将书籍下载到本机" }
+                uploaded += uploadOneNative(id, library) { bytes, size ->
+                    progress(MyBooksTransferProgress(book.title, index + 1, bookIds.size, bytes, size))
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val message = error.message.orEmpty()
+                db.syncStateDao().putState(SyncStateEntity("mybooks_upload_error:" + library + ":" + id,
+                    JSONObject().put("bookId", id).put("message", message).toString()))
+                errors += book.title + ": " + message
+                if (classifyMyBooksSyncFailure(error) in setOf(MyBooksSyncFailure.AUTH, MyBooksSyncFailure.TRANSIENT)) break
+            }
+        }
+        return MyBooksUploadResult(uploaded, errors)
+    }
+
+    internal suspend fun uploadOneNative(localId: String, library: String, progress: (Long, Long) -> Unit): String {
+        val book = requireNotNull(db.bookDao().getBookById(localId))
+        check(book.format != "MARKDOWN") { "服务器不支持 Markdown 正文上传" }
+        val extension = book.format.lowercase()
+        val cache = File.createTempFile("mybooks-upload-", "." + extension, context.cacheDir)
+        try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            BookFileAccess.openInputStream(context, book.filePath).use { input -> cache.outputStream().use { output ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    output.write(buffer, 0, n)
+                    digest.update(buffer, 0, n)
+                }
+            } }
+            check(cache.length() > 0) { "正文为空，无法上传" }
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            val key = "mybooks_upload:" + library + ":" + localId
+            val stored = db.syncStateDao().getValue(key)?.let(::JSONObject)
+            val tags = db.tagDao().getTagsForBook(localId).map { it.name }
+            val draftRoot = db.syncStateDao().getValue("book_import_metadata:" + localId)
+                ?.let { runCatching { JSONObject(it) }.getOrNull() }
+            val initial = draftRoot?.optJSONObject("fields")?.let { JSONObject(it.toString()) }
+                ?: JSONObject().put("title", book.title).put("author", book.author).put("tags", JSONArray(tags))
+            initial.put("title", book.title).put("author", book.author).put("tags", JSONArray(tags))
+            val fileName = nativeUploadName(book.title, extension)
+
+            var transfer = stored
+            var raw: String? = null
+            if (transfer != null) {
+                check(transfer.optString("sha256").ifBlank { hash } == hash) {
+                    "本机正文已变化，已停止上传"
+                }
+                val remoteId = transfer.getLong("id")
+                try {
+                    raw = api.fetchBookJson(remoteId)
+                } catch (error: MyBooksHttpException) {
+                    if (error.status == 404) {
+                        db.syncStateDao().deleteState(key)
+                        transfer = null
+                    } else {
+                        throw error
+                    }
+                }
+            }
+            if (transfer == null) {
+                val uploaded = api.uploadNativeBook(cache, fileName, hash, progress)
+                check(uploaded.sha256 == hash) { "服务器正文校验失败，请重试" }
+                val remoteId = uploaded.bookId
+                transfer = JSONObject().put("id", remoteId).put("localBookId", localId)
+                    .put("initial", initial).put("size", cache.length()).put("sha256", hash)
+                db.syncStateDao().putState(SyncStateEntity(key, transfer.toString()))
+                raw = api.fetchBookJson(remoteId)
+                val remote = parseRemoteBook(raw!!, MyBooksConfig.SERVER_URL)
+                val remoteFile = remote.fileFor(extension)
+                check(remoteFile != null && remoteFile.size == cache.length()) { "服务器尚未保存完整正文" }
+                transfer.put("uuid", remote.uuid.orEmpty())
+                db.syncStateDao().putState(SyncStateEntity(key, transfer.toString()))
+            } else {
+                val existing = transfer
+                val remoteId = existing.getLong("id")
+                var detail = parseRemoteBook(requireNotNull(raw), MyBooksConfig.SERVER_URL)
+                val expectedUuid = existing.optString("uuid")
+                check(expectedUuid.isBlank() || expectedUuid == detail.uuid) { "服务器书目身份已变化，已停止上传" }
+                if (expectedUuid.isBlank() && !detail.uuid.isNullOrBlank()) {
+                    existing.put("uuid", detail.uuid)
+                    db.syncStateDao().putState(SyncStateEntity(key, existing.toString()))
+                }
+                var file = detail.fileFor(extension)
+                if (file == null) {
+                    val uploaded = api.addNativeBookFormat(remoteId, cache, fileName, hash, progress)
+                    check(uploaded.bookId == remoteId) { "服务器书目已变化，已停止上传" }
+                    check(uploaded.sha256 == hash) { "服务器正文校验失败，请重试" }
+                    raw = api.fetchBookJson(remoteId)
+                    detail = parseRemoteBook(raw!!, MyBooksConfig.SERVER_URL)
+                    file = detail.fileFor(extension)
+                }
+                check(file != null) { "服务器尚未保存正文" }
+                check(file.size == cache.length()) { "服务器已有同格式但正文大小不一致，请先处理重复书籍" }
+            }
+
+            val confirmed = requireNotNull(transfer)
+            val remoteId = confirmed.getLong("id")
+            var currentRaw = requireNotNull(raw)
+            val remote = parseRemoteBook(currentRaw, MyBooksConfig.SERVER_URL)
+            val coverFile = book.coverPath?.let(::File)?.takeIf { it.isFile }
+            val doubanCover = (draftRoot?.opt("coverUrl") as? String)?.isNotBlank() == true
+            val needsCover = coverFile != null && (
+                com.huangder.lumibooks.util.FileUtils.isCustomCover(book.coverPath) ||
+                    doubanCover ||
+                    remote.coverUrl.isNullOrBlank()
+                )
+            if (needsCover) {
+                val bytes = withContext(Dispatchers.IO) {
+                    MyBooksCoverUploader(api).compressedBytes(requireNotNull(coverFile))
+                }
+                api.uploadNativeCover(remoteId, bytes)
+                currentRaw = api.fetchBookJson(remoteId)
+            }
+            return adoptUploadedBook(localId, currentRaw, hash, cache.length(), initial, key)
+        } finally {
+            cache.delete()
+        }
+    }
+
+    private fun nativeUploadName(title: String, extension: String): String {
+        val base = title.trim().replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").take(80).ifBlank { "book" }
+        return "$base.$extension"
     }
 
     private suspend fun uploadOne(localId: String, library: String, progress: (Long, Long) -> Unit): String {
@@ -150,13 +290,17 @@ class MyBooksBookTransfer @Inject constructor(
         val remote = parseRemoteBook(raw, MyBooksConfig.SERVER_URL)
         val targetId = MyBooksConfig.BOOK_ID_PREFIX + remote.id
         check(db.bookDao().getBookById(targetId) == null) { "服务器书目已有本机副本，请先处理重复书籍" }
-        val overrides = JSONObject()
-        val titleChanged = old.title != initial.getString("title")
-        val authorChanged = old.author != initial.getString("author")
-        if (titleChanged) overrides.put("title", old.title)
-        if (authorChanged) overrides.put("author", old.author)
-        db.bookDao().insertBook(old.copy(id = targetId, title = if (titleChanged) old.title else remote.title,
-            author = if (authorChanged) old.author else remote.author, remoteLibraryKey = MyBooksConfig.LIBRARY_KEY,
+        val native = MyBooksConfig.isPoxenServer()
+        val titleChanged = old.title != initial.optString("title")
+        val authorChanged = old.author != initial.optString("author")
+        val overrides = if (native) nativeInitialOverrides(old, initial) else JSONObject().apply {
+            if (titleChanged) put("title", old.title)
+            if (authorChanged) put("author", old.author)
+        }
+        db.bookDao().insertBook(old.copy(id = targetId,
+            title = if (native || titleChanged) old.title else remote.title,
+            author = if (native || authorChanged) old.author else remote.author,
+            remoteLibraryKey = MyBooksConfig.LIBRARY_KEY,
             remoteFileSize = size, remoteFileSha256 = hash, sourceSha256 = hash))
         // Insert the target first, move every book relation, then remove the source. Foreign keys remain valid throughout.
         val sql = db.openHelper.writableDatabase
@@ -173,8 +317,9 @@ class MyBooksBookTransfer @Inject constructor(
             if (hasBookId) sql.execSQL("UPDATE " + quoted + " SET bookId=? WHERE bookId=?", arrayOf(targetId, localId))
         }
         val localTags = db.tagDao().getTagsForBook(targetId).map { it.name }.toSet()
-        val initialTags = initial.getJSONArray("tags").let { array -> (0 until array.length()).map { array.getString(it) }.toSet() }
-        if (localTags == initialTags) {
+        val initialTags = (initial.optJSONArray("tags") ?: JSONArray())
+            .let { array -> (0 until array.length()).map { array.getString(it) }.toSet() }
+        if ((native && localTags.isEmpty() && initialTags.isEmpty()) || (!native && localTags == initialTags)) {
             db.tagDao().getBookTagLinks(targetId).forEach { db.tagDao().deleteBookTagLink(targetId, it.tagId) }
             remote.tags.forEach { tag -> db.tagDao().createAndAssignTag(targetId, TagEntity(UUID.randomUUID().toString(), tag, tag.lowercase(), System.currentTimeMillis())) }
         }
@@ -196,5 +341,33 @@ class MyBooksBookTransfer @Inject constructor(
         db.syncStateDao().deleteState(pendingKey.replaceFirst("mybooks_upload:", "mybooks_upload_error:"))
         targetId
     }
+    }
+
+    private fun nativeInitialOverrides(old: BookEntity, initial: JSONObject): JSONObject {
+        val overrides = JSONObject()
+        if (old.title.isNotBlank()) overrides.put("title", old.title)
+        if (old.author.isNotBlank() && old.author != UNKNOWN_REMOTE_AUTHOR) overrides.put("author", old.author)
+        val translators = initial.optJSONArray("translators")
+        if (translators != null && translators.length() > 0) overrides.put("translators", translators)
+        fun text(key: String) {
+            val value = initial.optString(key).trim()
+            if (value.isNotEmpty()) overrides.put(key, value)
+        }
+        listOf("summary", "publisher", "isbn").forEach(::text)
+        val series = initial.optString("series").trim()
+        if (series.isNotEmpty()) overrides.put("series", series)
+        val seriesIndex = initial.optString("series_index").trim()
+        if (seriesIndex.isNotEmpty() && seriesIndex != "0") overrides.put("series_index", seriesIndex)
+        val pubYear = initial.optString("pub_year").trim()
+        if (pubYear.isNotEmpty()) overrides.put("pub_year", pubYear)
+        val rating = initial.optDouble("rating", 0.0)
+        if (rating > 0) overrides.put("rating", rating)
+        val status = when {
+            old.readingProgress >= 1f -> "done"
+            old.readingProgress > 0f -> "reading"
+            else -> initial.optString("status").trim()
+        }
+        if (status.isNotBlank() && status != "wish") overrides.put("status", status)
+        return overrides
     }
 }

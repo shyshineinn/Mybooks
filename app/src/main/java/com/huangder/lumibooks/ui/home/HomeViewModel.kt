@@ -158,6 +158,7 @@ data class HomeUiState(
     val syncedBookIds: Set<String> = emptySet(),
     /** 服务器 status 分类；本地导入书不在其中。 */
     val serverReadingStatusByBookId: Map<String, ReadingStatus> = emptyMap(),
+    val myBooksCategoryByBookId: Map<String, String> = emptyMap(),
     val isWebdavSyncing: Boolean = false,
     val isLibrarySyncing: Boolean = false,
     val downloadStates: Map<String, BookDownloadState> = emptyMap(),
@@ -318,15 +319,20 @@ class HomeViewModel @Inject constructor(
                 val myBooksIds = books.asSequence()
                     .filter { MyBooksConfig.isMyBooks(it) }
                     .mapTo(mutableSetOf()) { it.id }
-                buildMap {
-                    states.forEach { state ->
-                        if (state.bookId !in myBooksIds) return@forEach
-                        MyBooksReadStatus.categoryStatus(state.overridesJson, state.baseJson)
-                            ?.let { put(state.bookId, it) }
-                    }
+                val statuses = mutableMapOf<String, ReadingStatus>()
+                val categories = mutableMapOf<String, String>()
+                for (state in states) {
+                    if (state.bookId !in myBooksIds) continue
+                    MyBooksReadStatus.categoryStatus(state.overridesJson, state.baseJson)
+                        ?.let { statuses[state.bookId] = it }
+                    if (state.remoteDeleted) continue
+                    val base = runCatching { org.json.JSONObject(state.baseJson) }.getOrNull() ?: continue
+                    val category = base.optString(if (base.has("category")) "category" else "server_category").trim()
+                    if (category.isNotEmpty() && category != "null") categories[state.bookId] = category
                 }
-            }.collectLatest { statuses ->
-                _uiState.value = _uiState.value.copy(serverReadingStatusByBookId = statuses)
+                statuses to categories
+            }.collectLatest { (statuses, categories) ->
+                _uiState.value = _uiState.value.copy(serverReadingStatusByBookId = statuses, myBooksCategoryByBookId = categories)
             }
         }
     }
@@ -1718,6 +1724,7 @@ class HomeViewModel @Inject constructor(
             }
                 .onSuccess { renamed ->
                     if (!renamed) showFolderMessage(application.getString(R.string.folder_name_exists))
+                    else if (MyBooksConfig.isPoxenServer()) myBooksSyncManager.schedulePush()
                     onResult(renamed)
                 }
                 .onFailure {
@@ -1731,6 +1738,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { folderRepository.deleteFolderTree(folderId) }
                 .onSuccess { coverPaths ->
+                    if (MyBooksConfig.isPoxenServer()) myBooksSyncManager.schedulePush()
                     withContext(Dispatchers.IO) {
                         FileUtils.deleteFolderCoverPaths(application, coverPaths)
                     }
@@ -1848,6 +1856,7 @@ class HomeViewModel @Inject constructor(
                 }
             }
                 .onSuccess { result ->
+                    if (result == FolderMoveResult.Success && MyBooksConfig.isPoxenServer()) myBooksSyncManager.schedulePush()
                     val message = when (result) {
                         FolderMoveResult.Success -> R.string.folder_relocation_success
                         FolderMoveResult.NoChange -> R.string.folder_relocation_no_change
@@ -1992,6 +2001,9 @@ class HomeViewModel @Inject constructor(
                     } catch (error: Throwable) {
                         failures += error.message ?: book.title
                     }
+                }
+                if (movedCount > 0 && MyBooksConfig.isPoxenServer() && books.any(MyBooksConfig::isMyBooks)) {
+                    myBooksSyncManager.schedulePush()
                 }
                 if (failures.isNotEmpty()) {
                     showFolderMessage(application.getString(R.string.folder_move_partial, movedCount, failures.size))
@@ -2276,6 +2288,9 @@ class HomeViewModel @Inject constructor(
                 val previous = bookRepository.getBookById(book.id)
                 bookRepository.updateBookMetadata(book)
                 if (MyBooksConfig.isMyBooks(book)) {
+                    if (previous?.isFavorite != book.isFavorite && MyBooksConfig.isPoxenServer()) {
+                        myBooksSyncManager.schedulePush()
+                    }
                     val fields = buildMap<String, Any> {
                         if (previous?.title != book.title) put("title", book.title)
                         if (previous?.author != book.author) put("author", book.author)
@@ -2316,11 +2331,12 @@ class HomeViewModel @Inject constructor(
         status: ReadingStatus,
         startNewReading: Boolean = false,
         abandonCurrentReading: Boolean = false,
+        observedStatus: ReadingStatus? = null,
         onResult: (success: Boolean, message: String?) -> Unit = { _, _ -> }
     ) {
         viewModelScope.launch {
             try {
-                myBooksSyncManager.setReadingStatus(book.id, status, startNewReading, abandonCurrentReading)
+                myBooksSyncManager.setReadingStatus(book.id, status, startNewReading, abandonCurrentReading, observedStatus)
                 onResult(true, null)
             } catch (cancelled: CancellationException) {
                 throw cancelled

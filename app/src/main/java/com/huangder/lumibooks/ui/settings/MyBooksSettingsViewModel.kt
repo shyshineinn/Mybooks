@@ -1,7 +1,6 @@
 package com.huangder.lumibooks.ui.settings
 
 import android.content.Context
-import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.huangder.lumibooks.R
@@ -11,7 +10,6 @@ import com.huangder.lumibooks.data.sync.MyBooksEndpoint
 import com.huangder.lumibooks.data.sync.MyBooksSyncDirection
 import com.huangder.lumibooks.data.sync.MyBooksSyncPreferencesStore
 import com.huangder.lumibooks.data.sync.MyBooksSyncManager
-import com.huangder.lumibooks.data.sync.SyncIdentityStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -44,7 +42,6 @@ class MyBooksSettingsViewModel @Inject constructor(
     private val syncManager: MyBooksSyncManager,
     private val preferencesStore: MyBooksSyncPreferencesStore,
     private val syncScheduler: com.huangder.lumibooks.data.sync.MyBooksSyncScheduler,
-    private val syncIdentityStore: SyncIdentityStore,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val state = MutableStateFlow(MyBooksSettingsUiState())
@@ -85,7 +82,8 @@ class MyBooksSettingsViewModel @Inject constructor(
                 state.value = state.value.copy(busy = false)
                 throw cancelled
             } catch (error: Exception) {
-                state.update { it.copy(busy = false, message = error.message ?: context.getString(R.string.mybooks_connection_failed)) }
+                state.update { it.copy(busy = false, message = if (error is com.huangder.lumibooks.data.sync.PoxenWriteUnavailable)
+                    context.getString(R.string.mybooks_native_action_unavailable) else error.message ?: context.getString(R.string.mybooks_connection_failed)) }
             }
         }
     }
@@ -130,9 +128,7 @@ class MyBooksSettingsViewModel @Inject constructor(
             state.value = state.value.copy(loginCompleted = true)
             return@runOperation context.getString(R.string.mybooks_server_login_success)
         }
-        val previousToken = MyBooksConfig.adminToken.takeIf { url == MyBooksConfig.SERVER_URL && it.isNotBlank() }
-        val token = client.login(username.trim(), password, "${Build.MANUFACTURER} ${Build.MODEL}".take(100),
-            "android:${syncIdentityStore.deviceId()}", previousToken)
+        val token = client.login(username.trim(), password)
         try {
             syncManager.saveConnection(url, username.trim(), token)
         } catch (error: Exception) {

@@ -259,9 +259,12 @@ private fun BookshelfCategoriesScreen(
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val uiState by viewModel.uiState.collectAsState()
-    val tagsById = remember(uiState.tags) { uiState.tags.associateBy { it.id } }
-    val tagIdsByBook = remember(uiState.bookTagLinks, tagsById) {
-        uiState.bookTagLinks.groupBy { it.bookId }
+    val (browseTags, browseLinks) = remember(uiState.tags, uiState.bookTagLinks, uiState.myBooksCategoryByBookId) {
+        bookshelfBrowseTags(uiState.tags, uiState.bookTagLinks, uiState.myBooksCategoryByBookId)
+    }
+    val tagsById = remember(browseTags) { browseTags.associateBy { it.id } }
+    val tagIdsByBook = remember(browseLinks, tagsById) {
+        browseLinks.groupBy { it.bookId }
             .mapValues { (_, links) -> links.flatMapTo(mutableSetOf()) { it.effectiveTagIds(tagsById) } }
     }
     var managedFolder by remember { mutableStateOf<LibraryFolder?>(null) }
@@ -278,6 +281,7 @@ private fun BookshelfCategoriesScreen(
     }
     val allTitle = stringResource(R.string.filter_all)
     val wishTitle = stringResource(R.string.reading_status_wish)
+    val wantTitle = stringResource(R.string.mybooks_server_wants)
     val readingTitle = stringResource(R.string.reading_status_reading)
     val doneTitle = stringResource(R.string.reading_status_done)
     val epubMobiTitle = stringResource(R.string.filter_epub_mobi)
@@ -288,6 +292,13 @@ private fun BookshelfCategoriesScreen(
             CategoryRowModel(
                 BookshelfCategoryTarget.ServerStatus(ReadingStatus.WISH, wishTitle),
                 uiState.serverReadingStatusByBookId.values.count { it == ReadingStatus.WISH },
+                AppIcons.Bookmark.regular
+            )
+        )
+        add(
+            CategoryRowModel(
+                BookshelfCategoryTarget.ServerStatus(ReadingStatus.WANT_TO_READ, wantTitle),
+                uiState.serverReadingStatusByBookId.values.count { it == ReadingStatus.WANT_TO_READ },
                 AppIcons.Bookmark.regular
             )
         )
@@ -326,7 +337,7 @@ private fun BookshelfCategoriesScreen(
     }
     CategoryListPage(
         categories = rows,
-        tags = uiState.tags,
+        tags = browseTags,
         tagIdsByBook = tagIdsByBook,
         folders = uiState.folders,
         folderBookCounts = folderBookCounts(uiState.folders, uiState.bookFolderLinks),
@@ -464,9 +475,17 @@ internal fun BookshelfCategoryBooksRoute(
         uiState.bookTagLinks.groupBy { it.bookId }
             .mapValues { (_, links) -> links.flatMapTo(mutableSetOf()) { it.effectiveTagIds(tagsById) } }
     }
-    val tagNamesByBook = remember(uiState.tags, uiState.bookTagLinks) {
-        val names = uiState.tags.associate { it.id to it.name }
-        uiState.bookTagLinks.groupBy { it.bookId }
+    val (browseTags, browseLinks) = remember(uiState.tags, uiState.bookTagLinks, uiState.myBooksCategoryByBookId) {
+        bookshelfBrowseTags(uiState.tags, uiState.bookTagLinks, uiState.myBooksCategoryByBookId)
+    }
+    val browseTagIdsByBook = remember(browseTags, browseLinks) {
+        val byId = browseTags.associateBy { it.id }
+        browseLinks.groupBy { it.bookId }
+            .mapValues { (_, links) -> links.flatMapTo(mutableSetOf()) { it.effectiveTagIds(byId) } }
+    }
+    val tagNamesByBook = remember(browseTags, browseLinks) {
+        val names = browseTags.associate { it.id to it.name }
+        browseLinks.groupBy { it.bookId }
             .mapValues { (_, links) -> links.mapNotNull { names[it.tagId] } }
     }
     val selectedBooks = remember(
@@ -475,7 +494,7 @@ internal fun BookshelfCategoryBooksRoute(
         uiState.folders,
         uiState.bookFolderLinks,
         uiState.serverReadingStatusByBookId,
-        tagIdsByBook
+        browseTagIdsByBook
     ) {
         when (selectedTarget) {
             is BookshelfCategoryTarget.All -> uiState.books
@@ -489,7 +508,7 @@ internal fun BookshelfCategoryBooksRoute(
             is BookshelfCategoryTarget.Comic -> uiState.books.filter { it.format == BookFormat.CBZ }
             is BookshelfCategoryTarget.Favorites -> uiState.books.filter { it.isFavorite }
             is BookshelfCategoryTarget.Tag -> uiState.books.filter {
-                selectedTarget.id in tagIdsByBook[it.id].orEmpty()
+                selectedTarget.id in browseTagIdsByBook[it.id].orEmpty()
             }
             is BookshelfCategoryTarget.Folder -> booksInFolderTree(
                 books = uiState.books,

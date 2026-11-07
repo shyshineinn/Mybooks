@@ -21,6 +21,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import com.huangder.lumibooks.ui.theme.AppColors
 import com.huangder.lumibooks.ui.theme.AppType
 import com.huangder.lumibooks.R
@@ -55,7 +56,8 @@ internal fun ReadingStatusMorphOverlay(
     nextRound: Int? = null,
     activeRound: Int? = null,
     onStartNextReading: () -> Unit = {},
-    onAbandonReading: () -> Unit = {}
+    onAbandonReading: () -> Unit = {},
+    showWantToRead: Boolean = false
 ) {
     val title = stringResource(R.string.server_meta_status)
     val density = LocalDensity.current
@@ -66,17 +68,25 @@ internal fun ReadingStatusMorphOverlay(
     }
     val textMeasurer = rememberTextMeasurer()
     val optionStyle = LocalTextStyle.current.copy(fontSize = AppType.Body, fontWeight = FontWeight.SemiBold)
-    val labels = listOf(readingStatusLabel(ReadingStatus.WISH), readingStatusLabel(ReadingStatus.READING), readingStatusLabel(ReadingStatus.DONE)) + listOfNotNull(actionLabel)
+    val options = buildList {
+        add(ReadingStatus.WISH)
+        if (showWantToRead) add(ReadingStatus.WANT_TO_READ)
+        add(ReadingStatus.READING)
+        add(ReadingStatus.DONE)
+    }
+    val labels = options.map { readingStatusLabel(it) } + listOfNotNull(actionLabel)
     val labelWidth = labels.maxOf { textMeasurer.measure(it, style = optionStyle, softWrap = false).size.width }
     val width = maxOf(LiquidGlassMorphSelectorDefaults.Width,
         with(density) { labelWidth.toDp() } + LiquidGlassMorphSelectorDefaults.HorizontalPadding * 2)
+    val height = LiquidGlassMorphSelectorDefaults.contentHeight(density.fontScale) +
+        if (showWantToRead) LiquidGlassMorphSelectorDefaults.rowHeight(density.fontScale) else 0.dp
     // Hand the updated value back to the real row before the overlay disappears.
     val returnValue = readingStatusLabel(if (closeRequested) selected else anchor.status)
     AnchoredLiquidGlassMorphPopup(
         anchorBounds = anchor.statusRowBounds,
         originCenter = anchor.originCenter,
         width = width,
-        height = LiquidGlassMorphSelectorDefaults.contentHeight(density.fontScale),
+        height = height,
         closeRequested = closeRequested,
         onDismiss = onDismiss,
         onFinished = onFinished,
@@ -85,7 +95,7 @@ internal fun ReadingStatusMorphOverlay(
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("reading-status-scroll")) {
                 LiquidGlassMorphSelector(
                     title = title,
-                    options = listOf(ReadingStatus.WISH, ReadingStatus.READING, ReadingStatus.DONE),
+                    options = options,
                     selected = selected,
                     enabled = enabled && !saving,
                     onSelect = onSelect,
@@ -113,6 +123,7 @@ internal fun ReadingStatusMorphOverlay(
 @Composable
 private fun readingStatusLabel(status: ReadingStatus): String = when (status) {
     ReadingStatus.WISH -> stringResource(R.string.reading_status_wish)
+    ReadingStatus.WANT_TO_READ -> stringResource(R.string.mybooks_server_wants)
     ReadingStatus.READING -> stringResource(R.string.reading_status_reading)
     ReadingStatus.DONE -> stringResource(R.string.reading_status_done)
 }

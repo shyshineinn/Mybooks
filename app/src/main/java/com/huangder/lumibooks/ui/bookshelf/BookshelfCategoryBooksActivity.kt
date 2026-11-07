@@ -132,6 +132,7 @@ class BookshelfCategoryBooksActivity : ComponentActivity() {
                 is BookshelfCategoryTarget.All -> "all"
                 is BookshelfCategoryTarget.ServerStatus -> when (target.status) {
                     ReadingStatus.WISH -> "status_wish"
+                    ReadingStatus.WANT_TO_READ -> "status_want_to_read"
                     ReadingStatus.READING -> "status_reading"
                     ReadingStatus.DONE -> "status_done"
                 }
@@ -162,6 +163,7 @@ class BookshelfCategoryBooksActivity : ComponentActivity() {
             return when (getStringExtra(EXTRA_KIND)) {
                 "all" -> BookshelfCategoryTarget.All(title)
                 "status_wish" -> BookshelfCategoryTarget.ServerStatus(ReadingStatus.WISH, title)
+                "status_want_to_read" -> BookshelfCategoryTarget.ServerStatus(ReadingStatus.WANT_TO_READ, title)
                 "status_reading" -> BookshelfCategoryTarget.ServerStatus(ReadingStatus.READING, title)
                 "status_done" -> BookshelfCategoryTarget.ServerStatus(ReadingStatus.DONE, title)
                 "epub_mobi" -> BookshelfCategoryTarget.EpubMobi(title)

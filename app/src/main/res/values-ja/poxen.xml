@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mybooks_native_preview_notice">書籍のダウンロード、書誌情報の編集、読書状態の同期に対応しています。</string>
+    <string name="mybooks_native_action_unavailable">この操作はまだ mybooks サーバーに対応していません。</string>
+    <string name="mybooks_server_marks">マーク</string>
+    <string name="mybooks_server_wants">読みたい</string>
+</resources>
