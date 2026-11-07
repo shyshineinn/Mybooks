@@ -64,6 +64,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -100,9 +102,13 @@ import com.huangder.lumibooks.ui.components.ReplacingToast
 import com.huangder.lumibooks.ui.components.LiquidGlassSurface
 import com.huangder.lumibooks.ui.components.InformationCard
 import com.huangder.lumibooks.ui.components.LiquidGlassAlertDialog
+import com.huangder.lumibooks.ui.components.LiquidGlassMenuItem
+import com.huangder.lumibooks.ui.components.LiquidGlassMenuSpec
 import com.huangder.lumibooks.ui.components.LiquidGlassMenuHost
 import com.huangder.lumibooks.ui.components.LiquidGlassTextButton
+import com.huangder.lumibooks.ui.components.LocalLiquidGlassMenuHost
 import com.huangder.lumibooks.ui.components.ProvideLiquidGlassBackdrop
+import com.huangder.lumibooks.ui.components.liquidGlassMenuAnchor
 import com.huangder.lumibooks.ui.home.HomeViewModel
 import com.huangder.lumibooks.ui.theme.AppColors
 import com.huangder.lumibooks.ui.theme.AppRadius
@@ -256,6 +262,7 @@ fun BookDetailsScreen(
     onOpenReader: (String) -> Unit,
     detailsViewModel: BookDetailsViewModel = hiltViewModel(),
     homeViewModel: HomeViewModel = hiltViewModel(),
+    notesViewModel: MyBooksNotesViewModel = hiltViewModel(),
     editViewModel: MyBooksEditViewModel = hiltViewModel()
 ) {
     val details by detailsViewModel.uiState.collectAsState()
@@ -290,10 +297,14 @@ fun BookDetailsScreen(
     }
     LaunchedEffect(myBooksSyncing) {
         if (!myBooksSyncing && MyBooksConfig.isMyBooks(book)) {
-            if (metaState.meta != null && MyBooksConfig.isPoxenServer()) editViewModel.loadMeta(book, forceRefresh = true)
-            else editViewModel.refreshSyncBadge(book.id)
+            editViewModel.refreshSyncBadge(book.id)
         }
     }
+    val notesState by notesViewModel.uiState.collectAsState()
+    LaunchedEffect(book.id, metaState.meta?.hasNotes, metaState.meta?.notesUpdatedAt, metaState.meta?.notesSize) {
+        if (metaState.meta != null) notesViewModel.refresh(book, metaState.meta)
+    }
+    val menuHost = LocalLiquidGlassMenuHost.current
     val selectorScope = rememberCoroutineScope()
     var statusMorphAnchor by remember(book.id) { mutableStateOf<ReadingStatusMorphAnchor?>(null) }
     var statusMorphCloseRequested by remember(book.id) { mutableStateOf(false) }
@@ -303,8 +314,8 @@ fun BookDetailsScreen(
     var locallyUpdatedStatus by remember(book.id) { mutableStateOf<ReadingStatus?>(null) }
     val statusSelectorOpen = statusMorphAnchor != null
     val effectiveReadingStatus = locallyUpdatedStatus
-        ?: metaState.meta?.status?.let { ReadingStatus.fromServerStatus(it) }
         ?: library.serverReadingStatusByBookId[book.id]
+        ?: metaState.meta?.status?.let { ReadingStatus.fromServerStatus(it) }
     LaunchedEffect(library.serverReadingStatusByBookId[book.id]) {
         // 本地结果只做即时回显；同步状态一旦落地就以服务器 override 为准。
         if (locallyUpdatedStatus != null && library.serverReadingStatusByBookId[book.id] != null) {
@@ -330,7 +341,7 @@ fun BookDetailsScreen(
         val token = ++statusUpdateToken
         selectorStatus.value = target
         selectorSaving = true
-        homeViewModel.setReadingStatus(book, target, startNewReading, abandonCurrentReading, effectiveReadingStatus) { success, message ->
+        homeViewModel.setReadingStatus(book, target, startNewReading, abandonCurrentReading) { success, message ->
             if (token != statusUpdateToken) return@setReadingStatus
             if (success) {
                 // Keep the options locked through the feedback beat and the reverse morph.
@@ -350,6 +361,21 @@ fun BookDetailsScreen(
         }
     }
 
+    var notesMenuExpanded by remember { mutableStateOf(false) }
+    var notesMenuBounds by remember { mutableStateOf(Rect.Zero) }
+    var pendingNoteUpload by remember { mutableStateOf<MyBooksPickedNote?>(null) }
+    val notePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) {
+            notesViewModel.pickNote(uri) { picked -> if (picked != null) pendingNoteUpload = picked }
+        }
+    }
+    val notesReadLabel = stringResource(R.string.mybooks_notes_read)
+    val notesSyncReadLabel = stringResource(R.string.mybooks_notes_sync_and_read)
+    val notesUploadLabel = stringResource(
+        if (notesState.serverHas) R.string.mybooks_notes_update else R.string.mybooks_notes_upload
+    )
+    val hasNotesMenu = MyBooksConfig.isMyBooks(book) &&
+        (notesState.localHas || notesState.serverHas || MyBooksConfig.hasWriteToken())
     val downloadState = library.downloadStates[book.id]
     val downloadInProgress = downloadState is BookDownloadState.Downloading
     // 服务器书若没有可读格式，下载必然失败，入口不展示。
@@ -359,6 +385,7 @@ fun BookDetailsScreen(
         true
     }
     val canDownload = book.isCloudOnly && serverHasReadableFile
+    val showMoreMenu = hasNotesMenu || canDownload
     val downloadLabel = stringResource(R.string.download_book_file)
     val downloadProgressLabel = if (downloadInProgress) {
         stringResource(
@@ -380,6 +407,7 @@ fun BookDetailsScreen(
             else -> Unit
         }
     }
+    val canReadLocal = notesState.localHas && (!notesState.serverHas || notesState.upToDate)
     val noFileLabel = stringResource(R.string.server_meta_no_file)
     val heroFormatLabel = remember(book.format, book.isCloudOnly, metaState.meta, noFileLabel) {
         val hasNoReadableFile = MyBooksConfig.isMyBooks(book) &&
@@ -391,8 +419,6 @@ fun BookDetailsScreen(
     val folderName = currentFolderId?.let { id -> folderPath(library.folders, id).joinToString(" / ") { it.name } }
         ?: stringResource(R.string.library_root)
     val tags = library.bookTagLinks.filter { it.bookId == book.id }.mapNotNull { link -> library.tags.firstOrNull { it.id == link.tagId } }
-    val categoryTag = if (metaState.meta != null) metaState.meta?.serverCategory else library.myBooksCategoryByBookId[book.id]
-    val tagNames = (tags.map { it.name } + listOfNotNull(categoryTag)).distinctBy { it.lowercase(java.util.Locale.ROOT) }
     var coverTarget by remember { mutableStateOf<Book?>(null) }
     var pendingCrossStorageMove by remember { mutableStateOf<PendingCrossStorageBookMove?>(null) }
     val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -461,11 +487,96 @@ fun BookDetailsScreen(
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-                        if (canDownload) {
+                        if (showMoreMenu) {
                             LiquidGlassIconButton(
-                                imageVector = AppIcons.CloudArrowDown,
-                                contentDescription = downloadProgressLabel ?: downloadLabel,
-                                onClick = { if (!downloadInProgress) homeViewModel.downloadCloudBook(book) },
+                                imageVector = AppIcons.DotsThreeVertical,
+                                contentDescription = stringResource(R.string.more_options),
+                                onClick = {
+                                    val host = menuHost
+                                    if (notesMenuExpanded) {
+                                        host?.dismiss()
+                                    } else if (host != null && notesMenuBounds != Rect.Zero) {
+                                        notesMenuExpanded = true
+                                        host.show(
+                                            LiquidGlassMenuSpec(
+                                                anchorBounds = notesMenuBounds,
+                                                width = 220.dp,
+                                                onDismiss = { notesMenuExpanded = false },
+                                                items = buildList {
+                                                    if (canDownload) {
+                                                        add(
+                                                            LiquidGlassMenuItem(
+                                                                label = downloadLabel,
+                                                                icon = AppIcons.CloudArrowDown,
+                                                                subtitle = downloadProgressLabel
+                                                            ) {
+                                                                notesMenuExpanded = false
+                                                                if (!downloadInProgress) {
+                                                                    homeViewModel.downloadCloudBook(book)
+                                                                }
+                                                            }
+                                                        )
+                                                    }
+                                                    if (canReadLocal) {
+                                                        add(
+                                                            LiquidGlassMenuItem(
+                                                                label = notesReadLabel,
+                                                                icon = AppIcons.BookOpenText,
+                                                                dividerBefore = canDownload
+                                                            ) {
+                                                                notesMenuExpanded = false
+                                                                notesViewModel.readLocal(book.id) {
+                                                                    MyBooksNotesActivity.start(context, book.id, book.title)
+                                                                }
+                                                            }
+                                                        )
+                                                    } else if (notesState.serverHas) {
+                                                        add(
+                                                            LiquidGlassMenuItem(
+                                                                label = notesSyncReadLabel,
+                                                                icon = AppIcons.DownloadSimple,
+                                                                dividerBefore = canDownload
+                                                            ) {
+                                                                notesMenuExpanded = false
+                                                                notesViewModel.syncAndRead(book.id) { fallback ->
+                                                                    if (fallback) {
+                                                                        toast.show(
+                                                                            context.getString(
+                                                                                R.string.mybooks_notes_synced_fallback
+                                                                            )
+                                                                        )
+                                                                    }
+                                                                    MyBooksNotesActivity.start(context, book.id, book.title)
+                                                                }
+                                                            }
+                                                        )
+                                                    }
+                                                    if (MyBooksConfig.hasWriteToken()) {
+                                                        add(
+                                                            LiquidGlassMenuItem(
+                                                                label = notesUploadLabel,
+                                                                icon = AppIcons.UploadSimple,
+                                                                dividerBefore = canDownload || canReadLocal || notesState.serverHas
+                                                            ) {
+                                                                notesMenuExpanded = false
+                                                                notePicker.launch(
+                                                                    arrayOf(
+                                                                        "text/markdown",
+                                                                        "text/plain",
+                                                                        "application/octet-stream"
+                                                                    )
+                                                                )
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            )
+                                        )
+                                    }
+                                },
+                                modifier = Modifier
+                                    .liquidGlassMenuAnchor()
+                                    .onGloballyPositioned { notesMenuBounds = it.boundsInRoot() },
                                 size = 44.dp,
                                 iconSize = 20.dp
                             )
@@ -499,8 +610,9 @@ fun BookDetailsScreen(
                             ContentInfoCards(
                                 book = book,
                                 folder = folderName,
-                                tags = tagNames.joinToString(),
+                                tags = tags.joinToString { it.name },
                                 metaState = metaState,
+                                notesState = if (MyBooksConfig.isMyBooks(book)) notesState else null,
                                 syncBadge = if (MyBooksConfig.isMyBooks(book)) syncBadge else null,
                                 summaryExpanded = summaryExpanded,
                                 onSummaryExpandedChange = { summaryExpanded = it },
@@ -562,7 +674,6 @@ fun BookDetailsScreen(
                     onStartNextReading = { selectReadingStatus(anchor, ReadingStatus.READING, startNewReading = true) },
                     onAbandonReading = { selectReadingStatus(anchor, readingStatusAfterAbandon(metaState.meta), abandonCurrentReading = true) },
                     onSelect = { target -> selectReadingStatus(anchor, target) },
-                    showWantToRead = MyBooksConfig.isMyBooks(book),
                     onDismiss = {
                         if (!statusMorphCloseRequested) statusMorphCloseRequested = true
                     },
@@ -582,6 +693,67 @@ fun BookDetailsScreen(
             book = book,
             meta = metaState.meta,
             onDismiss = { editingMyBooks = false }
+        )
+    }
+    pendingNoteUpload?.let { note ->
+        val replacing = notesState.serverHas
+        LiquidGlassAlertDialog(
+            onDismissRequest = { if (!notesState.uploading) pendingNoteUpload = null },
+            title = {
+                Text(
+                    stringResource(
+                        if (replacing) R.string.mybooks_notes_replace_title
+                        else R.string.mybooks_notes_upload_confirm_title
+                    )
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.mybooks_notes_new_file,
+                            note.displayName,
+                            formatNoteFileSize(note.size)
+                        )
+                    )
+                    val existing = notesState.serverUpdatedAt
+                    if (replacing && !existing.isNullOrBlank()) {
+                        Text(
+                            stringResource(R.string.mybooks_notes_existing_hint, formatNoteDate(existing)),
+                            color = AppColors.TextSecondary,
+                            fontSize = AppType.Caption
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                LiquidGlassTextButton(
+                    text = if (replacing) {
+                        stringResource(R.string.mybooks_notes_replace_confirm)
+                    } else {
+                        stringResource(R.string.mybooks_notes_upload_confirm)
+                    },
+                    enabled = !notesState.uploading,
+                    tintedColor = AppColors.Accent,
+                    onClick = {
+                        notesViewModel.upload(
+                            bookId = book.id,
+                            note = note,
+                            expectedUpdatedAt = notesState.serverUpdatedAt
+                        ) { success, message ->
+                            toast.show(message)
+                            if (success) pendingNoteUpload = null
+                        }
+                    }
+                )
+            },
+            dismissButton = {
+                LiquidGlassTextButton(
+                    text = stringResource(R.string.cancel),
+                    enabled = !notesState.uploading,
+                    onClick = { pendingNoteUpload = null }
+                )
+            }
         )
     }
     if (tagsOpen) BookTagBottomSheet(library.tags, library.bookTagLinks.filter { it.bookId == book.id }.map { it.tagId }.toSet(), { tagsOpen = false }, { tag, checked -> homeViewModel.setBookTag(book.id, tag.id, checked) }, { name, parent -> homeViewModel.createAndAssignTag(book.id, name, parent) }, { tag, children -> homeViewModel.deleteTag(tag.id, children) })
@@ -790,6 +962,7 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
     folder: String,
     tags: String,
     metaState: MyBooksMetaUiState,
+    notesState: MyBooksNotesUiState?,
     syncBadge: MyBooksSyncBadge?,
     summaryExpanded: Boolean,
     onSummaryExpandedChange: (Boolean) -> Unit,
@@ -887,7 +1060,8 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
             )
         }
         val showRetry = serverBook && meta == null && !metaState.loading
-        val showSync = serverBook && ((syncBadge?.pendingCount ?: 0) > 0 || syncBadge?.lastError != null)
+        val showSync = serverBook && (notesState != null ||
+            (syncBadge?.pendingCount ?: 0) > 0 || syncBadge?.lastError != null)
         if (showRetry || showSync) {
             InformationCard(
                 title = stringResource(R.string.mybooks_sync_state),
@@ -895,7 +1069,7 @@ internal fun BookDetailsCover(book: Book, modifier: Modifier, onCover: () -> Uni
                 verticalArrangement = Arrangement.Top
             ) {
                 if (showRetry) MetaRetryRow(metaState.retry)
-                MyBooksSyncRows(syncBadge)
+                MyBooksSyncRows(notesState, syncBadge)
             }
         }
     }
@@ -1205,4 +1379,21 @@ private fun compactReadingDuration(durationMillis: Long, unitColor: Color): Anno
             }
         }
     }
+}
+
+private fun formatNoteFileSize(bytes: Long): String {
+    if (bytes <= 0L) return "0 KB"
+    return if (bytes >= 1024L * 1024L) {
+        String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    } else {
+        String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
+    }
+}
+
+private fun formatNoteDate(raw: String): String {
+    return runCatching {
+        java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+            .withZone(java.time.ZoneId.systemDefault())
+            .format(java.time.Instant.parse(raw))
+    }.getOrElse { raw.take(16) }
 }

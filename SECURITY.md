@@ -1,7 +1,7 @@
 # 安全报告
 
-此文件适用于 shyshineinn/mybooks-android 改版，fork 服务端的安全说明位于 mybooks-server 独立仓库。
-请使用 [私密报告入口](https://github.com/shyshineinn/mybooks-android/security/advisories/new)。
+此文件适用于 shyshineinn/Mybooks 改版，自建后端的安全说明位于其独立仓库。
+请使用 [私密报告入口](https://github.com/shyshineinn/Mybooks/security/advisories/new)。
 仓库所有者需要先启用 Private vulnerability reporting；入口不可用时，
 仅提交请求私下联系方式的 Issue，不要公开漏洞细节或真实数据。
 

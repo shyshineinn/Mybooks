@@ -20,9 +20,6 @@ abstract class FolderDao {
     @Query("SELECT * FROM book_folder_cross_refs")
     abstract fun getAllBookFolderLinks(): Flow<List<BookFolderCrossRefEntity>>
 
-    @Query("SELECT folderId FROM book_folder_cross_refs WHERE bookId = :bookId")
-    abstract suspend fun getBookFolderId(bookId: String): String?
-
     @Query("SELECT * FROM folders WHERE id = :folderId LIMIT 1")
     abstract suspend fun getFolderById(folderId: String): FolderEntity?
 

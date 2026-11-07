@@ -18,7 +18,6 @@ internal data class MyBooksReadToggle(
 /** 三态分类对应的服务端 status 值。 */
 internal fun ReadingStatus.toServerStatus(): String = when (this) {
     ReadingStatus.WISH -> "wish"
-    ReadingStatus.WANT_TO_READ -> "want_to_read"
     ReadingStatus.READING -> "reading"
     ReadingStatus.DONE -> "done"
 }
@@ -43,8 +42,6 @@ internal object MyBooksReadStatus {
         return when (target) {
             ReadingStatus.WISH ->
                 MyBooksReadToggle(status = "wish", logs = logs)
-            ReadingStatus.WANT_TO_READ ->
-                MyBooksReadToggle(status = "want_to_read", logs = logs)
             ReadingStatus.READING ->
                 MyBooksReadToggle(status = "reading", logs = if (logs.isEmpty()) listOf(MyBooksReadLog(start = today)) else logs)
             ReadingStatus.DONE -> {

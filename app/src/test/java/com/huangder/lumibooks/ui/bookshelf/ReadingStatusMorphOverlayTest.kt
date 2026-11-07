@@ -59,7 +59,6 @@ class ReadingStatusMorphOverlayTest {
 
     private fun statusLabel(status: ReadingStatus): String = when (status) {
         ReadingStatus.WISH -> "Wish"
-        ReadingStatus.WANT_TO_READ -> "Want to read"
         ReadingStatus.READING -> "Reading"
         ReadingStatus.DONE -> "Read"
     }
@@ -181,32 +180,6 @@ class ReadingStatusMorphOverlayTest {
     @Test
     fun `reduced motion still opens and closes the selector at the tap`() =
         runScenario(theme = "lumi", motionEnabled = false)
-
-    @Test
-    fun wantToReadIsOneOfFourExclusiveChoices() {
-        val choice = mutableStateOf(ReadingStatus.WISH)
-        compose.setContent {
-            CompositionLocalProvider(LocalMotionEnabled provides false) {
-                Box(Modifier.fillMaxSize()) {
-                    ReadingStatusMorphOverlay(
-                        anchor = ReadingStatusMorphAnchor(Rect(20f, 300f, 600f, 348f), Offset(310f, 324f), ReadingStatus.WISH),
-                        selected = choice.value,
-                        saving = false,
-                        closeRequested = false,
-                        onSelect = { choice.value = it },
-                        onDismiss = {},
-                        onFinished = {},
-                        showWantToRead = true
-                    )
-                }
-            }
-        }
-        val wanted = compose.onNodeWithTag("reading-status-option-want_to_read")
-        val unread = compose.onNodeWithTag("reading-status-option-wish")
-        wanted.assertIsDisplayed().assertIsNotSelected().performClick().assertIsSelected()
-        unread.assertIsNotSelected().performClick().assertIsSelected()
-        wanted.assertIsNotSelected()
-    }
 
     @Test
     @Config(qualifiers = "zh-rCN-w640dp-h900dp-mdpi")

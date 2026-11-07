@@ -253,7 +253,8 @@ internal fun ColumnScope.EditSheetContent(
 ) {
     var moreExpanded by rememberSaveable { mutableStateOf(false) }
     val advancedHasErrors = state.fieldErrors.keys.any { key ->
-        key == "summary" || key.startsWith("identifier.")
+        key == "summary" || key.startsWith("identifier.") ||
+            key.startsWith("custom.")
     }
     LaunchedEffect(advancedHasErrors) {
         if (advancedHasErrors) moreExpanded = true
@@ -339,6 +340,10 @@ internal fun ColumnScope.EditSheetContent(
                 SummarySection(state, viewModel)
                 Spacer(Modifier.height(24.dp))
                 IdentifiersSection(state, viewModel)
+                if (state.customColumns.isNotEmpty()) {
+                    Spacer(Modifier.height(24.dp))
+                    CustomFieldsSection(state, viewModel)
+                }
             }
             state.error?.let { error ->
                 Text(
@@ -761,6 +766,140 @@ private fun IdentifiersSection(state: MyBooksEditUiState, viewModel: MyBooksEdit
 }
 
 @OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CustomFieldsSection(state: MyBooksEditUiState, viewModel: MyBooksEditActions) {
+    SectionHeader(stringResource(R.string.mybooks_edit_section_custom))
+    Column(verticalArrangement = Arrangement.spacedBy(AppSpace.md)) {
+        state.customColumns.forEach { column ->
+            val value = state.customValues[column.label].orEmpty()
+            val error = state.fieldErrors[com.huangder.lumibooks.data.sync.MyBooksConfig.customOverrideKey(column.label)]
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    text = column.name,
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = AppColors.TextSecondary,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                when (column.datatype) {
+                    "bool" -> {
+                        val index = when (value) {
+                            "1" -> 1
+                            "0" -> 2
+                            else -> 0
+                        }
+                        TwoOrThreeSegment(
+                            labels = listOf(
+                                stringResource(R.string.mybooks_edit_custom_unset),
+                                stringResource(R.string.mybooks_edit_custom_yes),
+                                stringResource(R.string.mybooks_edit_custom_no)
+                            ),
+                            selected = index,
+                            enabled = !state.saving
+                        ) { selected ->
+                            viewModel.updateCustom(
+                                column.label,
+                                when (selected) {
+                                    1 -> "1"
+                                    2 -> "0"
+                                    else -> ""
+                                }
+                            )
+                        }
+                    }
+                    "enumeration" -> {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(AppSpace.sm),
+                            verticalArrangement = Arrangement.spacedBy(AppSpace.sm)
+                        ) {
+                            SelectionChip(
+                                text = stringResource(R.string.mybooks_edit_custom_unset),
+                                selected = value.isBlank(),
+                                enabled = !state.saving
+                            ) { viewModel.updateCustom(column.label, "") }
+                            column.options.forEach { option ->
+                                SelectionChip(
+                                    text = option,
+                                    selected = value == option,
+                                    enabled = !state.saving
+                                ) { viewModel.updateCustom(column.label, option) }
+                            }
+                        }
+                    }
+                    "rating" -> {
+                        val rating = value.toFloatOrNull() ?: 0f
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f).alpha(if (state.saving) 0.6f else 1f)) {
+                                PillSlider(
+                                    value = rating,
+                                    onValueChange = {
+                                        if (!state.saving) {
+                                            viewModel.updateCustom(column.label, String.format(Locale.US, "%.1f", it))
+                                        }
+                                    },
+                                    valueRange = 0f..10f,
+                                    step = 0.1f,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            Spacer(Modifier.width(AppSpace.sm))
+                            Text(
+                                text = if (rating <= 0f) {
+                                    stringResource(R.string.mybooks_edit_not_rated)
+                                } else {
+                                    stringResource(R.string.mybooks_edit_rating_value, String.format(Locale.US, "%.1f", rating))
+                                },
+                                fontSize = AppType.Caption,
+                                color = AppColors.TextSecondary
+                            )
+                        }
+                    }
+                    "comments" -> EditorTextField(
+                        value = value,
+                        onValueChange = { viewModel.updateCustom(column.label, it) },
+                        singleLine = false,
+                        minHeight = 96.dp,
+                        enabled = !state.saving
+                    )
+                    else -> EditorTextField(
+                        value = value,
+                        onValueChange = { viewModel.updateCustom(column.label, it) },
+                        keyboardType = when (column.datatype) {
+                            "int" -> KeyboardType.Number
+                            "float" -> KeyboardType.Decimal
+                            "date" -> KeyboardType.Ascii
+                            else -> KeyboardType.Text
+                        },
+                        placeholder = if (column.datatype == "date") {
+                            stringResource(R.string.mybooks_edit_date_placeholder)
+                        } else {
+                            ""
+                        },
+                        enabled = !state.saving
+                    )
+                }
+                if (column.multiple && column.datatype == "text") {
+                    Text(
+                        text = stringResource(R.string.mybooks_edit_custom_multiple_hint),
+                        fontSize = AppType.Caption,
+                        color = AppColors.TextSecondary,
+                        modifier = Modifier.padding(top = AppSpace.xs)
+                    )
+                }
+                if (error != null) {
+                    Text(
+                        text = error,
+                        fontSize = AppType.Caption,
+                        color = errorColor(),
+                        modifier = Modifier.padding(top = AppSpace.xs)
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SectionHeader(text: String) {
     Text(

@@ -27,6 +27,12 @@ internal fun buildMyBooksCreatePayload(state: MyBooksEditUiState): JSONObject {
     }
     payload.put("identifiers", identifiers)
     payload.put("tags", JSONArray(state.tags))
+    val custom = JSONObject()
+    state.customColumns.forEach { column ->
+        val value = state.customValues[column.label].orEmpty()
+        if (value.isNotBlank()) custom.put(column.label, customToServerValue(column, value))
+    }
+    payload.put("custom", custom)
     val logs = JSONArray()
     state.readLogs.forEach { row ->
         val start = row.start.trim()
@@ -37,6 +43,20 @@ internal fun buildMyBooksCreatePayload(state: MyBooksEditUiState): JSONObject {
     }
     payload.put("read_logs", logs)
     return payload
+}
+
+internal fun customToServerValue(column: MyBooksCustomColumn, draft: String): Any {
+    val text = draft.trim()
+    return when {
+        column.multiple -> JSONArray(
+            text.split('、', ',', '，', ';', '；').map { it.trim() }.filter { it.isNotEmpty() }
+        )
+        column.datatype == "int" -> if (text.isEmpty()) "" else text.toLongOrNull() ?: 0L
+        column.datatype == "float" || column.datatype == "rating" ->
+            if (text.isEmpty()) "" else text.toDoubleOrNull() ?: 0.0
+        column.datatype == "bool" -> if (text.isEmpty()) "" else text == "1"
+        else -> text
+    }
 }
 
 private fun parseDoubanTags(raw: Any?): List<String> {

@@ -83,7 +83,7 @@ fun MyBooksSettingsDetail(
             SyncSectionCard {
                 SyncModeSelector(if (preferences.automatic) "auto" else "manual", viewModel::setSyncMode)
                 androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(1.dp).background(AppColors.Divider))
-                SyncContentSelector(preferences.content, viewModel::setSyncContent, portableOnly = MyBooksConfig.isPoxenServer())
+                SyncContentSelector(preferences.content, viewModel::setSyncContent)
             }
         }
         if (enabled) {

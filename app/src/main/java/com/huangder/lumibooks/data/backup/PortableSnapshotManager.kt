@@ -45,7 +45,7 @@ class PortableSnapshotManager @Inject constructor(
     private val externalTtsTokenStore: ExternalTtsTokenStore,
     private val translationTokenStore: com.huangder.lumibooks.translation.TranslationTokenStore
 ) {
-    suspend fun capture(includeBookFiles: Boolean = true, includeBookCovers: Boolean = true): PortableSnapshotBundle = withContext(Dispatchers.IO) {
+    suspend fun capture(includeBookFiles: Boolean = true): PortableSnapshotBundle = withContext(Dispatchers.IO) {
         val deviceId = syncIdentityStore.deviceId()
         val bookDao = database.bookDao()
         val syncDao = database.syncStateDao()
@@ -94,7 +94,7 @@ class PortableSnapshotManager @Inject constructor(
                 ) { if (book.format == "MARKDOWN") com.huangder.lumibooks.util.markdown.MarkdownSnapshotStore.packageFile(File(book.filePath)).inputStream().buffered()
                     else BookFileAccess.openInputStream(context, book.filePath) }
             } else null
-            val coverId = if (includeBookCovers) book.coverPath?.let(::File)?.let { addFile("book_cover", book.id, it) } else null
+            val coverId = book.coverPath?.let(::File)?.let { addFile("book_cover", book.id, it) }
             book.toPortable(bodyId, coverId)
         }
 

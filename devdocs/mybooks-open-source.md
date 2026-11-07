@@ -1,8 +1,6 @@
-> 历史接入说明：原自创后端已停止支持。当前连接和构建方式请见 [mybooks 服务端连接](mybooks-server-connection.md)。
-
 # Mybooks 安卓改版：部署、构建与发布
 
-本仓库：[shyshineinn/mybooks-android](https://github.com/shyshineinn/mybooks-android)。
+本仓库：[shyshineinn/Mybooks](https://github.com/shyshineinn/Mybooks)。
 上游：[Huangder/Lumi_Books](https://github.com/huangder/Lumi_Books)。
 后端：[shyshineinn/my-books](https://github.com/shyshineinn/my-books)。
 
@@ -27,7 +25,7 @@
 - 在 Android Studio 配置 SDK，或复制 local.properties.example 为 local.properties 并填自己的路径。
 
 ```sh
-git clone https://github.com/shyshineinn/mybooks-android.git
+git clone https://github.com/shyshineinn/Mybooks.git
 cd Mybooks
 ./gradlew -PabiFilter=arm64-v8a assembleDebug
 ./gradlew -PabiFilter=arm64-v8a assembleRelease
@@ -45,7 +43,7 @@ MYBOOKS_KEYSTORE_PASSWORD、MYBOOKS_KEY_ALIAS、MYBOOKS_KEY_PASSWORD。
 ```sh
 node tools/check-public.mjs
 node tools/check-public.mjs --history
-./gradlew -PabiFilter=arm64-v8a testDebugUnitTest --tests 'top.helloac.mybooks.data.sync.MyBooks*' --tests 'top.helloac.mybooks.data.local.database.*' assembleDebug assembleDebugAndroidTest
+./gradlew -PabiFilter=arm64-v8a testDebugUnitTest --tests 'com.huangder.lumibooks.data.sync.MyBooks*' --tests 'com.huangder.lumibooks.data.local.database.*' assembleDebug assembleDebugAndroidTest
 ```
 
 公开检查仅覆盖部分私密文件名和令牌/私钥模式；忽略二进制及大文件内容，不能替代人工审查。

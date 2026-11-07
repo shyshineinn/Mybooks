@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="mybooks_native_preview_notice">支援下載書庫、編輯書目及同步閱讀狀態。</string>
-    <string name="mybooks_native_action_unavailable">mybooks 伺服器尚未支援此操作。</string>
-    <string name="mybooks_server_marks">標記</string>
-    <string name="mybooks_server_wants">想讀</string>
-</resources>

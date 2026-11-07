@@ -24,8 +24,7 @@ data class MyBooksMergeResult(
     val tagsDirty: Boolean,
     val coverAction: MyBooksCoverAction,
     val remoteCoverUrl: String?,
-    val conflicts: List<String>,
-    val localDirectory: String? = null
+    val conflicts: List<String>
 ) {
     val hasLocalChanges: Boolean
         get() = patch.length() > 0 || tagsDirty || coverAction == MyBooksCoverAction.UPLOAD_LOCAL
@@ -44,7 +43,7 @@ object MyBooksMerge {
     private val scalarFields = listOf(
         "title", "author", "translators", "status", "summary", "rating",
         "series", "series_index", "publisher", "pub_year",
-        "isbn", "douban_id", "favorite", "folder"
+        "isbn", "douban_id", "notes_url"
     )
 
     fun merge(
@@ -76,18 +75,17 @@ object MyBooksMerge {
                 // 没有 override 时本地留空按基线处理，避免把空值当成修改推给服务器。
                 "title" -> if (overrides.has(field)) overrides.opt(field) else book.title.ifBlank { baseValue }
                 "author" -> if (overrides.has(field)) overrides.opt(field) else book.author.ifBlank { baseValue }
+                "notes_url" -> baseValue // App 不编辑心得链接
                 else -> if (overrides.has(field)) normalizeScalar(field, overrides.opt(field)) else baseValue
             }
-            fun same(a: Any?, b: Any?) = if (field == "folder" && a is String && b is String) a.equals(b, ignoreCase = true)
-                else valueEquals(a, b)
-            val localChanged = !same(localValue, baseValue)
-            val remoteChanged = !same(remoteValue, baseValue)
+            val localChanged = !valueEquals(localValue, baseValue)
+            val remoteChanged = !valueEquals(remoteValue, baseValue)
             if (!localChanged) {
                 if (overrides.has(field)) drop += field
                 continue
             }
             if (!remoteChanged) {
-                if (!same(localValue, remoteValue)) {
+                if (!valueEquals(localValue, remoteValue)) {
                     patch.put(field, localValue)
                     localWon += field
                 } else {
@@ -95,7 +93,7 @@ object MyBooksMerge {
                 }
                 continue
             }
-            if (same(localValue, remoteValue)) {
+            if (valueEquals(localValue, remoteValue)) {
                 drop += field
                 continue
             }
@@ -104,13 +102,16 @@ object MyBooksMerge {
         }
 
         mergeIdentifiers(base, remote, overrides, editedAt, remoteEpoch, patch, drop, conflicts)
+        mergeCustom(base, remote, overrides, editedAt, remoteEpoch, patch, drop, conflicts)
         val readLogsOverride = mergeReadLogs(base, remote, overrides, editedAt, remoteEpoch, patch, drop, conflicts)
 
         val remoteTags = parseRemoteTags(remote.opt("tags"))
         val mergedTags = mergeTags(baseTags, localTags, remoteTags)
         val tagsDirty = !tagSetEquals(mergedTags, remoteTags)
 
-        val remoteCoverChanged = myBooksCoverChanged(base, remote)
+        val baseCover = base.optTextOrNull("cover")
+        val remoteCover = remote.optTextOrNull("cover")
+        val remoteCoverChanged = baseCover != remoteCover
         val coverAction = when {
             coverDirty && !remoteCoverChanged -> MyBooksCoverAction.UPLOAD_LOCAL
             coverDirty && remoteCoverChanged -> {
@@ -131,7 +132,7 @@ object MyBooksMerge {
             mergedTags = mergedTags,
             tagsDirty = tagsDirty,
             coverAction = coverAction,
-            remoteCoverUrl = remote.optTextOrNull("cover"),
+            remoteCoverUrl = remoteCover,
             conflicts = conflicts
         )
     }
@@ -182,6 +183,51 @@ object MyBooksMerge {
         if (patchIds.length() > 0) patch.put("identifiers", patchIds)
     }
 
+    private fun mergeCustom(
+        base: JSONObject,
+        remote: JSONObject,
+        overrides: JSONObject,
+        editedAt: JSONObject,
+        remoteEpoch: Long,
+        patch: JSONObject,
+        drop: MutableSet<String>,
+        conflicts: MutableList<String>
+    ) {
+        val baseMap = base.optJSONObject("custom").orEmptyAnyMap()
+        val remoteMap = remote.optJSONObject("custom").orEmptyAnyMap()
+        val labels = LinkedHashSet<String>()
+        labels += baseMap.keys
+        labels += remoteMap.keys
+        overrides.keys().forEach { key ->
+            if (key.startsWith("custom.")) labels += key.removePrefix("custom.")
+        }
+        val patchCustom = JSONObject()
+        for (label in labels) {
+            val key = MyBooksConfig.customOverrideKey(label)
+            val baseValue = baseMap[label]
+            val remoteValue = remoteMap[label]
+            val localValue = if (overrides.has(key)) overrides.opt(key) else baseValue
+            val localChanged = !customValueEquals(localValue, baseValue)
+            val remoteChanged = !customValueEquals(remoteValue, baseValue)
+            if (!localChanged) {
+                if (overrides.has(key)) drop += key
+                continue
+            }
+            if (!remoteChanged) {
+                if (!customValueEquals(localValue, remoteValue)) patchCustom.put(label, localValue ?: "")
+                else drop += key
+                continue
+            }
+            if (customValueEquals(localValue, remoteValue)) {
+                drop += key
+                continue
+            }
+            conflicts += key
+        }
+        if (patchCustom.length() > 0) patch.put("custom", patchCustom)
+    }
+
+    /** 返回 null 表示没有有效 override;否则返回本地阅读记录是否已写入 patch。 */
     private fun mergeReadLogs(
         base: JSONObject,
         remote: JSONObject,
@@ -233,9 +279,19 @@ object MyBooksMerge {
         }
     }
 
+    private fun JSONObject?.orEmptyAnyMap(): Map<String, Any?> {
+        val obj = this ?: return emptyMap()
+        return buildMap {
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = obj.opt(key)
+                if (value != null && value != JSONObject.NULL) put(key, value)
+            }
+        }
+    }
+
     private fun normalizeScalar(field: String, value: Any?): Any? = when (field) {
-        "favorite" -> value == true
-        "folder" -> (value as? String).orEmpty().trim()
         "translators" -> JSONArray(parseMyBooksTranslators(value))
         "title" -> (value as? String).orEmpty().ifBlank { "未命名" }
         "author" -> normalizeRemoteAuthor(value as? String)
@@ -251,6 +307,17 @@ object MyBooksMerge {
         if (a is Number && b is Number) return a.toDouble() == b.toDouble()
         if (a is JSONArray && b is JSONArray) return a.toString() == b.toString()
         if (a is JSONObject && b is JSONObject) return a.toString() == b.toString()
+        return a.toString() == b.toString()
+    }
+
+    private fun customValueEquals(a: Any?, b: Any?): Boolean {
+        if (a == null || a == JSONObject.NULL) return b == null || b == JSONObject.NULL
+        if (b == null || b == JSONObject.NULL) return false
+        if (a is JSONArray && b is JSONArray) {
+            val left = (0 until a.length()).mapNotNull { a.optTextAt(it) }.sorted()
+            val right = (0 until b.length()).mapNotNull { b.optTextAt(it) }.sorted()
+            return left == right
+        }
         return a.toString() == b.toString()
     }
 
@@ -301,10 +368,3 @@ object MyBooksMerge {
     private fun tagSetEquals(a: List<String>, b: List<String>): Boolean =
         a.map { it.lowercase(Locale.ROOT) }.toSet() == b.map { it.lowercase(Locale.ROOT) }.toSet()
 }
-
-internal fun myBooksCoverChanged(base: JSONObject, remote: JSONObject): Boolean =
-    if (base.has("cover_version") && remote.has("cover_version")) {
-        base.getString("cover_version") != remote.getString("cover_version")
-    } else {
-        base.optTextOrNull("cover")?.substringBefore("&v=") != remote.optTextOrNull("cover")?.substringBefore("&v=")
-    }

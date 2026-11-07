@@ -21,7 +21,6 @@ internal data class ServerDetailRow(
 internal fun statusDisplay(status: String): String =
     when (ReadingStatus.fromServerStatus(status)) {
         ReadingStatus.WISH -> stringResource(R.string.reading_status_wish)
-        ReadingStatus.WANT_TO_READ -> stringResource(R.string.mybooks_server_wants)
         ReadingStatus.READING -> stringResource(R.string.reading_status_reading)
         ReadingStatus.DONE -> stringResource(R.string.reading_status_done)
         null -> status.trim()
@@ -88,6 +87,28 @@ internal fun identifierRows(
     return rows
 }
 
+private val reservedCustomLabels = setOf(
+    "书名", "作者", "文件夹", "标签", "简介", "阅读状态", "评分", "系列", "出版",
+    "isbn", "笔记链接", "其他识别号", "阅读记录", "阅读日期", "阅读次数",
+    "电子书文件", "文件名", "格式", "存储状态", "导入时间", "最后阅读", "文件位置"
+)
+
+internal fun customRows(
+    meta: ServerBookMeta,
+    reserved: Set<String> = emptySet(),
+    labelFor: (String) -> String = { it }
+): List<ServerDetailRow> {
+    val seen = (reservedCustomLabels + reserved)
+        .mapTo(HashSet()) { it.trim().lowercase(Locale.ROOT) }
+    return meta.customDisplay.mapNotNull { (rawLabel, rawValue) ->
+        val label = labelFor(rawLabel.trim())
+        val value = rawValue.trim()
+        if (label.isEmpty() || value.isEmpty()) return@mapNotNull null
+        if (!seen.add(label.lowercase(Locale.ROOT))) return@mapNotNull null
+        ServerDetailRow(label, value)
+    }
+}
+
 /**
  * 内容卡中的元数据行（简介单独渲染，阅读记录和文件行由各自的区块处理）。
  * [statusText] 传入详情页当前有效状态（含本地 override），避免等待缓存刷新。
@@ -112,9 +133,6 @@ internal fun buildServerDetailRows(
     (statusText ?: statusDisplay(meta.status)).takeIf { it.isNotBlank() }?.let {
         rows += ServerDetailRow(stringResource(R.string.server_meta_status), it, isStatus = true)
     }
-    if (meta.serverFavorite) {
-        rows += ServerDetailRow(stringResource(R.string.mybooks_server_marks), stringResource(R.string.favorite))
-    }
     ratingDisplay(meta.rating)?.let {
         rows += ServerDetailRow(stringResource(R.string.server_meta_rating), it)
     }
@@ -126,6 +144,25 @@ internal fun buildServerDetailRows(
     }
     isbnRow(meta)?.let { rows += it }
     rows += identifierRows(meta, labelFor)
+    val reserved = buildSet {
+        rows.forEach { add(it.label) }
+        listOf(
+            R.string.server_meta_status,
+            R.string.server_meta_rating,
+            R.string.server_meta_series,
+            R.string.server_meta_publication,
+            R.string.server_meta_summary,
+            R.string.server_meta_read_logs,
+            R.string.server_meta_read_date,
+            R.string.server_meta_read_count,
+            R.string.server_meta_file
+        ).forEach { add(stringResource(it)) }
+        meta.identifiers.forEach { identifier ->
+            identifier.label?.takeIf { it.isNotBlank() }?.let(::add)
+            identifier.type?.takeIf { it.isNotBlank() }?.let(::add)
+        }
+    }
+    rows += customRows(meta, reserved, labelFor)
     return rows
 }
 

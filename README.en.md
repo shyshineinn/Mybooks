@@ -1,4 +1,5 @@
-# mybooks Android
+# My books Android
+
 An Android reader based on Lumi, with local reading, WebDAV and a self-hosted My books library.
 
 [中文](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
@@ -8,14 +9,14 @@ An Android reader based on Lumi, with local reading, WebDAV and a self-hosted My
 - EPUB, PDF, TXT, MOBI and CBZ reading and library management.
 - Highlights, notes, bookmarks, text-to-speech and reading statistics.
 - WebDAV sync, local backup and restore.
-- Native mybooks-server login, catalog browsing, downloads, book metadata editing and reading status sync.
+- Self-hosted library login, book metadata sync and conflict handling.
 
 ## Use and development
 
 Get APKs from this repository's Releases and configure your own server.
-[Setup and build guide](devdocs/mybooks-server-connection.md) · [Contributing](CONTRIBUTING.md)
+[Setup and build guide](devdocs/mybooks-open-source.md) · [Sync protocol](devdocs/mybooks-sync-protocol.md) · [Contributing](CONTRIBUTING.md)
 
-Editing metadata requires server edit permission. Book uploads, reading positions, notes, categories and settings still need integration.
+The self-hosted backend does not yet sync reading positions, bookmarks or annotations. WebDAV sync is separate.
 
 ## Credits and license
 

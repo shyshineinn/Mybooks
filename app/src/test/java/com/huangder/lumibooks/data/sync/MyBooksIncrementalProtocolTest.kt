@@ -27,4 +27,15 @@ class MyBooksIncrementalProtocolTest {
             catch (_: IllegalStateException) { }
         }
     }
+    @Test fun anExpiredCursorRetriesACompleteViewInsteadOfDroppingLocalData() = runBlocking {
+        val server = MockWebServer().apply { start() }
+        try {
+            server.enqueue(MockResponse().setResponseCode(410).setBody(JSONObject().put("code", "CURSOR_RESET").toString()))
+            server.enqueue(MockResponse().setBody(snapshot().put("complete", true).toString()))
+            val client = MyBooksApiClient(serverUrlProvider = { server.url("/").toString().trimEnd('/') })
+            assertTrue(client.fetchSyncSnapshot("expired").isFull)
+            assertEquals("/api/sync/changes?cursor=expired", server.takeRequest().path)
+            assertEquals("/api/sync/changes", server.takeRequest().path)
+        } finally { server.shutdown() }
+    }
 }

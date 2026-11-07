@@ -12,7 +12,7 @@ UI 必须遵循 [现行 UI 与动效规范](devdocs/lumi-ui-motion-design-system
 
 ```sh
 node tools/check-public.mjs
-./gradlew -PabiFilter=arm64-v8a testDebugUnitTest --tests 'top.helloac.mybooks.data.sync.MyBooks*' --tests 'top.helloac.mybooks.data.local.database.*' assembleDebug assembleDebugAndroidTest
+./gradlew -PabiFilter=arm64-v8a testDebugUnitTest --tests 'com.huangder.lumibooks.data.sync.MyBooks*' --tests 'com.huangder.lumibooks.data.local.database.*' assembleDebug assembleDebugAndroidTest
 ```
 
 这是同步及数据库迁移的定向回归，不代表整个单元测试套件通过。

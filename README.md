@@ -1,6 +1,6 @@
-# mybooks Android
+# Mybooks Android
 
-基于 Lumi 的安卓阅读客户端，支持本地阅读、WebDAV 与 fork 的 mybooks 服务端。
+基于 Lumi 的安卓阅读客户端，支持本地阅读、WebDAV 与自部署 Mybooks 书库。
 
 [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
@@ -9,14 +9,14 @@
 - EPUB、PDF、TXT、MOBI、CBZ 阅读及书架管理。
 - 高亮、笔记、书签、听书与阅读统计。
 - WebDAV 同步、本地备份与恢复。
-- mybooks 服务端原生登录、书库浏览、正文下载、书目编辑和阅读状态同步。
+- 自建书库登录、书目同步与冲突处理。
 
 ## 使用与开发
 
 安装包在本仓库 Releases 获取，服务器由使用者自行配置。
-[连接与构建指南](devdocs/mybooks-server-connection.md) · [参与贡献](CONTRIBUTING.md)
+[连接与构建指南](devdocs/mybooks-open-source.md) · [同步协议](devdocs/mybooks-sync-protocol.md) · [参与贡献](CONTRIBUTING.md)
 
-书目编辑需要服务端编辑权限。正文上传、阅读位置、笔记、分类和设置回传仍待适配。[mybooks-server](https://github.com/shyshineinn/mybooks-server)
+自建后端支持增量同步、安卓阅读数据同步与正文断点续传；WebDAV 同步独立提供。
 
 ## 来源与许可证
 

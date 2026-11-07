@@ -3860,16 +3860,11 @@ class ReaderViewModel @Inject constructor(
         if (_uiState.value.currentTocAnchor != anchor) _uiState.value = _uiState.value.copy(currentTocAnchor = anchor)
     }
 
-    private var serverReaderBookId: String? = null
-
     private suspend fun loadBook(
         preferences: ReaderPreferencesSnapshot,
-        requestedBook: Book?,
+        book: Book?,
         isCacheRecovery: Boolean = false
     ) = bookLoadMutex.withLock {
-            val book = if (requestedBook != null && MyBooksConfig.isMyBooks(requestedBook) && serverReaderBookId == null) {
-                myBooksSyncManager.openServerReader(requestedBook.id)?.also { serverReaderBookId = it.id }
-            } else requestedBook
             val generationAtLoadStart = runCatching {
                 readerCacheStore.currentGeneration()
             }.getOrDefault(observedCacheGeneration)
@@ -6871,11 +6866,9 @@ class ReaderViewModel @Inject constructor(
         largeTxtIndexJob?.cancel()
         val closingParser = parser
         val closingSession = renderSession
-        val serverBookId = serverReaderBookId
         val closeResources = {
             runCatching { closingParser?.close() }
             runCatching { closingSession?.close() }
-            serverBookId?.let(myBooksSyncManager::closeServerReader)
             Unit
         }
         val pendingSave = exitProgressSave

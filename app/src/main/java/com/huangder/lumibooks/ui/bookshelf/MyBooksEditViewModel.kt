@@ -26,7 +26,6 @@ import com.huangder.lumibooks.data.sync.optTextOrEmpty
 import com.huangder.lumibooks.data.sync.optTextOrNull
 import com.huangder.lumibooks.data.sync.parseMyBooksTranslators
 import com.huangder.lumibooks.data.sync.parseRemoteTags
-import com.huangder.lumibooks.data.sync.poxenWritableBookFields
 import com.huangder.lumibooks.domain.model.Book
 import com.huangder.lumibooks.domain.model.TagNameValidator
 import com.huangder.lumibooks.domain.repository.TagRepository
@@ -49,6 +48,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+
+data class MyBooksCustomColumn(
+    val label: String,
+    val name: String,
+    val datatype: String,
+    val multiple: Boolean,
+    val options: List<String>
+)
 
 data class MyBooksIdentifierDraft(
     val type: String = "",
@@ -91,6 +98,8 @@ data class MyBooksEditUiState(
     val isbn: String = "",
     val doubanId: String = "",
     val identifiers: List<MyBooksIdentifierDraft> = emptyList(),
+    val customColumns: List<MyBooksCustomColumn> = emptyList(),
+    val customValues: Map<String, String> = emptyMap(),
     val readLogs: List<MyBooksReadLogDraft> = emptyList(),
     val dirty: Boolean = false,
     val saving: Boolean = false,
@@ -135,6 +144,7 @@ class MyBooksEditViewModel @Inject constructor(
 ) : ViewModel(), MyBooksEditActions {
     private val api = MyBooksApiClient()
     private val metaCache = MyBooksMetaCache(context)
+    private val customColumnsFile = File(context.filesDir, "mybooks/custom_columns.json")
 
     private val _metaState = MutableStateFlow(MyBooksMetaUiState())
     val metaState: StateFlow<MyBooksMetaUiState> = _metaState.asStateFlow()
@@ -163,11 +173,9 @@ class MyBooksEditViewModel @Inject constructor(
                 return@launch
             }
             val overrides = runCatching { JSONObject(state.overridesJson) }.getOrDefault(JSONObject())
-            val count = if (MyBooksConfig.isPoxenServer()) {
-                overrides.keys().asSequence().count { it in poxenWritableBookFields }
-            } else overrides.length()
+            val count = overrides.length() + if (state.coverDirty) 1 else 0
             _syncBadge.value = MyBooksSyncBadge(
-                pendingCount = count + if (state.coverDirty) 1 else 0,
+                pendingCount = count,
                 lastError = state.lastError?.takeIf { it.isNotBlank() }
             )
         }
@@ -286,10 +294,12 @@ class MyBooksEditViewModel @Inject constructor(
                 }
                 val overrides = state?.overridesJson
                     ?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
+                val cachedColumns = withContext(Dispatchers.IO) { readCachedColumns() }
                 if (this@MyBooksEditViewModel.book?.id != book.id) return@launch
-                val draft = buildDraft(book, overrides)
+                val draft = buildDraft(book, overrides, cachedColumns)
                 baseline = draft
                 _uiState.value = draft.copy(loading = false, loaded = true, dirty = false)
+                refreshCustomColumns()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -319,10 +329,12 @@ class MyBooksEditViewModel @Inject constructor(
             status = "wish",
             importPreparing = localOnly
         )
+        // 自定义字段定义同样要在新建模式里加载，否则该区块无法填写。
         if (localOnly) {
             beginJob = viewModelScope.launch {
+                val columns = withContext(Dispatchers.IO) { readCachedColumns() }
                 val result = prepareLocalBookImport(
-                    initial = _uiState.value,
+                    initial = _uiState.value.copy(customColumns = columns),
                     readMetadata = {
                         withContext(Dispatchers.IO) {
                             com.huangder.lumibooks.util.readImportBookMetadata(context, source.uri.toString(), source.fileName).let { metadata ->
@@ -352,7 +364,7 @@ class MyBooksEditViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(automaticImportDraft = localImportDraft())
                 }
             }
-        }
+        } else refreshCustomColumns()
     }
 
     fun localImportDraft(): String? {
@@ -476,6 +488,10 @@ class MyBooksEditViewModel @Inject constructor(
         state.copy(identifiers = rows)
     }
 
+    override fun updateCustom(label: String, value: String) = mutate { state ->
+        state.copy(customValues = state.customValues + (label to value))
+    }
+
     override fun updateReadLog(index: Int, start: String?, finish: String?) = mutate { state ->
         val rows = state.readLogs.toMutableList()
         val row = rows.getOrNull(index) ?: return@mutate state
@@ -578,6 +594,7 @@ class MyBooksEditViewModel @Inject constructor(
                 }
                 collectScalarChanges(current, changed, managed)
                 collectIdentifierChanges(current, changed, managed, existingOverrides)
+                collectCustomChanges(current, changed, managed, existingOverrides)
                 // Reading history is edited only through its date-only timeline flow.
                 // Leave pending read_logs overrides untouched when saving book metadata.
                 withContext(Dispatchers.IO) {
@@ -777,7 +794,8 @@ class MyBooksEditViewModel @Inject constructor(
 
     private fun buildDraft(
         book: Book,
-        overrides: JSONObject
+        overrides: JSONObject,
+        columns: List<MyBooksCustomColumn>
     ): MyBooksEditUiState {
         fun value(key: String): String = when {
             overrides.has(key) -> overrides.optTextOrEmpty(key)
@@ -804,6 +822,14 @@ class MyBooksEditViewModel @Inject constructor(
                 draftIds += MyBooksIdentifierDraft(type, value)
             }
         }
+        val customValues = buildMap {
+            val baseCustom = base.optJSONObject("custom") ?: JSONObject()
+            columns.forEach { column ->
+                val key = MyBooksConfig.customOverrideKey(column.label)
+                val raw = if (overrides.has(key)) overrides.opt(key) else baseCustom.opt(column.label)
+                put(column.label, customToDraft(column, raw))
+            }
+        }
         val logs = readLogsFrom(if (overrides.has("read_logs")) overrides.opt("read_logs") else base.opt("read_logs"))
         val status = value("status").ifBlank { "wish" }
         return MyBooksEditUiState(
@@ -824,6 +850,8 @@ class MyBooksEditViewModel @Inject constructor(
             isbn = value("isbn"),
             doubanId = value("douban_id"),
             identifiers = draftIds,
+            customColumns = columns,
+            customValues = customValues,
             readLogs = logs.map { MyBooksReadLogDraft(it.first, it.second) },
             tags = parseRemoteTags(base.opt("tags"))
         )
@@ -846,6 +874,7 @@ class MyBooksEditViewModel @Inject constructor(
             .put("douban_id", meta.doubanId.orEmpty())
             .put("updated_at", meta.updatedAt.orEmpty())
             .put("identifiers", JSONObject(meta.identifiersRaw))
+            .put("custom", JSONObject(meta.customRaw))
             .put("read_logs", JSONArray().also { array ->
                 meta.readLogs.forEach { log ->
                     array.put(JSONObject().put("start", log.start.orEmpty()).put("finish", log.finish.orEmpty()))
@@ -901,6 +930,30 @@ class MyBooksEditViewModel @Inject constructor(
         }
     }
 
+    private fun collectCustomChanges(
+        state: MyBooksEditUiState,
+        changed: MutableMap<String, Any?>,
+        managed: MutableSet<String>,
+        existingOverrides: JSONObject
+    ) {
+        if (state.customColumns.isEmpty()) return
+        existingOverrides.keys().forEach { key ->
+            if (key.startsWith("custom.")) managed += key
+        }
+        val baseCustom = base.optJSONObject("custom") ?: JSONObject()
+        for (column in state.customColumns) {
+            val key = MyBooksConfig.customOverrideKey(column.label)
+            managed += key
+            val draft = state.customValues[column.label].orEmpty()
+            val raw = baseCustom.opt(column.label)
+            if (customDraftEquals(column, draft, raw)) continue
+            // 与 identifiers 同理：override 用扁平 key，多值字段的值形态交给合并层转换。
+            changed[key] = customToServerValue(column, draft)
+        }
+    }
+
+    // ────────────────────────── validation ──────────────────────────
+
     private fun validate(state: MyBooksEditUiState): Map<String, String> {
         val errors = linkedMapOf<String, String>()
         if (state.title.trim().isEmpty()) {
@@ -946,6 +999,21 @@ class MyBooksEditViewModel @Inject constructor(
                 errors["readlog.$index"] = context.getString(R.string.mybooks_edit_date_order)
             }
         }
+        state.customColumns.forEach { column ->
+            val value = state.customValues[column.label].orEmpty().trim()
+            if (value.isEmpty()) return@forEach
+            val invalid = when (column.datatype) {
+                "int" -> value.toLongOrNull() == null
+                "float" -> value.toDoubleOrNull() == null
+                "rating" -> value.toDoubleOrNull()?.let { it < 0 || it > 10 } ?: true
+                "date" -> !isDate(value)
+                "enumeration" -> column.options.none { it == value }
+                else -> false
+            }
+            if (invalid) {
+                errors[MyBooksConfig.customOverrideKey(column.label)] = context.getString(R.string.mybooks_edit_custom_invalid, column.name)
+            }
+        }
         return errors
     }
 
@@ -974,9 +1042,67 @@ class MyBooksEditViewModel @Inject constructor(
             a.isbn == b.isbn &&
             a.doubanId == b.doubanId &&
             a.identifiers == b.identifiers &&
+            a.customValues == b.customValues &&
             a.readLogs == b.readLogs &&
             a.tags == b.tags &&
             a.coverUrl == b.coverUrl
+
+    private fun customToDraft(column: MyBooksCustomColumn, raw: Any?): String = when {
+        raw == null || raw == JSONObject.NULL -> ""
+        column.multiple && raw is JSONArray -> buildList {
+            for (i in 0 until raw.length()) {
+                raw.optTextAt(i)?.let(::add)
+            }
+        }.joinToString("、")
+        raw is JSONArray -> buildList {
+            for (i in 0 until raw.length()) {
+                raw.optTextAt(i)?.let(::add)
+            }
+        }.joinToString("、")
+        column.datatype == "bool" -> when (raw) {
+            is Boolean -> if (raw) "1" else "0"
+            is Number -> if (raw.toInt() != 0) "1" else "0"
+            else -> when (raw.toString().trim().lowercase(Locale.ROOT)) {
+                "true", "1", "yes", "是" -> "1"
+                "false", "0", "no", "否" -> "0"
+                else -> ""
+            }
+        }
+        column.datatype == "rating" || column.datatype == "float" ->
+            (raw as? Number)?.toString() ?: raw.toString()
+        else -> raw.toString()
+    }
+
+    private fun customDraftEquals(column: MyBooksCustomColumn, draft: String, raw: Any?): Boolean {
+        val text = draft.trim()
+        return when (column.datatype) {
+            "bool" -> {
+                val base = customToDraft(column, raw)
+                base == text
+            }
+            "int" -> {
+                val base = (raw as? Number)?.toLong() ?: raw?.toString()?.toLongOrNull()
+                val current = text.toLongOrNull()
+                base == current
+            }
+            "float", "rating" -> {
+                val base = (raw as? Number)?.toDouble() ?: raw?.toString()?.toDoubleOrNull()
+                val current = text.toDoubleOrNull()
+                base == current || (base == null && text.isEmpty())
+            }
+            else -> {
+                if (column.multiple) {
+                    val base = customToDraft(column, raw).split('、', ',', '，', ';', '；')
+                        .map { it.trim() }.filter { it.isNotEmpty() }.sorted()
+                    val current = text.split('、', ',', '，', ';', '；')
+                        .map { it.trim() }.filter { it.isNotEmpty() }.sorted()
+                    base == current
+                } else {
+                    customToDraft(column, raw).trim() == text
+                }
+            }
+        }
+    }
 
     private fun readLogsFrom(raw: Any?): List<Pair<String, String>> {
         val array = when (raw) {
@@ -1015,6 +1141,30 @@ class MyBooksEditViewModel @Inject constructor(
         }
         effective.put("identifiers", ids)
         effective.remove("identifier_list")
+        val custom = JSONObject(effective.optJSONObject("custom")?.toString() ?: "{}")
+        overrides.keys().forEach { key ->
+            if (key.startsWith("custom.")) {
+                val label = key.removePrefix("custom.")
+                val value = overrides.opt(key)
+                if (isEmptyCustomValue(value)) custom.remove(label) else custom.put(label, value)
+            }
+        }
+        effective.put("custom", custom)
+        val display = JSONObject()
+        custom.keys().forEach { label ->
+            val value = custom.opt(label)
+            val text = when (value) {
+                is JSONArray -> buildList {
+                    for (i in 0 until value.length()) {
+                        value.optTextAt(i)?.let(::add)
+                    }
+                }.joinToString("、")
+                null, JSONObject.NULL -> ""
+                else -> value.toString()
+            }.trim()
+            if (text.isNotEmpty()) display.put(label, text)
+        }
+        effective.put("custom_display", display)
         if (overrides.has("read_logs")) {
             val logs = readLogsFrom(overrides.opt("read_logs"))
             effective.put("read_logs", overrides.opt("read_logs"))
@@ -1024,6 +1174,87 @@ class MyBooksEditViewModel @Inject constructor(
             effective.put("start_date", logs.mapNotNull { it.first.takeIf(String::isNotBlank) }.maxOrNull().orEmpty())
         }
         return effective
+    }
+
+    private fun isEmptyCustomValue(value: Any?): Boolean = when (value) {
+        null, JSONObject.NULL -> true
+        is JSONArray -> value.length() == 0
+        is String -> value.isBlank()
+        else -> false
+    }
+
+    private fun refreshCustomColumns() {
+        viewModelScope.launch {
+            val raw = try {
+                withContext(Dispatchers.IO) { api.fetchCustomFields() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (raw != null) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        customColumnsFile.parentFile?.mkdirs()
+                        customColumnsFile.writeText(raw, Charsets.UTF_8)
+                    }
+                }
+                val columns = runCatching { parseColumns(raw) }.getOrDefault(emptyList())
+                if (columns.isNotEmpty()) {
+                    val current = _uiState.value
+                    val values = buildMap {
+                        columns.forEach { column ->
+                            put(column.label, current.customValues[column.label] ?: "")
+                        }
+                    }
+                    val baselineValues = buildMap {
+                        columns.forEach { column ->
+                            put(
+                                column.label,
+                                baseline?.customValues?.get(column.label)
+                                    ?: current.customValues[column.label]
+                                    ?: ""
+                            )
+                        }
+                    }
+                    baseline = baseline?.copy(customColumns = columns, customValues = baselineValues)
+                    _uiState.value = current.copy(
+                        customColumns = columns,
+                        customValues = values
+                    ).recalculateDirty(baseline)
+                }
+            }
+        }
+    }
+
+    private fun readCachedColumns(): List<MyBooksCustomColumn> {
+        if (!customColumnsFile.isFile) return emptyList()
+        return runCatching { parseColumns(customColumnsFile.readText(Charsets.UTF_8)) }.getOrDefault(emptyList())
+    }
+
+    private fun parseColumns(raw: String): List<MyBooksCustomColumn> {
+        val array = JSONArray(raw)
+        val out = mutableListOf<MyBooksCustomColumn>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val label = item.optTextOrEmpty("label").trim()
+            if (label.isEmpty()) continue
+            val options = item.optJSONArray("options")?.let { opts ->
+                buildList {
+                    for (j in 0 until opts.length()) {
+                        opts.optTextAt(j)?.let(::add)
+                    }
+                }
+            }.orEmpty()
+            out += MyBooksCustomColumn(
+                label = label,
+                name = item.optTextOrEmpty("name").ifBlank { label },
+                datatype = item.optTextOrEmpty("datatype").ifBlank { "text" },
+                multiple = item.optInt("is_multiple", 0) != 0,
+                options = options
+            )
+        }
+        return out
     }
 
     private fun MyBooksEditUiState.recalculateDirty(baseDraft: MyBooksEditUiState?): MyBooksEditUiState =

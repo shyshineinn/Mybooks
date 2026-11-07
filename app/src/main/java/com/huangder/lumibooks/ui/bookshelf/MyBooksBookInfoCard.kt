@@ -64,6 +64,10 @@ import com.huangder.lumibooks.ui.theme.LocalMotionEnabled
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 data class MyBooksMetaUiState(
     val meta: ServerBookMeta? = null,
@@ -194,7 +198,10 @@ internal fun ReadingStatusDetailRow(
 }
 
 @Composable
-internal fun MyBooksSyncRows(syncBadge: MyBooksSyncBadge?) {
+internal fun MyBooksSyncRows(notesState: MyBooksNotesUiState?, syncBadge: MyBooksSyncBadge?) {
+    if (notesState != null) {
+        NotesStatusRow(notesState)
+    }
     if (syncBadge != null) {
         val value = when {
             syncBadge.pendingCount > 0 -> stringResource(R.string.mybooks_sync_pending, syncBadge.pendingCount)
@@ -205,6 +212,49 @@ internal fun MyBooksSyncRows(syncBadge: MyBooksSyncBadge?) {
             DetailRow(stringResource(R.string.mybooks_sync_state), value, false)
         }
     }
+}
+
+@Composable
+private fun NotesStatusRow(state: MyBooksNotesUiState) {
+    DetailRow(stringResource(R.string.mybooks_notes_title), notesStatusText(state), false)
+}
+
+@Composable
+private fun notesStatusText(state: MyBooksNotesUiState): String {
+    val base = when {
+        state.syncing -> stringResource(R.string.mybooks_notes_status_syncing)
+        state.uploading -> stringResource(R.string.mybooks_notes_status_uploading)
+        state.loading -> stringResource(R.string.mybooks_notes_status_loading)
+        state.error != null && state.errorWasUpload -> stringResource(R.string.mybooks_notes_status_upload_failed)
+        state.error != null -> stringResource(R.string.mybooks_notes_status_sync_failed)
+        state.localHas && state.serverHas && state.upToDate -> stringResource(
+            R.string.mybooks_notes_status_local,
+            formatNoteSize(state.localSize),
+            formatNoteTime(state.serverUpdatedAt)
+        )
+        state.serverHas -> stringResource(R.string.mybooks_notes_status_remote_newer)
+        state.localHas -> stringResource(R.string.mybooks_notes_status_server_missing)
+        else -> stringResource(R.string.mybooks_notes_status_none)
+    }
+    return if (MyBooksConfig.hasWriteToken()) base else base + stringResource(R.string.mybooks_notes_readonly_suffix)
+}
+
+private fun formatNoteSize(bytes: Long): String {
+    if (bytes <= 0L) return "0 KB"
+    return if (bytes >= 1024L * 1024L) {
+        String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    } else {
+        String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+    }
+}
+
+private fun formatNoteTime(raw: String?): String {
+    if (raw.isNullOrBlank()) return ""
+    return runCatching {
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.parse(raw))
+    }.getOrElse { raw.take(16) }
 }
 
 @Composable

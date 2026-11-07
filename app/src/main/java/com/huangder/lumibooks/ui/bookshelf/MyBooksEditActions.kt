@@ -12,6 +12,7 @@ interface MyBooksEditActions {
     fun updateIdentifier(index: Int, type: String? = null, value: String? = null)
     fun addIdentifier()
     fun removeIdentifier(index: Int)
+    fun updateCustom(label: String, value: String)
     fun updateReadLog(index: Int, start: String? = null, finish: String? = null)
     fun addReadLog()
     fun removeReadLog(index: Int)

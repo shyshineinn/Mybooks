@@ -85,7 +85,7 @@ class MyBooksEditLayoutTest {
         compose.setContent {
             Column(Modifier.size(480.dp, 800.dp).background(AppColors.CardBg)) {
                 ContentInfoCards(book=book, folder="Folder", tags="", metaState=MyBooksMetaUiState(meta=metadata),
-                    syncBadge=null, summaryExpanded=false, onSummaryExpandedChange={},
+                    notesState=null, syncBadge=null, summaryExpanded=false, onSummaryExpandedChange={},
                     onEdit={}, onTags={}, onMove={}, onReview={})
             }
         }

@@ -19,11 +19,6 @@ class MyBooksCoverUploader(
         withContext(Dispatchers.IO) { client.uploadCover(dataUrl, token) }
     }
 
-    internal fun compressedBytes(file: File): ByteArray {
-        if (!file.isFile) error("找不到本地封面文件")
-        return compress(file)
-    }
-
     private fun compress(file: File): ByteArray {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.absolutePath, bounds)
